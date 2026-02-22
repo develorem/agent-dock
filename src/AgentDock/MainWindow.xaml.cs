@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using AgentDock.Controls;
 using AgentDock.Models;
 using AvalonDock;
 using AvalonDock.Layout;
@@ -218,13 +219,16 @@ public partial class MainWindow : Window
         var dockingManager = new DockingManager();
 
         // --- Left column: File Explorer (top) + Git Status (bottom) ---
+        var fileExplorerControl = new FileExplorerControl();
+        fileExplorerControl.LoadDirectory(project.FolderPath);
+
         var fileExplorer = new LayoutAnchorable
         {
-            Title = "File Explorer",
+            Title = $"{project.FolderName} — File Explorer",
             ContentId = $"fileExplorer_{project.FolderPath.GetHashCode()}",
             CanClose = false,
             CanHide = false,
-            Content = CreatePanelPlaceholder("File Explorer", project.FolderPath)
+            Content = fileExplorerControl
         };
 
         var gitStatus = new LayoutAnchorable
