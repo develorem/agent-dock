@@ -10,7 +10,7 @@
 ---
 
 ## Task 1: Project Scaffolding
-**Status:** `[~]`
+**Status:** `[x]`
 
 Set up .NET 10 WPF solution structure, NuGet packages (AvalonDock, AvalonEdit, etc.), project files, basic build configuration. Add Develorem branding metadata (assembly info, app icon placeholder).
 
@@ -23,7 +23,7 @@ Set up .NET 10 WPF solution structure, NuGet packages (AvalonDock, AvalonEdit, e
 ---
 
 ## Task 2: Main Window Shell + Menu
-**Status:** `[ ]`
+**Status:** `[x]`
 
 Implement the main window with a standard Windows menu bar (File, Settings, Help). File menu has: Add Project, Open Workspace, Save Workspace, Recent Workspaces, Exit. Settings has: Theme toggle, Toolbar position. Help has: Getting Started, About. Add the configurable toolbar (top by default) with a `+` button to add projects.
 
@@ -37,7 +37,7 @@ Implement the main window with a standard Windows menu bar (File, Settings, Help
 ---
 
 ## Task 3: Project Tab System
-**Status:** `[ ]`
+**Status:** `[x]`
 
 Clicking `+` (or File > Add Project) opens a folder picker dialog. Selecting a folder creates a project tab in the toolbar with a generic project icon and the folder name. Tabs can be clicked to switch between projects. Right-click tab to close/remove project. Closing a project tab removes it from the toolbar and disposes its content. The main content area switches to show the selected project.
 
@@ -53,7 +53,7 @@ Clicking `+` (or File > Add Project) opens a folder picker dialog. Selecting a f
 ---
 
 ## Task 4: Per-Project Docking Layout
-**Status:** `[ ]`
+**Status:** `[x]`
 
 Each project tab gets its own AvalonDock DockingManager with the default 3-column layout: left column (File Explorer placeholder + Git Status placeholder stacked), center (File Preview placeholder), right (AI Chat placeholder). Panels can be rearranged, tabbed, and floated within the project's docking area. Each project's layout is independent.
 
@@ -67,7 +67,7 @@ Each project tab gets its own AvalonDock DockingManager with the default 3-colum
 ---
 
 ## Task 5: File Explorer Panel
-**Status:** `[ ]`
+**Status:** `[x]`
 
 Read-only tree view of the project folder. Lazy-loads directory contents on expand (no loading entire tree upfront). Click a file to send a "preview this file" event. Folder and file type icons. Respects .gitignore (hide ignored files/folders). Handles large directories without UI freeze (async loading).
 
@@ -82,7 +82,7 @@ Read-only tree view of the project folder. Lazy-loads directory contents on expa
 ---
 
 ## Task 6: File Preview Panel
-**Status:** `[ ]`
+**Status:** `[x]`
 
 Displays the file selected from either File Explorer or Git Status panel. Uses AvalonEdit for syntax highlighting of common languages (C#, JS/TS, Python, JSON, YAML, XML, HTML, CSS, Markdown, etc.). Image preview for PNG/JPG/GIF/SVG. Markdown rendering (or syntax-highlighted markdown as fallback). "No Preview" message for binary files. For git-changed files clicked from the Git Status panel, show inline/unified diff.
 
@@ -97,7 +97,7 @@ Displays the file selected from either File Explorer or Git Status panel. Uses A
 ---
 
 ## Task 7: Git Status Panel
-**Status:** `[ ]`
+**Status:** `[~]`
 
 Shows modified, added, deleted, and untracked files for the project's git repo. Staged files displayed in one color (e.g., green), unstaged in another (e.g., orange/yellow). Auto-refreshes on file system changes or on a reasonable polling interval. Clicking a file opens its diff in the File Preview panel. Non-git folders show a "Not a git repository" message.
 

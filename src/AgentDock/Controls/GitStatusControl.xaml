@@ -1,0 +1,55 @@
+<UserControl x:Class="AgentDock.Controls.GitStatusControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d">
+    <Grid>
+        <!-- Not a git repo message -->
+        <TextBlock x:Name="NotGitMessage"
+                   Text="Not a git repository"
+                   Visibility="Collapsed"
+                   HorizontalAlignment="Center"
+                   VerticalAlignment="Center"
+                   FontSize="14"
+                   Foreground="#999" />
+
+        <!-- No changes message -->
+        <TextBlock x:Name="NoChangesMessage"
+                   Text="No changes"
+                   Visibility="Collapsed"
+                   HorizontalAlignment="Center"
+                   VerticalAlignment="Center"
+                   FontSize="14"
+                   Foreground="#999" />
+
+        <!-- File list -->
+        <DockPanel x:Name="StatusPanel" Visibility="Collapsed">
+            <!-- Refresh button -->
+            <Button DockPanel.Dock="Top" Content="Refresh" Click="Refresh_Click"
+                    HorizontalAlignment="Left" Margin="4" Padding="8,2"
+                    FontSize="11" Cursor="Hand" />
+
+            <ListView x:Name="FileList" BorderThickness="0" Background="Transparent"
+                      SelectionMode="Single"
+                      SelectionChanged="FileList_SelectionChanged">
+                <ListView.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel Orientation="Horizontal" Margin="2,1">
+                            <TextBlock Text="{Binding StatusLabel}" FontFamily="Consolas"
+                                       FontSize="11" Width="20"
+                                       Foreground="{Binding StatusColor}"
+                                       VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding FilePath}" FontSize="12"
+                                       Foreground="{Binding StatusColor}"
+                                       VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding StagedLabel}" FontSize="10"
+                                       Foreground="#888" Margin="6,0,0,0"
+                                       VerticalAlignment="Center" />
+                        </StackPanel>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+        </DockPanel>
+    </Grid>
+</UserControl>

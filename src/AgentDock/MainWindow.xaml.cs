@@ -231,13 +231,16 @@ public partial class MainWindow : Window
             Content = fileExplorerControl
         };
 
+        var gitStatusControl = new GitStatusControl();
+        gitStatusControl.LoadRepository(project.FolderPath);
+
         var gitStatus = new LayoutAnchorable
         {
             Title = "Git Status",
             ContentId = $"gitStatus_{project.FolderPath.GetHashCode()}",
             CanClose = false,
             CanHide = false,
-            Content = CreatePanelPlaceholder("Git Status", "Modified and staged files")
+            Content = gitStatusControl
         };
 
         var leftTopPane = new LayoutAnchorablePane(fileExplorer);
@@ -258,6 +261,12 @@ public partial class MainWindow : Window
         fileExplorerControl.FileSelected += filePath =>
         {
             filePreviewControl.ShowFile(filePath);
+        };
+
+        // Wire git status diff clicks to preview panel
+        gitStatusControl.DiffRequested += (filePath, diffContent) =>
+        {
+            filePreviewControl.ShowDiff(diffContent);
         };
 
         var filePreview = new LayoutDocument

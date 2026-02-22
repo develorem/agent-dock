@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media.Imaging;
 using ICSharpCode.AvalonEdit.Highlighting;
+using ICSharpCode.AvalonEdit.Rendering;
 
 namespace AgentDock.Controls;
 
@@ -56,12 +57,22 @@ public partial class FilePreviewControl : UserControl
         }
     }
 
+    private DiffLineColorizer? _diffColorizer;
+
     public void ShowDiff(string diffContent)
     {
         HideAll();
 
+        // Remove any previous diff colorizer
+        RemoveDiffColorizer();
+
         TextPreview.Text = diffContent;
-        TextPreview.SyntaxHighlighting = HighlightingManager.Instance.GetDefinitionByExtension(".patch");
+        TextPreview.SyntaxHighlighting = null; // disable built-in highlighting for diffs
+
+        // Add custom diff line colorizer
+        _diffColorizer = new DiffLineColorizer();
+        TextPreview.TextArea.TextView.LineTransformers.Add(_diffColorizer);
+
         TextPreview.Visibility = Visibility.Visible;
     }
 
@@ -140,6 +151,16 @@ public partial class FilePreviewControl : UserControl
         TextPreview.Visibility = Visibility.Collapsed;
         ImageContainer.Visibility = Visibility.Collapsed;
         NoPreviewMessage.Visibility = Visibility.Collapsed;
+        RemoveDiffColorizer();
+    }
+
+    private void RemoveDiffColorizer()
+    {
+        if (_diffColorizer != null)
+        {
+            TextPreview.TextArea.TextView.LineTransformers.Remove(_diffColorizer);
+            _diffColorizer = null;
+        }
     }
 
     /// <summary>
