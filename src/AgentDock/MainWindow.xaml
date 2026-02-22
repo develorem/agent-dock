@@ -3,16 +3,95 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:AgentDock"
         mc:Ignorable="d"
         Title="Agent Dock"
         Height="720" Width="1280"
         WindowStartupLocation="CenterScreen"
         WindowState="Maximized">
-    <Grid>
-        <TextBlock Text="Agent Dock"
-                   HorizontalAlignment="Center"
-                   VerticalAlignment="Center"
-                   FontSize="24"
-                   Foreground="#888" />
-    </Grid>
+
+    <DockPanel LastChildFill="True">
+        <!-- Menu Bar - always at top -->
+        <Menu DockPanel.Dock="Top">
+            <MenuItem Header="_File">
+                <MenuItem Header="_Add Project Folder" InputGestureText="Ctrl+N" Click="AddProject_Click">
+                    <MenuItem.Icon>
+                        <TextBlock Text="+" FontWeight="Bold" FontSize="14" />
+                    </MenuItem.Icon>
+                </MenuItem>
+                <Separator />
+                <MenuItem Header="_Open Workspace" Click="OpenWorkspace_Click" />
+                <MenuItem Header="_Save Workspace" InputGestureText="Ctrl+S" Click="SaveWorkspace_Click" />
+                <MenuItem Header="Recent _Workspaces" x:Name="RecentWorkspacesMenu" IsEnabled="False" />
+                <Separator />
+                <MenuItem Header="E_xit" InputGestureText="Alt+F4" Click="Exit_Click" />
+            </MenuItem>
+            <MenuItem Header="S_ettings">
+                <MenuItem Header="_Theme">
+                    <MenuItem Header="_Light" x:Name="ThemeLightMenu" IsCheckable="True" IsChecked="True"
+                              Click="ThemeLight_Click" />
+                    <MenuItem Header="_Dark" x:Name="ThemeDarkMenu" IsCheckable="True"
+                              Click="ThemeDark_Click" />
+                </MenuItem>
+                <MenuItem Header="Toolbar _Position">
+                    <MenuItem Header="_Top" x:Name="ToolbarTopMenu" IsCheckable="True" IsChecked="True"
+                              Click="ToolbarPosition_Click" Tag="Top" />
+                    <MenuItem Header="_Left" x:Name="ToolbarLeftMenu" IsCheckable="True"
+                              Click="ToolbarPosition_Click" Tag="Left" />
+                    <MenuItem Header="_Right" x:Name="ToolbarRightMenu" IsCheckable="True"
+                              Click="ToolbarPosition_Click" Tag="Right" />
+                    <MenuItem Header="_Bottom" x:Name="ToolbarBottomMenu" IsCheckable="True"
+                              Click="ToolbarPosition_Click" Tag="Bottom" />
+                </MenuItem>
+                <Separator />
+                <MenuItem Header="_Claude Path Override..." Click="ClaudePathOverride_Click" />
+            </MenuItem>
+            <MenuItem Header="_Help">
+                <MenuItem Header="_Getting Started" Click="GettingStarted_Click" />
+                <MenuItem Header="_About Agent Dock" Click="About_Click" />
+            </MenuItem>
+        </Menu>
+
+        <!-- Everything below the menu uses a DockPanel for toolbar positioning -->
+        <DockPanel x:Name="WorkspacePanel" LastChildFill="True">
+
+            <!-- Project Toolbar -->
+            <Border x:Name="ToolbarBorder" DockPanel.Dock="Top"
+                    Background="{DynamicResource ToolbarBackground}"
+                    BorderBrush="#CCC" BorderThickness="0,0,0,1">
+                <StackPanel x:Name="ToolbarPanel" Orientation="Horizontal"
+                            Margin="4">
+                    <!-- Project tabs will be inserted here dynamically (Task 3) -->
+
+                    <Button x:Name="AddProjectButton" Click="AddProject_Click"
+                            ToolTip="Add Project Folder (Ctrl+N)"
+                            Width="36" Height="36"
+                            Margin="2"
+                            Background="Transparent"
+                            BorderBrush="#AAA" BorderThickness="1"
+                            Cursor="Hand">
+                        <TextBlock Text="+" FontSize="20" FontWeight="Bold"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Foreground="#555" />
+                    </Button>
+                </StackPanel>
+            </Border>
+
+            <!-- Main Content Area -->
+            <Border x:Name="ContentArea" Background="{DynamicResource ContentBackground}">
+                <TextBlock Text="Open a project folder to get started"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           FontSize="18"
+                           Foreground="#888" />
+            </Border>
+
+        </DockPanel>
+    </DockPanel>
+
+    <!-- Keyboard Shortcuts -->
+    <Window.InputBindings>
+        <KeyBinding Gesture="Ctrl+N" Command="{x:Static local:MainWindow.AddProjectCommand}" />
+        <KeyBinding Gesture="Ctrl+S" Command="{x:Static local:MainWindow.SaveWorkspaceCommand}" />
+    </Window.InputBindings>
 </Window>

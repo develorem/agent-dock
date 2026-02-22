@@ -1,9 +1,10 @@
-﻿<Application x:Class="AgentDock.App"
+<Application x:Class="AgentDock.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:local="clr-namespace:AgentDock"
              StartupUri="MainWindow.xaml">
     <Application.Resources>
-         
+        <!-- Default theme resources (light) -->
+        <SolidColorBrush x:Key="ToolbarBackground" Color="#F0F0F0" />
+        <SolidColorBrush x:Key="ContentBackground" Color="#FAFAFA" />
     </Application.Resources>
 </Application>
