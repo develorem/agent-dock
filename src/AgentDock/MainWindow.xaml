@@ -61,7 +61,7 @@
                     BorderBrush="#CCC" BorderThickness="0,0,0,1">
                 <StackPanel x:Name="ToolbarPanel" Orientation="Horizontal"
                             Margin="4">
-                    <!-- Project tabs will be inserted here dynamically (Task 3) -->
+                    <!-- Project tab buttons are inserted here dynamically -->
 
                     <Button x:Name="AddProjectButton" Click="AddProject_Click"
                             ToolTip="Add Project Folder (Ctrl+N)"
@@ -77,14 +77,20 @@
                 </StackPanel>
             </Border>
 
-            <!-- Main Content Area -->
-            <Border x:Name="ContentArea" Background="{DynamicResource ContentBackground}">
-                <TextBlock Text="Open a project folder to get started"
+            <!-- Main Content Area - switches between empty state and project content -->
+            <Grid x:Name="ContentArea" Background="{DynamicResource ContentBackground}">
+                <!-- Empty state message - shown when no projects are open -->
+                <TextBlock x:Name="EmptyStateText"
+                           Text="Open a project folder to get started"
                            HorizontalAlignment="Center"
                            VerticalAlignment="Center"
                            FontSize="18"
                            Foreground="#888" />
-            </Border>
+
+                <!-- Project content host - holds the active project's content -->
+                <ContentPresenter x:Name="ProjectContentHost"
+                                  Visibility="Collapsed" />
+            </Grid>
 
         </DockPanel>
     </DockPanel>
@@ -93,5 +99,6 @@
     <Window.InputBindings>
         <KeyBinding Gesture="Ctrl+N" Command="{x:Static local:MainWindow.AddProjectCommand}" />
         <KeyBinding Gesture="Ctrl+S" Command="{x:Static local:MainWindow.SaveWorkspaceCommand}" />
+        <KeyBinding Gesture="Ctrl+W" Command="{x:Static local:MainWindow.CloseProjectCommand}" />
     </Window.InputBindings>
 </Window>

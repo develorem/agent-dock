@@ -1,6 +1,9 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
+using AgentDock.Models;
+using Microsoft.Win32;
 
 namespace AgentDock;
 
@@ -12,8 +15,16 @@ public partial class MainWindow : Window
     public static readonly RoutedUICommand SaveWorkspaceCommand =
         new("Save Workspace", nameof(SaveWorkspaceCommand), typeof(MainWindow));
 
+    public static readonly RoutedUICommand CloseProjectCommand =
+        new("Close Project", nameof(CloseProjectCommand), typeof(MainWindow));
+
     private readonly MenuItem[] _toolbarPositionMenuItems;
     private string _currentToolbarPosition = "Top";
+
+    private readonly List<ProjectInfo> _projects = [];
+    private readonly Dictionary<ProjectInfo, Button> _projectTabButtons = [];
+    private readonly Dictionary<ProjectInfo, UIElement> _projectContents = [];
+    private ProjectInfo? _activeProject;
 
     public MainWindow()
     {
@@ -23,6 +34,7 @@ public partial class MainWindow : Window
 
         CommandBindings.Add(new CommandBinding(AddProjectCommand, (_, _) => AddProject()));
         CommandBindings.Add(new CommandBinding(SaveWorkspaceCommand, (_, _) => SaveWorkspace()));
+        CommandBindings.Add(new CommandBinding(CloseProjectCommand, (_, _) => CloseActiveProject()));
     }
 
     // --- File Menu ---
@@ -89,28 +101,255 @@ public partial class MainWindow : Window
             MessageBoxImage.Information);
     }
 
-    // --- Core Methods ---
+    // --- Project Management ---
 
     private void AddProject()
     {
-        // Stub — Task 3
+        var dialog = new OpenFolderDialog
+        {
+            Title = "Select Project Folder"
+        };
+
+        if (dialog.ShowDialog() != true)
+            return;
+
+        var folderPath = dialog.FolderName;
+
+        // Prevent duplicates
+        if (_projects.Any(p => string.Equals(p.FolderPath, folderPath, StringComparison.OrdinalIgnoreCase)))
+        {
+            MessageBox.Show(
+                $"The folder '{folderPath}' is already open.",
+                "Duplicate Project",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+
+            // Switch to the existing project
+            var existing = _projects.First(p =>
+                string.Equals(p.FolderPath, folderPath, StringComparison.OrdinalIgnoreCase));
+            SwitchToProject(existing);
+            return;
+        }
+
+        var project = new ProjectInfo { FolderPath = folderPath };
+        _projects.Add(project);
+
+        // Create the tab button
+        var tabButton = CreateProjectTabButton(project);
+        _projectTabButtons[project] = tabButton;
+
+        // Insert tab button before the + button
+        var addButtonIndex = ToolbarPanel.Children.IndexOf(AddProjectButton);
+        ToolbarPanel.Children.Insert(addButtonIndex, tabButton);
+
+        // Create placeholder content for this project (Task 4 will replace with docking layout)
+        var content = CreateProjectPlaceholder(project);
+        _projectContents[project] = content;
+
+        // Switch to the new project
+        SwitchToProject(project);
     }
+
+    private Button CreateProjectTabButton(ProjectInfo project)
+    {
+        var button = new Button
+        {
+            MinWidth = 44,
+            Height = 36,
+            Margin = new Thickness(2),
+            Padding = new Thickness(8, 4, 8, 4),
+            Background = Brushes.Transparent,
+            BorderBrush = new SolidColorBrush(Color.FromRgb(0xAA, 0xAA, 0xAA)),
+            BorderThickness = new Thickness(1),
+            Cursor = Cursors.Hand,
+            HorizontalContentAlignment = HorizontalAlignment.Left,
+            Tag = project,
+            ToolTip = project.FolderPath,
+            Content = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Children =
+                {
+                    // Generic project icon (placeholder — Task 10 will add proper icons)
+                    new TextBlock
+                    {
+                        Text = "\uD83D\uDCC1", // folder emoji as placeholder
+                        FontSize = 14,
+                        Margin = new Thickness(0, 0, 4, 0),
+                        VerticalAlignment = VerticalAlignment.Center
+                    },
+                    new TextBlock
+                    {
+                        Text = project.FolderName,
+                        FontSize = 12,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Foreground = new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33))
+                    }
+                }
+            }
+        };
+
+        button.Click += (_, _) => SwitchToProject(project);
+
+        // Right-click context menu
+        button.ContextMenu = new ContextMenu
+        {
+            Items =
+            {
+                CreateMenuItem("Close Project", () => CloseProject(project)),
+                CreateMenuItem("Open in Explorer", () => OpenInExplorer(project))
+            }
+        };
+
+        return button;
+    }
+
+    private static MenuItem CreateMenuItem(string header, Action action)
+    {
+        var item = new MenuItem { Header = header };
+        item.Click += (_, _) => action();
+        return item;
+    }
+
+    private static UIElement CreateProjectPlaceholder(ProjectInfo project)
+    {
+        // Placeholder content — Task 4 will replace this with AvalonDock layout
+        return new Border
+        {
+            Background = Brushes.White,
+            Child = new StackPanel
+            {
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = project.FolderName,
+                        FontSize = 24,
+                        FontWeight = FontWeights.SemiBold,
+                        Foreground = new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33)),
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        Margin = new Thickness(0, 0, 0, 8)
+                    },
+                    new TextBlock
+                    {
+                        Text = project.FolderPath,
+                        FontSize = 14,
+                        Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)),
+                        HorizontalAlignment = HorizontalAlignment.Center
+                    }
+                }
+            }
+        };
+    }
+
+    private void SwitchToProject(ProjectInfo project)
+    {
+        if (_activeProject == project)
+            return;
+
+        // Update tab button styles
+        if (_activeProject != null && _projectTabButtons.TryGetValue(_activeProject, out var prevButton))
+            SetTabButtonActive(prevButton, false);
+
+        _activeProject = project;
+
+        if (_projectTabButtons.TryGetValue(project, out var newButton))
+            SetTabButtonActive(newButton, true);
+
+        // Show the project's content
+        if (_projectContents.TryGetValue(project, out var content))
+        {
+            ProjectContentHost.Content = content;
+            ProjectContentHost.Visibility = Visibility.Visible;
+            EmptyStateText.Visibility = Visibility.Collapsed;
+        }
+
+        // Update title bar
+        Title = $"Agent Dock — {project.FolderName}";
+    }
+
+    private static void SetTabButtonActive(Button button, bool active)
+    {
+        if (active)
+        {
+            button.Background = new SolidColorBrush(Color.FromRgb(0xD0, 0xE0, 0xF0));
+            button.BorderBrush = new SolidColorBrush(Color.FromRgb(0x40, 0x80, 0xC0));
+        }
+        else
+        {
+            button.Background = Brushes.Transparent;
+            button.BorderBrush = new SolidColorBrush(Color.FromRgb(0xAA, 0xAA, 0xAA));
+        }
+    }
+
+    private void CloseActiveProject()
+    {
+        if (_activeProject != null)
+            CloseProject(_activeProject);
+    }
+
+    private void CloseProject(ProjectInfo project)
+    {
+        // Remove tab button
+        if (_projectTabButtons.TryGetValue(project, out var button))
+        {
+            ToolbarPanel.Children.Remove(button);
+            _projectTabButtons.Remove(project);
+        }
+
+        // Remove content
+        _projectContents.Remove(project);
+
+        // Remove from list
+        _projects.Remove(project);
+
+        // If this was the active project, switch to another or show empty state
+        if (_activeProject == project)
+        {
+            _activeProject = null;
+
+            if (_projects.Count > 0)
+            {
+                SwitchToProject(_projects[^1]);
+            }
+            else
+            {
+                ProjectContentHost.Content = null;
+                ProjectContentHost.Visibility = Visibility.Collapsed;
+                EmptyStateText.Visibility = Visibility.Visible;
+                Title = "Agent Dock";
+            }
+        }
+    }
+
+    private static void OpenInExplorer(ProjectInfo project)
+    {
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = project.FolderPath,
+            UseShellExecute = true
+        });
+    }
+
+    // --- Workspace ---
 
     private void SaveWorkspace()
     {
         // Stub — Task 12
     }
 
+    // --- Toolbar Position ---
+
     private void SetToolbarPosition(string position)
     {
         if (position == _currentToolbarPosition)
             return;
 
-        // Uncheck all position menu items, check the selected one
         foreach (var item in _toolbarPositionMenuItems)
             item.IsChecked = false;
 
-        // Update border thickness to show separator on the correct edge
         Dock dock;
         Thickness borderThickness;
         Orientation orientation;
@@ -150,8 +389,7 @@ public partial class MainWindow : Window
         ToolbarPanel.Orientation = orientation;
         _currentToolbarPosition = position;
 
-        // Force layout recalculation — remove and re-add children of WorkspacePanel
-        // DockPanel doesn't re-layout when Dock changes on existing children
+        // Force DockPanel layout recalculation
         var children = new UIElement[WorkspacePanel.Children.Count];
         for (int i = 0; i < WorkspacePanel.Children.Count; i++)
             children[i] = WorkspacePanel.Children[i];
