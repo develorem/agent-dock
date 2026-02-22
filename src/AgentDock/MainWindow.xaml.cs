@@ -3,6 +3,8 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using AgentDock.Models;
+using AvalonDock;
+using AvalonDock.Layout;
 using Microsoft.Win32;
 
 namespace AgentDock;
@@ -142,8 +144,8 @@ public partial class MainWindow : Window
         var addButtonIndex = ToolbarPanel.Children.IndexOf(AddProjectButton);
         ToolbarPanel.Children.Insert(addButtonIndex, tabButton);
 
-        // Create placeholder content for this project (Task 4 will replace with docking layout)
-        var content = CreateProjectPlaceholder(project);
+        // Create docking layout for this project
+        var content = CreateProjectDockingLayout(project);
         _projectContents[project] = content;
 
         // Switch to the new project
@@ -211,12 +213,91 @@ public partial class MainWindow : Window
         return item;
     }
 
-    private static UIElement CreateProjectPlaceholder(ProjectInfo project)
+    private static DockingManager CreateProjectDockingLayout(ProjectInfo project)
     {
-        // Placeholder content — Task 4 will replace this with AvalonDock layout
+        var dockingManager = new DockingManager();
+
+        // --- Left column: File Explorer (top) + Git Status (bottom) ---
+        var fileExplorer = new LayoutAnchorable
+        {
+            Title = "File Explorer",
+            ContentId = $"fileExplorer_{project.FolderPath.GetHashCode()}",
+            CanClose = false,
+            CanHide = false,
+            Content = CreatePanelPlaceholder("File Explorer", project.FolderPath)
+        };
+
+        var gitStatus = new LayoutAnchorable
+        {
+            Title = "Git Status",
+            ContentId = $"gitStatus_{project.FolderPath.GetHashCode()}",
+            CanClose = false,
+            CanHide = false,
+            Content = CreatePanelPlaceholder("Git Status", "Modified and staged files")
+        };
+
+        var leftTopPane = new LayoutAnchorablePane(fileExplorer);
+        var leftBottomPane = new LayoutAnchorablePane(gitStatus);
+
+        var leftColumn = new LayoutAnchorablePaneGroup
+        {
+            Orientation = Orientation.Vertical,
+            DockWidth = new GridLength(250, GridUnitType.Pixel)
+        };
+        leftColumn.Children.Add(leftTopPane);
+        leftColumn.Children.Add(leftBottomPane);
+
+        // --- Center column: File Preview ---
+        var filePreview = new LayoutDocument
+        {
+            Title = "File Preview",
+            ContentId = $"filePreview_{project.FolderPath.GetHashCode()}",
+            CanClose = false,
+            Content = CreatePanelPlaceholder("File Preview", "Select a file to preview")
+        };
+
+        var centerPane = new LayoutDocumentPane(filePreview);
+        var centerColumn = new LayoutDocumentPaneGroup();
+        centerColumn.Children.Add(centerPane);
+
+        // --- Right column: AI Chat ---
+        var aiChat = new LayoutAnchorable
+        {
+            Title = "AI Chat",
+            ContentId = $"aiChat_{project.FolderPath.GetHashCode()}",
+            CanClose = false,
+            CanHide = false,
+            Content = CreatePanelPlaceholder("AI Chat", "Start a Claude Code session")
+        };
+
+        var rightColumn = new LayoutAnchorablePaneGroup
+        {
+            DockWidth = new GridLength(350, GridUnitType.Pixel)
+        };
+        rightColumn.Children.Add(new LayoutAnchorablePane(aiChat));
+
+        // --- Assemble the root layout ---
+        var rootPanel = new LayoutPanel
+        {
+            Orientation = Orientation.Horizontal
+        };
+        rootPanel.Children.Add(leftColumn);
+        rootPanel.Children.Add(centerColumn);
+        rootPanel.Children.Add(rightColumn);
+
+        var layoutRoot = new LayoutRoot();
+        layoutRoot.RootPanel = rootPanel;
+
+        dockingManager.Layout = layoutRoot;
+
+        return dockingManager;
+    }
+
+    private static UIElement CreatePanelPlaceholder(string title, string subtitle)
+    {
         return new Border
         {
-            Background = Brushes.White,
+            Background = new SolidColorBrush(Color.FromRgb(0xFA, 0xFA, 0xFA)),
             Child = new StackPanel
             {
                 HorizontalAlignment = HorizontalAlignment.Center,
@@ -225,18 +306,18 @@ public partial class MainWindow : Window
                 {
                     new TextBlock
                     {
-                        Text = project.FolderName,
-                        FontSize = 24,
+                        Text = title,
+                        FontSize = 16,
                         FontWeight = FontWeights.SemiBold,
-                        Foreground = new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33)),
+                        Foreground = new SolidColorBrush(Color.FromRgb(0x66, 0x66, 0x66)),
                         HorizontalAlignment = HorizontalAlignment.Center,
-                        Margin = new Thickness(0, 0, 0, 8)
+                        Margin = new Thickness(0, 0, 0, 4)
                     },
                     new TextBlock
                     {
-                        Text = project.FolderPath,
-                        FontSize = 14,
-                        Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)),
+                        Text = subtitle,
+                        FontSize = 12,
+                        Foreground = new SolidColorBrush(Color.FromRgb(0x99, 0x99, 0x99)),
                         HorizontalAlignment = HorizontalAlignment.Center
                     }
                 }
