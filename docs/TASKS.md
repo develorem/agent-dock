@@ -97,7 +97,7 @@ Displays the file selected from either File Explorer or Git Status panel. Uses A
 ---
 
 ## Task 7: Git Status Panel
-**Status:** `[~]`
+**Status:** `[x]`
 
 Shows modified, added, deleted, and untracked files for the project's git repo. Staged files displayed in one color (e.g., green), unstaged in another (e.g., orange/yellow). Auto-refreshes on file system changes or on a reasonable polling interval. Clicking a file opens its diff in the File Preview panel. Non-git folders show a "Not a git repository" message.
 
