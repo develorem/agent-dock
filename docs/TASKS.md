@@ -112,7 +112,7 @@ Shows modified, added, deleted, and untracked files for the project's git repo. 
 ---
 
 ## Task 8: Claude Code Subprocess Manager
-**Status:** `[ ]`
+**Status:** `[x]`
 
 Core service that spawns `claude` CLI as a subprocess, communicates via the JSON-lines protocol over stdin/stdout. Handles: starting a session (normal and dangerous mode), sending user messages, receiving streaming responses, permission/control requests, detecting state (idle, working, waiting for input), graceful shutdown. One instance per project. Detects if `claude` is in PATH and reports error if not.
 

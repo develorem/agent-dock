@@ -132,6 +132,18 @@ public class ClaudeStreamDelta
 {
     public string Text { get; init; } = "";
     public int ContentBlockIndex { get; init; }
+    /// <summary>"text_delta" or "thinking_delta"</summary>
+    public string DeltaType { get; init; } = "text_delta";
+}
+
+/// <summary>
+/// Fired when a content block starts or stops in the stream.
+/// </summary>
+public class ClaudeContentBlockEvent
+{
+    public int Index { get; init; }
+    /// <summary>"thinking", "text", "tool_use", etc.</summary>
+    public string BlockType { get; init; } = "";
 }
 
 /// <summary>

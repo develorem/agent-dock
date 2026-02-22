@@ -28,4 +28,10 @@
     <PackageReference Include="Dirkster.AvalonDock.Themes.VS2013" Version="4.72.1" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

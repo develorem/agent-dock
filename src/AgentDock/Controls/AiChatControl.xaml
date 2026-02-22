@@ -1,0 +1,192 @@
+<UserControl x:Class="AgentDock.Controls.AiChatControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d"
+             Background="#1E1E1E">
+    <UserControl.Resources>
+        <Style x:Key="ChatButtonStyle" TargetType="Button">
+            <Setter Property="FontFamily" Value="Cascadia Code, Consolas, Courier New" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="#E0E0E0" />
+            <Setter Property="Background" Value="#0E639C" />
+            <Setter Property="BorderBrush" Value="#1177BB" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Padding" Value="8,4" />
+        </Style>
+    </UserControl.Resources>
+    <Grid>
+        <!-- Start session overlay (shown when no session is active) -->
+        <StackPanel x:Name="StartPanel"
+                    VerticalAlignment="Center"
+                    HorizontalAlignment="Center">
+            <TextBlock Text="Claude Code"
+                       FontFamily="Cascadia Code, Consolas, Courier New"
+                       FontSize="20" FontWeight="SemiBold"
+                       Foreground="#E0E0E0"
+                       HorizontalAlignment="Center"
+                       Margin="0,0,0,8" />
+            <TextBlock Text="Start an AI session for this project"
+                       FontFamily="Cascadia Code, Consolas, Courier New"
+                       FontSize="12"
+                       Foreground="#888"
+                       HorizontalAlignment="Center"
+                       Margin="0,0,0,20" />
+            <Button x:Name="StartNormalButton"
+                    Content="Start Session"
+                    Click="StartNormal_Click"
+                    Style="{StaticResource ChatButtonStyle}"
+                    Width="180" Height="34"
+                    Margin="0,0,0,8" />
+            <Button x:Name="StartDangerousButton"
+                    Content="Start (Dangerous Mode)"
+                    Click="StartDangerous_Click"
+                    Width="180" Height="34"
+                    Margin="0,0,0,8"
+                    FontFamily="Cascadia Code, Consolas, Courier New"
+                    FontSize="11"
+                    Foreground="#FF6B6B"
+                    Background="#2A1A1A"
+                    BorderBrush="#FF4444"
+                    BorderThickness="1"
+                    Cursor="Hand"
+                    Padding="8,4" />
+            <TextBlock x:Name="StartError"
+                       Visibility="Collapsed"
+                       FontFamily="Cascadia Code, Consolas, Courier New"
+                       FontSize="11"
+                       Foreground="#FF6B6B"
+                       HorizontalAlignment="Center"
+                       TextWrapping="Wrap"
+                       MaxWidth="300"
+                       Margin="0,8,0,0" />
+        </StackPanel>
+
+        <!-- Chat area (shown when session is active) -->
+        <DockPanel x:Name="ChatPanel" Visibility="Collapsed">
+
+            <!-- Status bar at top -->
+            <Border DockPanel.Dock="Top" Background="#252526" Padding="8,4">
+                <DockPanel>
+                    <TextBlock x:Name="StatusText"
+                               Text="Initializing..."
+                               FontFamily="Cascadia Code, Consolas, Courier New"
+                               FontSize="11"
+                               Foreground="#888"
+                               VerticalAlignment="Center" />
+                    <Button x:Name="StopButton"
+                            Content="Stop"
+                            Click="Stop_Click"
+                            DockPanel.Dock="Right"
+                            HorizontalAlignment="Right"
+                            FontFamily="Cascadia Code, Consolas, Courier New"
+                            FontSize="10"
+                            Foreground="#FF6B6B"
+                            Background="Transparent"
+                            BorderBrush="#FF4444"
+                            BorderThickness="1"
+                            Cursor="Hand"
+                            Padding="8,2" />
+                </DockPanel>
+            </Border>
+
+            <!-- Permission prompt (replaces input when permission needed) -->
+            <Border x:Name="PermissionPanel"
+                    DockPanel.Dock="Bottom"
+                    Visibility="Collapsed"
+                    Background="#2A2A1A"
+                    BorderBrush="#FF8C00"
+                    BorderThickness="0,1,0,0"
+                    Padding="8,6">
+                <StackPanel>
+                    <TextBlock Text="Permission Required"
+                               FontFamily="Cascadia Code, Consolas, Courier New"
+                               FontSize="12" FontWeight="SemiBold"
+                               Foreground="#FFB347"
+                               Margin="0,0,0,4" />
+                    <TextBlock x:Name="PermissionToolName"
+                               FontFamily="Cascadia Code, Consolas, Courier New"
+                               FontSize="11"
+                               Foreground="#CCC"
+                               Margin="0,0,0,4" />
+                    <ScrollViewer MaxHeight="120"
+                                  VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Auto"
+                                  Margin="0,0,0,6">
+                        <TextBlock x:Name="PermissionDetail"
+                                   FontFamily="Cascadia Code, Consolas, Courier New"
+                                   FontSize="10"
+                                   Foreground="#AAA"
+                                   TextWrapping="Wrap" />
+                    </ScrollViewer>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="Allow"
+                                Click="PermissionAllow_Click"
+                                Style="{StaticResource ChatButtonStyle}"
+                                Width="80" Height="28"
+                                Margin="0,0,6,0" />
+                        <Button Content="Deny"
+                                Click="PermissionDeny_Click"
+                                FontFamily="Cascadia Code, Consolas, Courier New"
+                                FontSize="11"
+                                Foreground="#FF6B6B"
+                                Background="#2A1A1A"
+                                BorderBrush="#FF4444"
+                                BorderThickness="1"
+                                Cursor="Hand"
+                                Padding="8,4"
+                                Width="80" Height="28" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- Input area -->
+            <Border x:Name="InputPanel"
+                    DockPanel.Dock="Bottom"
+                    Background="#252526"
+                    BorderBrush="#3C3C3C"
+                    BorderThickness="0,1,0,0"
+                    Padding="8,6">
+                <DockPanel>
+                    <TextBlock Text=">"
+                               DockPanel.Dock="Left"
+                               FontFamily="Cascadia Code, Consolas, Courier New"
+                               FontSize="14" FontWeight="Bold"
+                               Foreground="#569CD6"
+                               VerticalAlignment="Center"
+                               Margin="0,0,6,0" />
+                    <Button x:Name="SendButton"
+                            Content="Send"
+                            Click="Send_Click"
+                            DockPanel.Dock="Right"
+                            Style="{StaticResource ChatButtonStyle}"
+                            Width="60" Height="28"
+                            Margin="6,0,0,0" />
+                    <TextBox x:Name="InputBox"
+                             FontFamily="Cascadia Code, Consolas, Courier New"
+                             FontSize="12"
+                             Foreground="#E0E0E0"
+                             Background="#1E1E1E"
+                             CaretBrush="#E0E0E0"
+                             BorderBrush="#3C3C3C"
+                             BorderThickness="1"
+                             Padding="6,4"
+                             AcceptsReturn="False"
+                             KeyDown="InputBox_KeyDown"
+                             VerticalContentAlignment="Center" />
+                </DockPanel>
+            </Border>
+
+            <!-- Message list -->
+            <ScrollViewer x:Name="MessageScroller"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          Background="#1E1E1E">
+                <StackPanel x:Name="MessageList"
+                            Margin="8,8,8,8" />
+            </ScrollViewer>
+        </DockPanel>
+    </Grid>
+</UserControl>

@@ -4,6 +4,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using AgentDock.Controls;
 using AgentDock.Models;
+using AgentDock.Services;
 using AvalonDock;
 using AvalonDock.Layout;
 using Microsoft.Win32;
@@ -27,10 +28,12 @@ public partial class MainWindow : Window
     private readonly List<ProjectInfo> _projects = [];
     private readonly Dictionary<ProjectInfo, Button> _projectTabButtons = [];
     private readonly Dictionary<ProjectInfo, UIElement> _projectContents = [];
+    private readonly Dictionary<ProjectInfo, AiChatControl> _projectChatControls = [];
     private ProjectInfo? _activeProject;
 
     public MainWindow()
     {
+        Log.Info("MainWindow constructor starting");
         InitializeComponent();
 
         _toolbarPositionMenuItems = [ToolbarTopMenu, ToolbarLeftMenu, ToolbarRightMenu, ToolbarBottomMenu];
@@ -38,6 +41,7 @@ public partial class MainWindow : Window
         CommandBindings.Add(new CommandBinding(AddProjectCommand, (_, _) => AddProject()));
         CommandBindings.Add(new CommandBinding(SaveWorkspaceCommand, (_, _) => SaveWorkspace()));
         CommandBindings.Add(new CommandBinding(CloseProjectCommand, (_, _) => CloseActiveProject()));
+        Log.Info("MainWindow constructor complete");
     }
 
     // --- File Menu ---
@@ -108,19 +112,25 @@ public partial class MainWindow : Window
 
     private void AddProject()
     {
+        Log.Info("AddProject: opening folder dialog");
         var dialog = new OpenFolderDialog
         {
             Title = "Select Project Folder"
         };
 
         if (dialog.ShowDialog() != true)
+        {
+            Log.Info("AddProject: dialog cancelled");
             return;
+        }
 
         var folderPath = dialog.FolderName;
+        Log.Info($"AddProject: selected folder '{folderPath}'");
 
         // Prevent duplicates
         if (_projects.Any(p => string.Equals(p.FolderPath, folderPath, StringComparison.OrdinalIgnoreCase)))
         {
+            Log.Warn($"AddProject: duplicate folder '{folderPath}'");
             MessageBox.Show(
                 $"The folder '{folderPath}' is already open.",
                 "Duplicate Project",
@@ -136,21 +146,29 @@ public partial class MainWindow : Window
 
         var project = new ProjectInfo { FolderPath = folderPath };
         _projects.Add(project);
+        Log.Info($"AddProject: created ProjectInfo for '{project.FolderName}'");
 
         // Create the tab button
+        Log.Info("AddProject: creating tab button");
         var tabButton = CreateProjectTabButton(project);
         _projectTabButtons[project] = tabButton;
 
         // Insert tab button before the + button
         var addButtonIndex = ToolbarPanel.Children.IndexOf(AddProjectButton);
         ToolbarPanel.Children.Insert(addButtonIndex, tabButton);
+        Log.Info("AddProject: tab button inserted");
 
         // Create docking layout for this project
-        var content = CreateProjectDockingLayout(project);
+        Log.Info("AddProject: creating docking layout");
+        var (content, chatControl) = CreateProjectDockingLayout(project);
         _projectContents[project] = content;
+        _projectChatControls[project] = chatControl;
+        Log.Info("AddProject: docking layout created");
 
         // Switch to the new project
+        Log.Info("AddProject: switching to project");
         SwitchToProject(project);
+        Log.Info("AddProject: complete");
     }
 
     private Button CreateProjectTabButton(ProjectInfo project)
@@ -214,13 +232,16 @@ public partial class MainWindow : Window
         return item;
     }
 
-    private static DockingManager CreateProjectDockingLayout(ProjectInfo project)
+    private static (DockingManager, AiChatControl) CreateProjectDockingLayout(ProjectInfo project)
     {
+        Log.Info("CreateDockingLayout: starting");
         var dockingManager = new DockingManager();
 
         // --- Left column: File Explorer (top) + Git Status (bottom) ---
+        Log.Info("CreateDockingLayout: creating FileExplorerControl");
         var fileExplorerControl = new FileExplorerControl();
         fileExplorerControl.LoadDirectory(project.FolderPath);
+        Log.Info("CreateDockingLayout: FileExplorerControl loaded");
 
         var fileExplorer = new LayoutAnchorable
         {
@@ -231,8 +252,10 @@ public partial class MainWindow : Window
             Content = fileExplorerControl
         };
 
+        Log.Info("CreateDockingLayout: creating GitStatusControl");
         var gitStatusControl = new GitStatusControl();
         gitStatusControl.LoadRepository(project.FolderPath);
+        Log.Info("CreateDockingLayout: GitStatusControl loaded");
 
         var gitStatus = new LayoutAnchorable
         {
@@ -253,19 +276,23 @@ public partial class MainWindow : Window
         };
         leftColumn.Children.Add(leftTopPane);
         leftColumn.Children.Add(leftBottomPane);
+        Log.Info("CreateDockingLayout: left column assembled");
 
         // --- Center column: File Preview ---
+        Log.Info("CreateDockingLayout: creating FilePreviewControl");
         var filePreviewControl = new FilePreviewControl();
 
         // Wire file explorer clicks to preview panel
         fileExplorerControl.FileSelected += filePath =>
         {
+            Log.Info($"FileSelected: {filePath}");
             filePreviewControl.ShowFile(filePath);
         };
 
         // Wire git status diff clicks to preview panel
         gitStatusControl.DiffRequested += (filePath, diffContent) =>
         {
+            Log.Info($"DiffRequested: {filePath}");
             filePreviewControl.ShowDiff(diffContent);
         };
 
@@ -280,15 +307,21 @@ public partial class MainWindow : Window
         var centerPane = new LayoutDocumentPane(filePreview);
         var centerColumn = new LayoutDocumentPaneGroup();
         centerColumn.Children.Add(centerPane);
+        Log.Info("CreateDockingLayout: center column assembled");
 
         // --- Right column: AI Chat ---
+        Log.Info("CreateDockingLayout: creating AiChatControl");
+        var aiChatControl = new AiChatControl();
+        aiChatControl.Initialize(project.FolderPath);
+        Log.Info("CreateDockingLayout: AiChatControl initialized");
+
         var aiChat = new LayoutAnchorable
         {
             Title = "AI Chat",
             ContentId = $"aiChat_{project.FolderPath.GetHashCode()}",
             CanClose = false,
             CanHide = false,
-            Content = CreatePanelPlaceholder("AI Chat", "Start a Claude Code session")
+            Content = aiChatControl
         };
 
         var rightColumn = new LayoutAnchorablePaneGroup
@@ -296,6 +329,7 @@ public partial class MainWindow : Window
             DockWidth = new GridLength(350, GridUnitType.Pixel)
         };
         rightColumn.Children.Add(new LayoutAnchorablePane(aiChat));
+        Log.Info("CreateDockingLayout: right column assembled");
 
         // --- Assemble the root layout ---
         var rootPanel = new LayoutPanel
@@ -311,7 +345,8 @@ public partial class MainWindow : Window
 
         dockingManager.Layout = layoutRoot;
 
-        return dockingManager;
+        Log.Info("CreateDockingLayout: complete");
+        return (dockingManager, aiChatControl);
     }
 
     private static UIElement CreatePanelPlaceholder(string title, string subtitle)
@@ -348,6 +383,7 @@ public partial class MainWindow : Window
 
     private void SwitchToProject(ProjectInfo project)
     {
+        Log.Info($"SwitchToProject: '{project.FolderName}'");
         if (_activeProject == project)
             return;
 
@@ -394,6 +430,13 @@ public partial class MainWindow : Window
 
     private void CloseProject(ProjectInfo project)
     {
+        // Shutdown AI chat session
+        if (_projectChatControls.TryGetValue(project, out var chatControl))
+        {
+            chatControl.Shutdown();
+            _projectChatControls.Remove(project);
+        }
+
         // Remove tab button
         if (_projectTabButtons.TryGetValue(project, out var button))
         {
@@ -499,5 +542,16 @@ public partial class MainWindow : Window
         WorkspacePanel.Children.Clear();
         foreach (var child in children)
             WorkspacePanel.Children.Add(child);
+    }
+
+    // --- Window Closing ---
+
+    private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        // Kill all Claude sessions gracefully
+        foreach (var chatControl in _projectChatControls.Values)
+            chatControl.Shutdown();
+
+        _projectChatControls.Clear();
     }
 }

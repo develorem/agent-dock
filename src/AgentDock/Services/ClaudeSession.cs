@@ -6,22 +6,15 @@ using AgentDock.Models;
 namespace AgentDock.Services;
 
 /// <summary>
-/// Manages a single Claude Code CLI subprocess for one project.
-/// Communicates via the JSON-lines protocol over stdin/stdout.
+/// Manages Claude Code CLI interaction for one project.
+/// Uses one-shot mode per turn with --resume for conversation continuity.
+/// Each SendMessage spawns a new process; streaming output is read in real-time.
 /// </summary>
 public class ClaudeSession : IDisposable
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
-    };
-
     private readonly string _workingDirectory;
     private Process? _process;
-    private StreamWriter? _stdin;
     private CancellationTokenSource? _readCts;
-    private Task? _readTask;
     private bool _disposed;
 
     public ClaudeSessionState State { get; private set; } = ClaudeSessionState.NotStarted;
@@ -32,28 +25,15 @@ public class ClaudeSession : IDisposable
 
     // --- Events ---
 
-    /// <summary>Raised when session state changes.</summary>
     public event Action<ClaudeSessionState>? StateChanged;
-
-    /// <summary>Raised when the system init message is received.</summary>
     public event Action<ClaudeSystemInit>? Initialized;
-
-    /// <summary>Raised when a complete assistant message is received.</summary>
     public event Action<ClaudeAssistantMessage>? AssistantMessageReceived;
-
-    /// <summary>Raised when a streaming text delta arrives.</summary>
     public event Action<ClaudeStreamDelta>? StreamDelta;
-
-    /// <summary>Raised when Claude requests permission to use a tool.</summary>
+    public event Action<ClaudeContentBlockEvent>? ContentBlockStarted;
+    public event Action<ClaudeContentBlockEvent>? ContentBlockStopped;
     public event Action<ClaudePermissionRequest>? PermissionRequested;
-
-    /// <summary>Raised when a result message is received (session turn complete).</summary>
     public event Action<ClaudeResultMessage>? ResultReceived;
-
-    /// <summary>Raised when raw text arrives on stderr (for diagnostics).</summary>
     public event Action<string>? ErrorOutput;
-
-    /// <summary>Raised when the process exits unexpectedly or normally.</summary>
     public event Action<int>? ProcessExited;
 
     public ClaudeSession(string workingDirectory)
@@ -61,9 +41,6 @@ public class ClaudeSession : IDisposable
         _workingDirectory = workingDirectory;
     }
 
-    /// <summary>
-    /// Checks if the `claude` CLI is available in PATH.
-    /// </summary>
     public static bool IsClaudeAvailable()
     {
         try
@@ -91,20 +68,53 @@ public class ClaudeSession : IDisposable
     }
 
     /// <summary>
-    /// Starts a Claude Code session.
+    /// Marks the session as ready. Does not spawn a process yet —
+    /// the first process is spawned when SendMessage is called.
     /// </summary>
-    /// <param name="dangerousMode">If true, skips all permission prompts.</param>
     public void Start(bool dangerousMode = false)
     {
+        Log.Info($"ClaudeSession.Start: dangerous={dangerousMode}, cwd={_workingDirectory}");
+
         if (State != ClaudeSessionState.NotStarted && State != ClaudeSessionState.Exited && State != ClaudeSessionState.Error)
             throw new InvalidOperationException($"Cannot start session in state {State}");
 
         IsDangerousMode = dangerousMode;
+        SetState(ClaudeSessionState.Idle);
 
-        var args = "-p --output-format stream-json --input-format stream-json --verbose --include-partial-messages";
+        // Fire a synthetic init so the UI knows we're ready
+        Initialized?.Invoke(new ClaudeSystemInit
+        {
+            SessionId = "",
+            Model = "(pending first message)",
+            Cwd = _workingDirectory,
+            PermissionMode = dangerousMode ? "bypassPermissions" : "default",
+            Tools = []
+        });
+    }
 
-        if (dangerousMode)
+    /// <summary>
+    /// Sends a user message by spawning a one-shot claude process.
+    /// Uses --resume to continue the conversation if a session ID exists.
+    /// </summary>
+    public void SendMessage(string text)
+    {
+        if (State != ClaudeSessionState.Idle)
+            throw new InvalidOperationException($"Cannot send message in state {State}");
+
+        SetState(ClaudeSessionState.Working);
+
+        // Build arguments — use --input-format stream-json so we can send
+        // the prompt (and permission responses) as JSON on stdin.
+        // With stream-json input, -p is ignored by the CLI, so we omit it.
+        var args = "--output-format stream-json --input-format stream-json --verbose --include-partial-messages";
+
+        if (SessionId != null)
+            args += $" --resume \"{SessionId}\"";
+
+        if (IsDangerousMode)
             args += " --dangerously-skip-permissions";
+
+        Log.Info($"ClaudeSession.SendMessage: launching claude with args: {args}");
 
         var psi = new ProcessStartInfo
         {
@@ -120,12 +130,17 @@ public class ClaudeSession : IDisposable
             StandardErrorEncoding = System.Text.Encoding.UTF8
         };
 
+        // Prevent nested-session detection if launched from within Claude Code
+        psi.Environment.Remove("CLAUDECODE");
+        psi.Environment.Remove("CLAUDE_CODE_ENTRYPOINT");
+
         try
         {
             _process = Process.Start(psi);
         }
         catch (Exception ex)
         {
+            Log.Error("ClaudeSession.SendMessage: failed to start process", ex);
             SetState(ClaudeSessionState.Error);
             ErrorOutput?.Invoke($"Failed to start Claude: {ex.Message}");
             return;
@@ -133,51 +148,41 @@ public class ClaudeSession : IDisposable
 
         if (_process == null)
         {
+            Log.Error("ClaudeSession.SendMessage: Process.Start returned null");
             SetState(ClaudeSessionState.Error);
             ErrorOutput?.Invoke("Failed to start Claude process");
             return;
         }
 
-        _stdin = _process.StandardInput;
-        _stdin.AutoFlush = true;
+        Log.Info($"ClaudeSession.SendMessage: process started, PID={_process.Id}");
 
         _process.EnableRaisingEvents = true;
         _process.Exited += OnProcessExited;
 
-        // Start reading stderr in background
+        // Read stderr
         _process.ErrorDataReceived += (_, e) =>
         {
             if (e.Data != null)
+            {
+                Log.Info($"ClaudeSession STDERR: {e.Data}");
                 ErrorOutput?.Invoke(e.Data);
+            }
         };
         _process.BeginErrorReadLine();
 
-        // Start reading stdout NDJSON
+        // Read stdout NDJSON
         _readCts = new CancellationTokenSource();
-        _readTask = Task.Run(() => ReadOutputLoop(_process.StandardOutput, _readCts.Token));
+        var stdout = _process.StandardOutput;
+        Task.Run(() => ReadOutputLoop(stdout, _readCts.Token));
 
-        SetState(ClaudeSessionState.Initializing);
-    }
-
-    /// <summary>
-    /// Sends a user message to the Claude session.
-    /// </summary>
-    public void SendMessage(string text)
-    {
-        if (State != ClaudeSessionState.Idle)
-            throw new InvalidOperationException($"Cannot send message in state {State}");
-
-        var message = new ClaudeUserMessage
+        // Send the user message as JSON on stdin — this is what actually
+        // triggers Claude to start processing (with stream-json input,
+        // the CLI reads from stdin, not from -p).
+        var userMessage = new ClaudeUserMessage
         {
-            Message = new ClaudeMessagePayload
-            {
-                Role = "user",
-                Content = text
-            }
+            Message = new ClaudeMessagePayload { Content = text }
         };
-
-        WriteJson(message);
-        SetState(ClaudeSessionState.Working);
+        WriteStdin(JsonSerializer.Serialize(userMessage, JsonOptions));
     }
 
     /// <summary>
@@ -185,19 +190,19 @@ public class ClaudeSession : IDisposable
     /// </summary>
     public void AllowPermission()
     {
-        if (PendingPermission == null)
+        if (PendingPermission == null || _process == null)
             return;
 
-        var response = new ClaudeControlResponse
+        Log.Info($"ClaudeSession.AllowPermission: {PendingPermission.ToolName}");
+        WriteStdin(JsonSerializer.Serialize(new ClaudeControlResponse
         {
             RequestId = PendingPermission.RequestId,
             Response = new ClaudeControlResponseBody
             {
                 ResponseData = new ClaudePermissionAllow()
             }
-        };
+        }, JsonOptions));
 
-        WriteJson(response);
         PendingPermission = null;
         SetState(ClaudeSessionState.Working);
     }
@@ -207,10 +212,11 @@ public class ClaudeSession : IDisposable
     /// </summary>
     public void DenyPermission(string? reason = null)
     {
-        if (PendingPermission == null)
+        if (PendingPermission == null || _process == null)
             return;
 
-        var response = new ClaudeControlResponse
+        Log.Info($"ClaudeSession.DenyPermission: {PendingPermission.ToolName}");
+        WriteStdin(JsonSerializer.Serialize(new ClaudeControlResponse
         {
             RequestId = PendingPermission.RequestId,
             Response = new ClaudeControlResponseBody
@@ -220,83 +226,118 @@ public class ClaudeSession : IDisposable
                     Message = reason ?? "User denied this action"
                 }
             }
-        };
+        }, JsonOptions));
 
-        WriteJson(response);
         PendingPermission = null;
         SetState(ClaudeSessionState.Working);
     }
 
-    /// <summary>
-    /// Gracefully stops the Claude session.
-    /// </summary>
-    public void Stop()
+    public async Task StopAsync()
     {
-        if (_process == null || _process.HasExited)
-            return;
+        Log.Info("ClaudeSession.Stop called");
 
-        try
+        // Cancel the read loop first so it stops posting Dispatcher calls
+        _readCts?.Cancel();
+
+        // Set state immediately (UI stays responsive)
+        SetState(ClaudeSessionState.Exited);
+
+        // Kill the process tree off the UI thread, but await completion
+        var proc = _process;
+        _process = null;
+        if (proc != null && !proc.HasExited)
         {
-            // Close stdin to signal EOF — Claude CLI should exit gracefully
-            _stdin?.Close();
-            _stdin = null;
-
-            // Give it a moment to exit
-            if (!_process.WaitForExit(3000))
+            await Task.Run(() =>
             {
-                _process.Kill(entireProcessTree: true);
-            }
-        }
-        catch
-        {
-            // Best effort
-            try { _process.Kill(entireProcessTree: true); } catch { }
+                try
+                {
+                    proc.StandardInput.Close();
+                    proc.Kill(entireProcessTree: true);
+                    proc.WaitForExit(5000);
+                }
+                catch { }
+                finally
+                {
+                    Log.Info($"ClaudeSession: process killed (exited={proc.HasExited})");
+                    try { proc.Dispose(); } catch { }
+                }
+            });
         }
     }
 
     public void Dispose()
     {
-        if (_disposed)
-            return;
-
+        if (_disposed) return;
         _disposed = true;
         _readCts?.Cancel();
-        Stop();
-        _process?.Dispose();
+        KillCurrentProcess();
         _readCts?.Dispose();
         GC.SuppressFinalize(this);
     }
 
     // --- Internal ---
 
-    private void WriteJson<T>(T message)
+    private static readonly JsonSerializerOptions JsonOptions = new()
     {
-        if (_stdin == null)
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+    };
+
+    private void WriteStdin(string json)
+    {
+        if (_process == null || _process.HasExited)
             return;
 
         try
         {
-            var json = JsonSerializer.Serialize(message, JsonOptions);
-            _stdin.WriteLine(json);
+            Log.Info($"ClaudeSession STDIN: {(json.Length > 500 ? json[..500] + "..." : json)}");
+            _process.StandardInput.WriteLine(json);
+            _process.StandardInput.Flush();
         }
         catch (Exception ex)
         {
-            ErrorOutput?.Invoke($"Write error: {ex.Message}");
+            Log.Error("ClaudeSession: WriteStdin error", ex);
         }
+    }
+
+    private void KillCurrentProcess()
+    {
+        if (_process == null || _process.HasExited)
+            return;
+
+        try
+        {
+            _process.StandardInput.Close();
+            if (!_process.WaitForExit(3000))
+                _process.Kill(entireProcessTree: true);
+        }
+        catch
+        {
+            try { _process.Kill(entireProcessTree: true); } catch { }
+        }
+
+        _process.Dispose();
+        _process = null;
     }
 
     private async Task ReadOutputLoop(StreamReader stdout, CancellationToken ct)
     {
+        Log.Info("ClaudeSession: ReadOutputLoop started");
         try
         {
             while (!ct.IsCancellationRequested)
             {
                 var line = await stdout.ReadLineAsync(ct);
                 if (line == null)
-                    break; // EOF
+                {
+                    Log.Info("ClaudeSession: ReadOutputLoop got EOF");
+                    break;
+                }
 
                 if (string.IsNullOrWhiteSpace(line))
                     continue;
+
+                Log.Info($"ClaudeSession STDOUT: {(line.Length > 500 ? line[..500] + "..." : line)}");
 
                 try
                 {
@@ -304,18 +345,21 @@ public class ClaudeSession : IDisposable
                 }
                 catch (Exception ex)
                 {
+                    Log.Error("ClaudeSession: ProcessMessage error", ex);
                     ErrorOutput?.Invoke($"Parse error: {ex.Message}");
                 }
             }
         }
         catch (OperationCanceledException)
         {
-            // Normal shutdown
+            Log.Info("ClaudeSession: ReadOutputLoop cancelled");
         }
         catch (Exception ex)
         {
+            Log.Error("ClaudeSession: ReadOutputLoop error", ex);
             ErrorOutput?.Invoke($"Read error: {ex.Message}");
         }
+        Log.Info("ClaudeSession: ReadOutputLoop ended");
     }
 
     private void ProcessMessage(string jsonLine)
@@ -354,22 +398,16 @@ public class ClaudeSession : IDisposable
         if (subtype != "init")
             return;
 
-        var init = new ClaudeSystemInit
-        {
-            SessionId = GetString(root, "session_id") ?? "",
-            Model = GetString(root, "model") ?? "",
-            Cwd = GetString(root, "cwd") ?? "",
-            PermissionMode = GetString(root, "permissionMode") ?? "",
-            Tools = root.TryGetProperty("tools", out var tools)
-                ? tools.EnumerateArray().Select(t => t.GetString() ?? "").ToArray()
-                : []
-        };
+        var newSessionId = GetString(root, "session_id");
+        var newModel = GetString(root, "model");
 
-        SessionId = init.SessionId;
-        Model = init.Model;
+        Log.Info($"ClaudeSession: system init — session={newSessionId}, model={newModel}");
 
-        SetState(ClaudeSessionState.Idle);
-        Initialized?.Invoke(init);
+        // Capture session ID for --resume on subsequent turns
+        if (newSessionId != null)
+            SessionId = newSessionId;
+        if (newModel != null)
+            Model = newModel;
     }
 
     private void HandleAssistantMessage(JsonElement root)
@@ -406,20 +444,44 @@ public class ClaudeSession : IDisposable
         if (!root.TryGetProperty("event", out var evt))
             return;
 
+        var eventType = GetString(evt, "type");
+
+        // content_block_start / content_block_stop
+        if (eventType == "content_block_start")
+        {
+            var index = evt.TryGetProperty("index", out var idx) ? idx.GetInt32() : 0;
+            var blockType = "";
+            if (evt.TryGetProperty("content_block", out var cb))
+                blockType = GetString(cb, "type") ?? "";
+            ContentBlockStarted?.Invoke(new ClaudeContentBlockEvent { Index = index, BlockType = blockType });
+            return;
+        }
+
+        if (eventType == "content_block_stop")
+        {
+            var index = evt.TryGetProperty("index", out var idx) ? idx.GetInt32() : 0;
+            ContentBlockStopped?.Invoke(new ClaudeContentBlockEvent { Index = index, BlockType = "" });
+            return;
+        }
+
+        // content_block_delta — text_delta or thinking_delta
         if (!evt.TryGetProperty("delta", out var delta))
             return;
 
         var deltaType = GetString(delta, "type");
-        if (deltaType != "text_delta")
+        if (deltaType != "text_delta" && deltaType != "thinking_delta")
             return;
 
-        var text = GetString(delta, "text") ?? "";
-        var index = evt.TryGetProperty("index", out var idx) ? idx.GetInt32() : 0;
+        var text = deltaType == "thinking_delta"
+            ? GetString(delta, "thinking") ?? ""
+            : GetString(delta, "text") ?? "";
+        var index2 = evt.TryGetProperty("index", out var idx2) ? idx2.GetInt32() : 0;
 
         StreamDelta?.Invoke(new ClaudeStreamDelta
         {
             Text = text,
-            ContentBlockIndex = index
+            ContentBlockIndex = index2,
+            DeltaType = deltaType
         });
     }
 
@@ -440,6 +502,9 @@ public class ClaudeSession : IDisposable
             Errors = errorList
         };
 
+        // Process finished this turn — close stdin so the process exits cleanly,
+        // then transition back to idle. Next SendMessage will spawn a fresh process with --resume.
+        try { _process?.StandardInput.Close(); } catch { }
         SetState(ClaudeSessionState.Idle);
         ResultReceived?.Invoke(result);
     }
@@ -457,6 +522,8 @@ public class ClaudeSession : IDisposable
         {
             var toolName = GetString(request, "tool_name") ?? "";
             var input = request.TryGetProperty("input", out var inp) ? inp.Clone() : default;
+
+            Log.Info($"ClaudeSession: permission request — tool={toolName}, requestId={requestId}");
 
             var permReq = new ClaudePermissionRequest
             {
@@ -476,6 +543,7 @@ public class ClaudeSession : IDisposable
         if (State == newState)
             return;
 
+        Log.Info($"ClaudeSession: state {State} -> {newState}");
         State = newState;
         StateChanged?.Invoke(newState);
     }
@@ -483,10 +551,21 @@ public class ClaudeSession : IDisposable
     private void OnProcessExited(object? sender, EventArgs e)
     {
         var exitCode = _process?.ExitCode ?? -1;
+        Log.Info($"ClaudeSession: process exited with code {exitCode}");
 
-        if (State != ClaudeSessionState.Exited && State != ClaudeSessionState.Error)
+        // Only transition to error if we weren't expecting the exit
+        if (State == ClaudeSessionState.Working)
         {
-            SetState(exitCode == 0 ? ClaudeSessionState.Exited : ClaudeSessionState.Error);
+            if (exitCode != 0)
+            {
+                SetState(ClaudeSessionState.Error);
+            }
+            // If exit code 0 while working, the result handler should have set Idle already.
+            // If it didn't (edge case), set idle now.
+            else if (State == ClaudeSessionState.Working)
+            {
+                SetState(ClaudeSessionState.Idle);
+            }
         }
 
         ProcessExited?.Invoke(exitCode);
