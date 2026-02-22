@@ -1,0 +1,50 @@
+<UserControl x:Class="AgentDock.Controls.FilePreviewControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:avalonedit="http://icsharpcode.net/sharpdevelop/avalonedit"
+             mc:Ignorable="d">
+    <Grid>
+        <!-- Empty state -->
+        <TextBlock x:Name="EmptyMessage"
+                   Text="Select a file to preview"
+                   HorizontalAlignment="Center"
+                   VerticalAlignment="Center"
+                   FontSize="16"
+                   Foreground="#999" />
+
+        <!-- Text/code preview -->
+        <avalonedit:TextEditor x:Name="TextPreview"
+                               Visibility="Collapsed"
+                               IsReadOnly="True"
+                               ShowLineNumbers="True"
+                               FontFamily="Cascadia Code, Consolas, Courier New"
+                               FontSize="13"
+                               BorderThickness="0"
+                               HorizontalScrollBarVisibility="Auto"
+                               VerticalScrollBarVisibility="Auto" />
+
+        <!-- Image preview -->
+        <ScrollViewer x:Name="ImageContainer"
+                      Visibility="Collapsed"
+                      HorizontalScrollBarVisibility="Auto"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalAlignment="Center"
+                      VerticalAlignment="Center">
+            <Image x:Name="ImagePreview"
+                   Stretch="Uniform"
+                   MaxWidth="800"
+                   MaxHeight="600" />
+        </ScrollViewer>
+
+        <!-- Binary / no preview message -->
+        <TextBlock x:Name="NoPreviewMessage"
+                   Visibility="Collapsed"
+                   Text="No Preview"
+                   HorizontalAlignment="Center"
+                   VerticalAlignment="Center"
+                   FontSize="18"
+                   Foreground="#AAA" />
+    </Grid>
+</UserControl>

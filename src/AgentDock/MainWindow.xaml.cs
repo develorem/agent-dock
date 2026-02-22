@@ -252,12 +252,20 @@ public partial class MainWindow : Window
         leftColumn.Children.Add(leftBottomPane);
 
         // --- Center column: File Preview ---
+        var filePreviewControl = new FilePreviewControl();
+
+        // Wire file explorer clicks to preview panel
+        fileExplorerControl.FileSelected += filePath =>
+        {
+            filePreviewControl.ShowFile(filePath);
+        };
+
         var filePreview = new LayoutDocument
         {
             Title = "File Preview",
             ContentId = $"filePreview_{project.FolderPath.GetHashCode()}",
             CanClose = false,
-            Content = CreatePanelPlaceholder("File Preview", "Select a file to preview")
+            Content = filePreviewControl
         };
 
         var centerPane = new LayoutDocumentPane(filePreview);
