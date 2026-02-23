@@ -181,7 +181,7 @@ Global theme toggle via Settings menu. Dark theme: dark backgrounds, light text,
 ---
 
 ## Task 12: Workspace Save/Load
-**Status:** `[ ]`
+**Status:** `[~]`
 
 Workspace file (.agentdock extension) serializes: list of open project paths, per-project docking layouts, toolbar position, theme setting, per-project Claude session mode (not the session itself). File > Save Workspace and File > Open Workspace dialogs. Recent Workspaces submenu under File menu (last 5-10 workspaces). On close: if workspace has unsaved changes since last save, prompt "Save workspace?" with Yes/No/Cancel. Closing the app kills all running Claude instances gracefully.
 
