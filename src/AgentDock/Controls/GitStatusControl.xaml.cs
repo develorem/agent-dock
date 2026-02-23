@@ -20,6 +20,7 @@ public partial class GitStatusControl : UserControl
     public GitStatusControl()
     {
         InitializeComponent();
+        ThemeManager.ThemeChanged += _ => RefreshStatus();
     }
 
     public void LoadRepository(string projectPath)
@@ -117,8 +118,8 @@ public class GitStatusItem
     public string StagedLabel => Entry.IsStaged ? "(staged)" : "";
 
     public Brush StatusColor => Entry.IsStaged
-        ? new SolidColorBrush(Color.FromRgb(0x2E, 0x9E, 0x40))   // green for staged
-        : new SolidColorBrush(Color.FromRgb(0xD0, 0x8B, 0x20));  // amber for unstaged
+        ? ThemeManager.GetBrush("GitStagedForeground")
+        : ThemeManager.GetBrush("GitUnstagedForeground");
 
     public GitStatusItem(GitFileEntry entry)
     {

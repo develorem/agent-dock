@@ -128,7 +128,7 @@ Core service that spawns `claude` CLI as a subprocess, communicates via the JSON
 ---
 
 ## Task 9: AI Interaction Panel
-**Status:** `[ ]`
+**Status:** `[x]`
 
 Terminal-styled chat panel. Monospace font, themed dark background. Custom Agent Dock prompt icon for user input line. User messages and AI messages are visually distinct (different alignment or color). Streaming responses render in real-time as tokens arrive. Past messages are collapsed by default (show first line + expand/collapse button). Text input at the bottom with send button. Options to start Claude session (normal mode or dangerous mode). When Claude requests permission, the input area is replaced with an inline approval prompt showing context + Allow/Deny buttons.
 
@@ -145,7 +145,7 @@ Terminal-styled chat panel. Monospace font, themed dark background. Custom Agent
 ---
 
 ## Task 10: Toolbar Status Icons + Badges
-**Status:** `[ ]`
+**Status:** `[x]`
 
 Project tabs in the toolbar display dynamic state icons:
 - Generic project icon when no Claude session is running
@@ -166,7 +166,7 @@ Icons sized appropriately to accommodate multiple badges. State updates driven b
 ---
 
 ## Task 11: Light/Dark Theme System
-**Status:** `[ ]`
+**Status:** `[x]`
 
 Global theme toggle via Settings menu. Dark theme: dark backgrounds, light text, styled consistently across all panels. Light theme: standard light UI. AvalonDock panels, file explorer, git status, file preview, and AI panel all respect the theme. AI panel maintains terminal aesthetic in both themes. Theme persists across sessions (stored in app settings file).
 

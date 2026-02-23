@@ -3,19 +3,6 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              StartupUri="MainWindow.xaml">
     <Application.Resources>
-        <!-- Default theme resources (light) -->
-        <SolidColorBrush x:Key="ToolbarBackground" Color="#F0F0F0" />
-        <SolidColorBrush x:Key="ContentBackground" Color="#FAFAFA" />
-
-        <!-- Diff colors (theme-aware — dark theme will override these) -->
-        <Color x:Key="DiffAddedColor">#DDFBE6</Color>
-        <Color x:Key="DiffRemovedColor">#FBE0DD</Color>
-        <Color x:Key="DiffHunkHeaderColor">#E8E8FF</Color>
-        <SolidColorBrush x:Key="DiffAddedForeground" Color="#1A7F37" />
-        <SolidColorBrush x:Key="DiffRemovedForeground" Color="#CF222E" />
-        <SolidColorBrush x:Key="DiffHunkHeaderForeground" Color="#6639BA" />
-        <SolidColorBrush x:Key="DiffAddedBackground" Color="{DynamicResource DiffAddedColor}" />
-        <SolidColorBrush x:Key="DiffRemovedBackground" Color="{DynamicResource DiffRemovedColor}" />
-        <SolidColorBrush x:Key="DiffHunkHeaderBackground" Color="{DynamicResource DiffHunkHeaderColor}" />
+        <!-- Theme dictionaries are merged at runtime by ThemeManager -->
     </Application.Resources>
 </Application>

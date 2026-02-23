@@ -13,6 +13,8 @@ public partial class App : Application
         Log.Init();
         Log.Info("Application starting");
 
+        ThemeManager.Initialize();
+
         // Catch unhandled exceptions on the UI thread
         DispatcherUnhandledException += OnDispatcherUnhandledException;
 

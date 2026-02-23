@@ -42,3 +42,10 @@ Desktop.ini
 
 # User-specific files
 *.userprefs
+
+# Claude Code local settings
+.claude/
+
+# App config (user-specific)
+appsettings.json
+appsettings.*.json

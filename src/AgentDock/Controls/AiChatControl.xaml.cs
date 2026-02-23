@@ -42,6 +42,16 @@ public partial class AiChatControl : UserControl
     /// </summary>
     public event Action<ClaudeSessionState>? SessionStateChanged;
 
+    /// <summary>
+    /// Whether the current session is running in dangerous mode.
+    /// </summary>
+    public bool IsDangerousMode => _session?.IsDangerousMode ?? false;
+
+    /// <summary>
+    /// Current session state (for theme change icon refresh).
+    /// </summary>
+    public ClaudeSessionState CurrentState => _session?.State ?? ClaudeSessionState.NotStarted;
+
     public AiChatControl()
     {
         Log.Info("AiChatControl: constructor");

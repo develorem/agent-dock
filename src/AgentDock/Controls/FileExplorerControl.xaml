@@ -21,9 +21,11 @@
                 <HierarchicalDataTemplate ItemsSource="{Binding Children}">
                     <StackPanel Orientation="Horizontal" Margin="2,1">
                         <TextBlock Text="{Binding Icon}" FontSize="14" Margin="0,0,5,0"
-                                   VerticalAlignment="Center" />
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource ExplorerForeground}" />
                         <TextBlock Text="{Binding Name}" FontSize="12"
-                                   VerticalAlignment="Center" />
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource ExplorerForeground}" />
                     </StackPanel>
                 </HierarchicalDataTemplate>
             </TreeView.ItemTemplate>

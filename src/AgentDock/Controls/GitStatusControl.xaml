@@ -12,7 +12,7 @@
                    HorizontalAlignment="Center"
                    VerticalAlignment="Center"
                    FontSize="14"
-                   Foreground="#999" />
+                   Foreground="{DynamicResource GitPlaceholderForeground}" />
 
         <!-- No changes message -->
         <TextBlock x:Name="NoChangesMessage"
@@ -21,7 +21,7 @@
                    HorizontalAlignment="Center"
                    VerticalAlignment="Center"
                    FontSize="14"
-                   Foreground="#999" />
+                   Foreground="{DynamicResource GitPlaceholderForeground}" />
 
         <!-- File list -->
         <DockPanel x:Name="StatusPanel" Visibility="Collapsed">
@@ -44,7 +44,7 @@
                                        Foreground="{Binding StatusColor}"
                                        VerticalAlignment="Center" />
                             <TextBlock Text="{Binding StagedLabel}" FontSize="10"
-                                       Foreground="#888" Margin="6,0,0,0"
+                                       Foreground="{DynamicResource GitStagedLabelForeground}" Margin="6,0,0,0"
                                        VerticalAlignment="Center" />
                         </StackPanel>
                     </DataTemplate>
