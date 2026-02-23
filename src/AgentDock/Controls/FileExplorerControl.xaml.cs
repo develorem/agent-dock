@@ -5,6 +5,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using AgentDock.Models;
 using AgentDock.Services;
 
 namespace AgentDock.Controls;
@@ -16,8 +17,18 @@ public partial class FileExplorerControl : UserControl
     /// </summary>
     public event Action<string>? FileSelected;
 
+    /// <summary>
+    /// Raised when the user changes project settings (icon, colours, etc.) via the settings dialog.
+    /// </summary>
+    public event Action? ProjectSettingsChanged;
+
     private GitIgnoreFilter? _gitIgnoreFilter;
     private string _rootPath = string.Empty;
+
+    /// <summary>
+    /// The root directory path loaded into this explorer.
+    /// </summary>
+    public string RootPath => _rootPath;
 
     /// <summary>
     /// Global set of available tool names (e.g. "VS Code", "Cursor", "Visual Studio").
@@ -34,6 +45,11 @@ public partial class FileExplorerControl : UserControl
     {
         _rootPath = rootPath;
         _gitIgnoreFilter = new GitIgnoreFilter(rootPath);
+
+        // Toggle VS Code toolbar button visibility
+        VsCodeButton.Visibility = AvailableTools.Contains("VS Code")
+            ? Visibility.Visible
+            : Visibility.Collapsed;
 
         FileTree.Items.Clear();
 
@@ -200,6 +216,38 @@ public partial class FileExplorerControl : UserControl
         {
             menu.IsOpen = true;
             e.Handled = true;
+        }
+    }
+
+    // --- Toolbar Button Handlers ---
+
+    private void OpenInVsCode_Click(object sender, RoutedEventArgs e)
+    {
+        if (!string.IsNullOrEmpty(_rootPath))
+            LaunchTool("code", _rootPath);
+    }
+
+    private void OpenInExplorer_Click(object sender, RoutedEventArgs e)
+    {
+        if (!string.IsNullOrEmpty(_rootPath))
+            OpenInExplorer(_rootPath);
+    }
+
+    private void OpenSettings_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrEmpty(_rootPath))
+            return;
+
+        var owner = Window.GetWindow(this);
+        if (owner == null)
+            return;
+
+        var result = Windows.ProjectSettingsDialog.Show(owner, _rootPath);
+
+        if (result != null)
+        {
+            ProjectSettingsManager.Save(_rootPath, result);
+            ProjectSettingsChanged?.Invoke();
         }
     }
 

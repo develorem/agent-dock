@@ -4,8 +4,77 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              mc:Ignorable="d">
+    <UserControl.Resources>
+        <Style x:Key="ExplorerToolbarButton" TargetType="{x:Type Button}">
+            <Setter Property="Width" Value="28" />
+            <Setter Property="Height" Value="28" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource ExplorerForeground}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type Button}">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="3"
+                                Width="{TemplateBinding Width}"
+                                Height="{TemplateBinding Height}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource MenuHighlightBackground}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
     <Grid>
-        <TreeView x:Name="FileTree"
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Toolbar -->
+        <Border Grid.Row="0"
+                Background="{DynamicResource ExplorerToolbarBackground}"
+                BorderBrush="{DynamicResource ExplorerToolbarBorderBrush}"
+                BorderThickness="0,0,0,1">
+        <StackPanel Orientation="Horizontal" Margin="4,2,4,2">
+            <Button x:Name="VsCodeButton"
+                    Style="{StaticResource ExplorerToolbarButton}"
+                    ToolTip="Open in VS Code"
+                    Click="OpenInVsCode_Click"
+                    Visibility="Collapsed">
+                <TextBlock Text="&#xE70F;"
+                           FontFamily="Segoe MDL2 Assets"
+                           FontSize="14"
+                           Foreground="{DynamicResource ExplorerForeground}" />
+            </Button>
+            <Button Style="{StaticResource ExplorerToolbarButton}"
+                    ToolTip="Open in Explorer"
+                    Click="OpenInExplorer_Click">
+                <TextBlock Text="&#xED25;"
+                           FontFamily="Segoe MDL2 Assets"
+                           FontSize="14"
+                           Foreground="{DynamicResource ExplorerForeground}" />
+            </Button>
+            <Button Style="{StaticResource ExplorerToolbarButton}"
+                    ToolTip="Project Settings"
+                    Click="OpenSettings_Click">
+                <TextBlock Text="&#xE713;"
+                           FontFamily="Segoe MDL2 Assets"
+                           FontSize="14"
+                           Foreground="{DynamicResource ExplorerForeground}" />
+            </Button>
+        </StackPanel>
+        </Border>
+
+        <TreeView x:Name="FileTree" Grid.Row="1"
                   BorderThickness="0"
                   Background="Transparent"
                   VirtualizingPanel.IsVirtualizing="True"

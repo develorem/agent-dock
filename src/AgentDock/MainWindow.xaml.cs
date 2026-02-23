@@ -566,11 +566,15 @@ public partial class MainWindow : Window
         return project;
     }
 
-    private static string? FindProjectLogo(string folderPath)
+    /// <summary>
+    /// Discovers all candidate project logo/icon image files in the project folder.
+    /// Returns absolute paths.
+    /// </summary>
+    internal static List<string> FindAllProjectLogos(string folderPath)
     {
+        var results = new List<string>();
         var folderName = Path.GetFileName(folderPath).ToLowerInvariant();
         var folderNameCompact = folderName.Replace("-", "").Replace("_", "").Replace(" ", "");
-        // Search for common logo/icon file names, plus <foldername>.png/ico
         var basenames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             { "logo", "icon", folderName, folderNameCompact };
         string[] extensions = [".png", ".ico"]; // WPF can't render .svg natively
@@ -584,44 +588,128 @@ public partial class MainWindow : Window
                 foreach (var ext in extensions)
                 {
                     var path = Path.Combine(dir, basename + ext);
-                    if (File.Exists(path)) return path;
+                    if (File.Exists(path) && !results.Contains(path))
+                        results.Add(path);
                 }
             }
         }
-        return null;
+        return results;
+    }
+
+    private static string? FindProjectLogo(string folderPath)
+        => FindAllProjectLogos(folderPath).FirstOrDefault();
+
+    /// <summary>
+    /// Resolves the project icon: reads from .agentdock/settings.json,
+    /// auto-discovers if not set, persists the result, and creates the UI element.
+    /// </summary>
+    private static UIElement ResolveProjectIcon(string folderPath)
+    {
+        var settings = ProjectSettingsManager.Load(folderPath);
+
+        if (settings.Icon == null)
+        {
+            // Auto-discover and persist
+            var discovered = FindProjectLogo(folderPath);
+            if (discovered != null)
+            {
+                // Store as relative path if inside the project folder
+                settings.Icon = discovered.StartsWith(folderPath, StringComparison.OrdinalIgnoreCase)
+                    ? Path.GetRelativePath(folderPath, discovered)
+                    : discovered;
+            }
+            else
+            {
+                settings.Icon = "folder"; // default built-in
+            }
+
+            ProjectSettingsManager.Save(folderPath, settings);
+        }
+
+        return CreateIconElement(settings.Icon, folderPath, settings.IconColor);
+    }
+
+    /// <summary>
+    /// Creates a UIElement for the given icon value (built-in name or file path).
+    /// </summary>
+    private static UIElement CreateIconElement(string icon, string folderPath,
+        string? iconColor = null)
+    {
+        // Check if it's a built-in icon name
+        var builtIn = BuiltInIcons.Find(icon);
+        if (builtIn != null)
+        {
+            var foreground = iconColor != null
+                ? ParseHexBrush(iconColor) ?? ThemeManager.GetBrush("TabIconNoSessionForeground")
+                : ThemeManager.GetBrush("TabIconNoSessionForeground");
+
+            return new TextBlock
+            {
+                Text = builtIn.Glyph,
+                FontFamily = new FontFamily(builtIn.FontFamily),
+                FontSize = 14,
+                Foreground = foreground,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 5, 0)
+            };
+        }
+
+        // Resolve file path (relative to project folder or absolute)
+        var filePath = Path.IsPathRooted(icon) ? icon : Path.Combine(folderPath, icon);
+
+        if (File.Exists(filePath) && !filePath.EndsWith(".svg", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var img = new Image
+                {
+                    Source = new System.Windows.Media.Imaging.BitmapImage(new Uri(filePath)),
+                    Width = 16,
+                    Height = 16,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, 0, 5, 0)
+                };
+                RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
+                return img;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"Failed to load project icon '{filePath}': {ex.Message}");
+            }
+        }
+
+        // Fallback to default folder icon
+        var fallback = BuiltInIcons.Default;
+        return new TextBlock
+        {
+            Text = fallback.Glyph,
+            FontFamily = new FontFamily(fallback.FontFamily),
+            FontSize = 14,
+            Foreground = ThemeManager.GetBrush("TabIconNoSessionForeground"),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 5, 0)
+        };
+    }
+
+    /// <summary>
+    /// Parses a hex colour string (#RRGGBB) into a SolidColorBrush, or null if invalid.
+    /// </summary>
+    private static SolidColorBrush? ParseHexBrush(string hex)
+    {
+        try
+        {
+            var color = (Color)ColorConverter.ConvertFromString(hex);
+            return new SolidColorBrush(color);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private Button CreateProjectTabButton(ProjectInfo project)
     {
-        // Project logo or fallback folder icon
-        var logoPath = FindProjectLogo(project.FolderPath);
-        UIElement iconElement;
-
-        if (logoPath != null && !logoPath.EndsWith(".svg", StringComparison.OrdinalIgnoreCase))
-        {
-            var img = new Image
-            {
-                Source = new System.Windows.Media.Imaging.BitmapImage(new Uri(logoPath)),
-                Width = 16,
-                Height = 16,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 5, 0)
-            };
-            RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
-            iconElement = img;
-        }
-        else
-        {
-            iconElement = new TextBlock
-            {
-                Text = "\uED25",
-                FontFamily = new FontFamily("Segoe MDL2 Assets"),
-                FontSize = 14,
-                Foreground = ThemeManager.GetBrush("TabIconNoSessionForeground"),
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 5, 0)
-            };
-        }
+        var iconElement = ResolveProjectIcon(project.FolderPath);
 
         // Status diamond area (right of name): diamond + skull badge + error badge
         var statusGrid = new Grid
@@ -769,6 +857,20 @@ public partial class MainWindow : Window
         gitStatusControl.LoadRepository(project.FolderPath);
 
         var filePreviewControl = new FilePreviewControl();
+
+        // Wire settings change from file explorer settings dialog
+        fileExplorerControl.ProjectSettingsChanged += () =>
+        {
+            if (_projectTabButtons.TryGetValue(project, out var tabBtn) &&
+                tabBtn.Content is StackPanel sp && sp.Children.Count > 0)
+            {
+                var settings = ProjectSettingsManager.Load(project.FolderPath);
+                sp.Children.RemoveAt(0);
+                sp.Children.Insert(0, CreateIconElement(
+                    settings.Icon ?? "folder", project.FolderPath,
+                    settings.IconColor));
+            }
+        };
 
         // Wire file explorer clicks to preview panel
         fileExplorerControl.FileSelected += filePath =>
@@ -1613,9 +1715,15 @@ public partial class MainWindow : Window
 
             if (button.Content is StackPanel sp)
             {
-                // Update folder icon foreground (child 0)
-                if (sp.Children.Count > 0 && sp.Children[0] is TextBlock folderIcon)
-                    folderIcon.Foreground = ThemeManager.GetBrush("TabIconNoSessionForeground");
+                // Re-create icon element from settings (handles custom colours + theme default)
+                if (sp.Children.Count > 0)
+                {
+                    var settings = ProjectSettingsManager.Load(project.FolderPath);
+                    sp.Children.RemoveAt(0);
+                    sp.Children.Insert(0, CreateIconElement(
+                        settings.Icon ?? "folder", project.FolderPath,
+                        settings.IconColor));
+                }
 
                 // Update tab text foreground (child 1)
                 if (sp.Children.Count > 1 && sp.Children[1] is TextBlock tb)

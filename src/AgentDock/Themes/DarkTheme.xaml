@@ -43,6 +43,8 @@
     <SolidColorBrush x:Key="GitStagedLabelForeground" Color="#888888" />
 
     <!-- File explorer -->
+    <SolidColorBrush x:Key="ExplorerToolbarBackground" Color="#2D2D30" />
+    <SolidColorBrush x:Key="ExplorerToolbarBorderBrush" Color="#3F3F46" />
     <SolidColorBrush x:Key="ExplorerForeground" Color="#E0E0E0" />
     <SolidColorBrush x:Key="ExplorerSelectedBackground" Color="#264F78" />
     <SolidColorBrush x:Key="ExplorerSelectedForeground" Color="#FFFFFF" />

@@ -1,0 +1,162 @@
+<Window x:Class="AgentDock.Windows.ProjectSettingsDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Project Settings"
+        Width="420" Height="460"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Icon="/Assets/agentdock.png"
+        Background="Transparent">
+
+    <Window.Resources>
+        <Style x:Key="DialogButton" TargetType="{x:Type Button}">
+            <Setter Property="MinWidth" Value="76" />
+            <Setter Property="Height" Value="28" />
+            <Setter Property="Padding" Value="12,0" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Foreground" Value="{DynamicResource HelpForeground}" />
+            <Setter Property="Background" Value="{DynamicResource HelpCardBackground}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource HelpCardBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type Button}">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="3"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource MenuHighlightBackground}" />
+                            </Trigger>
+                            <Trigger Property="IsDefault" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush"
+                                        Value="{DynamicResource TabButtonActiveBorderBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Border Background="{DynamicResource HelpBackground}"
+            BorderBrush="{DynamicResource ToolbarBorderBrush}"
+            BorderThickness="1"
+            CornerRadius="4">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" /> <!-- Title bar -->
+                <RowDefinition Height="Auto" /> <!-- Icon preview row -->
+                <RowDefinition Height="Auto" /> <!-- Icon grid (collapsible) -->
+                <RowDefinition Height="Auto" /> <!-- Icon Colour -->
+                <RowDefinition Height="Auto" /> <!-- Buttons -->
+            </Grid.RowDefinitions>
+
+            <!-- Mini title bar -->
+            <Border Grid.Row="0"
+                    Background="{DynamicResource TitleBarBackground}"
+                    CornerRadius="4,4,0,0"
+                    Padding="12,8"
+                    MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                <TextBlock Text="Project Settings"
+                           FontSize="12"
+                           FontWeight="SemiBold"
+                           Foreground="{DynamicResource TitleBarForeground}" />
+            </Border>
+
+            <!-- Icon preview row -->
+            <StackPanel Grid.Row="1" Margin="16,14,16,4">
+                <TextBlock Text="Icon"
+                           FontSize="12"
+                           FontWeight="SemiBold"
+                           Foreground="{DynamicResource HelpForeground}"
+                           Margin="0,0,0,8" />
+                <DockPanel>
+                    <Button DockPanel.Dock="Right"
+                            Content="Change..."
+                            Style="{StaticResource DialogButton}"
+                            Click="ChangeIcon_Click"
+                            VerticalAlignment="Center" />
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Border x:Name="IconPreviewBorder"
+                                Width="40" Height="40"
+                                CornerRadius="4"
+                                BorderBrush="{DynamicResource HelpCardBorderBrush}"
+                                BorderThickness="1"
+                                Margin="0,0,10,0">
+                            <Viewbox x:Name="IconPreviewHost"
+                                     Width="24" Height="24"
+                                     Stretch="Uniform" />
+                        </Border>
+                        <TextBlock x:Name="IconPreviewLabel"
+                                   Text="Folder"
+                                   FontSize="13"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource HelpForeground}" />
+                    </StackPanel>
+                </DockPanel>
+            </StackPanel>
+
+            <!-- Icon grid (collapsed by default) -->
+            <StackPanel x:Name="IconGridSection" Grid.Row="2" Margin="16,8,16,4"
+                        Visibility="Collapsed">
+                <ScrollViewer MaxHeight="200"
+                              VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel>
+                        <TextBlock Text="Built-in"
+                                   FontSize="11"
+                                   Foreground="{DynamicResource HelpForeground}"
+                                   Opacity="0.7"
+                                   Margin="0,0,0,4" />
+                        <WrapPanel x:Name="BuiltInPanel" />
+                        <StackPanel x:Name="DiscoveredSection" Visibility="Collapsed" Margin="0,8,0,0">
+                            <TextBlock Text="Discovered"
+                                       FontSize="11"
+                                       Foreground="{DynamicResource HelpForeground}"
+                                       Opacity="0.7"
+                                       Margin="0,0,0,4" />
+                            <WrapPanel x:Name="DiscoveredPanel" />
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
+            </StackPanel>
+
+            <!-- Icon Colour swatches -->
+            <StackPanel Grid.Row="3" Margin="16,12,16,4">
+                <TextBlock Text="Icon Colour"
+                           FontSize="12"
+                           FontWeight="SemiBold"
+                           Foreground="{DynamicResource HelpForeground}"
+                           Margin="0,0,0,8" />
+                <WrapPanel x:Name="ForegroundSwatchPanel" />
+            </StackPanel>
+
+            <!-- OK / Cancel buttons -->
+            <StackPanel Grid.Row="4"
+                        Orientation="Horizontal"
+                        HorizontalAlignment="Right"
+                        Margin="16,14,16,16">
+                <Button Content="OK"
+                        Style="{StaticResource DialogButton}"
+                        IsDefault="True"
+                        Click="OkButton_Click"
+                        Margin="0,0,8,0" />
+                <Button Content="Cancel"
+                        Style="{StaticResource DialogButton}"
+                        IsCancel="True"
+                        Click="CancelButton_Click" />
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>

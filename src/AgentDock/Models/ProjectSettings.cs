@@ -1,0 +1,24 @@
+namespace AgentDock.Models;
+
+/// <summary>
+/// Per-project settings stored in .agentdock/settings.json within the project folder.
+/// </summary>
+public class ProjectSettings
+{
+    /// <summary>
+    /// The project icon. Can be:
+    /// - A built-in icon name (e.g. "folder", "code", "python", "csharp")
+    /// - A file path relative to the project root (e.g. "assets/logo.png")
+    /// - An absolute file path
+    /// - Null to trigger auto-discovery on next load
+    /// </summary>
+    public string? Icon { get; set; }
+
+    /// <summary>
+    /// Hex colour (#RRGGBB) for the glyph foreground on built-in icons.
+    /// Null means use the theme default.
+    /// </summary>
+    public string? IconColor { get; set; }
+
+
+}

@@ -21,38 +21,69 @@
         <!-- Start session overlay (shown when no session is active) -->
         <StackPanel x:Name="StartPanel"
                     VerticalAlignment="Center"
-                    HorizontalAlignment="Center">
-            <TextBlock Text="Claude Code"
+                    HorizontalAlignment="Center"
+                    Width="280">
+            <TextBlock Text="Agent Selection"
                        FontFamily="Cascadia Code, Consolas, Courier New"
-                       FontSize="20" FontWeight="SemiBold"
+                       FontSize="18" FontWeight="SemiBold"
                        Foreground="#E0E0E0"
                        HorizontalAlignment="Center"
-                       Margin="0,0,0,8" />
-            <TextBlock Text="Start an AI session for this project"
-                       FontFamily="Cascadia Code, Consolas, Courier New"
-                       FontSize="12"
-                       Foreground="#888"
-                       HorizontalAlignment="Center"
                        Margin="0,0,0,20" />
+            <!-- Claude (normal) -->
             <Button x:Name="StartNormalButton"
-                    Content="Start Session"
                     Click="StartNormal_Click"
-                    Style="{StaticResource ChatButtonStyle}"
-                    Width="180" Height="34"
-                    Margin="0,0,0,8" />
-            <Button x:Name="StartDangerousButton"
-                    Content="Start (Dangerous Mode)"
-                    Click="StartDangerous_Click"
-                    Width="180" Height="34"
-                    Margin="0,0,0,8"
-                    FontFamily="Cascadia Code, Consolas, Courier New"
-                    FontSize="11"
-                    Foreground="#FF6B6B"
-                    Background="#2A1A1A"
-                    BorderBrush="#FF4444"
-                    BorderThickness="1"
                     Cursor="Hand"
-                    Padding="8,4" />
+                    Margin="0,0,0,8"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    HorizontalContentAlignment="Stretch"
+                    Padding="0">
+                <Border Background="#252526"
+                        BorderBrush="#3C3C3C"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="14,10">
+                    <StackPanel>
+                        <TextBlock Text="Claude"
+                                   FontFamily="Cascadia Code, Consolas, Courier New"
+                                   FontSize="13" FontWeight="SemiBold"
+                                   Foreground="#E0E0E0" />
+                        <TextBlock Text="Standard session with permission prompts"
+                                   FontFamily="Cascadia Code, Consolas, Courier New"
+                                   FontSize="10"
+                                   Foreground="#888"
+                                   Margin="0,3,0,0" />
+                    </StackPanel>
+                </Border>
+            </Button>
+            <!-- Claude Unrestricted (dangerous) -->
+            <Button x:Name="StartDangerousButton"
+                    Click="StartDangerous_Click"
+                    Cursor="Hand"
+                    Margin="0,0,0,8"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    HorizontalContentAlignment="Stretch"
+                    Padding="0"
+                    ToolTip="Bypasses all permission prompts — the agent can execute any tool without asking. Use with caution.">
+                <Border Background="#2A1A1A"
+                        BorderBrush="#5C2020"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="14,10">
+                    <StackPanel>
+                        <TextBlock Text="Claude Unrestricted"
+                                   FontFamily="Cascadia Code, Consolas, Courier New"
+                                   FontSize="13" FontWeight="SemiBold"
+                                   Foreground="#FF6B6B" />
+                        <TextBlock Text="No permission prompts (--dangerously-skip-permissions)"
+                                   FontFamily="Cascadia Code, Consolas, Courier New"
+                                   FontSize="10"
+                                   Foreground="#AA6666"
+                                   Margin="0,3,0,0" />
+                    </StackPanel>
+                </Border>
+            </Button>
             <TextBlock x:Name="StartError"
                        Visibility="Collapsed"
                        FontFamily="Cascadia Code, Consolas, Courier New"
