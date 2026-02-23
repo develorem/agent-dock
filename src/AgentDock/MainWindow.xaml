@@ -59,7 +59,7 @@
             <!-- Project Toolbar -->
             <Border x:Name="ToolbarBorder" DockPanel.Dock="Top"
                     Background="{DynamicResource ToolbarBackground}"
-                    BorderBrush="#CCC" BorderThickness="0,0,0,1">
+                    BorderBrush="{DynamicResource ToolbarBorderBrush}" BorderThickness="0,0,0,1">
                 <StackPanel x:Name="ToolbarPanel" Orientation="Horizontal"
                             Margin="4">
                     <!-- Project tab buttons are inserted here dynamically -->
@@ -69,11 +69,11 @@
                             Width="36" Height="36"
                             Margin="2"
                             Background="Transparent"
-                            BorderBrush="#AAA" BorderThickness="1"
+                            BorderBrush="{DynamicResource AddButtonBorderBrush}" BorderThickness="1"
                             Cursor="Hand">
                         <TextBlock Text="+" FontSize="20" FontWeight="Bold"
                                    HorizontalAlignment="Center" VerticalAlignment="Center"
-                                   Foreground="#555" />
+                                   Foreground="{DynamicResource AddButtonForeground}" />
                     </Button>
                 </StackPanel>
             </Border>
@@ -86,7 +86,7 @@
                            HorizontalAlignment="Center"
                            VerticalAlignment="Center"
                            FontSize="18"
-                           Foreground="#888" />
+                           Foreground="{DynamicResource EmptyStateForeground}" />
 
                 <!-- Project content host - holds the active project's content -->
                 <ContentPresenter x:Name="ProjectContentHost"

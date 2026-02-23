@@ -2,8 +2,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media.Imaging;
-using ICSharpCode.AvalonEdit.Highlighting;
-using ICSharpCode.AvalonEdit.Rendering;
+using AgentDock.Services;
 
 namespace AgentDock.Controls;
 
@@ -26,9 +25,23 @@ public partial class FilePreviewControl : UserControl
     // Max file size to preview (5 MB)
     private const long MaxTextFileSize = 5 * 1024 * 1024;
 
+    private string? _currentExtension;
+
     public FilePreviewControl()
     {
         InitializeComponent();
+        ThemeManager.ThemeChanged += _ => OnThemeChanged();
+    }
+
+    private void OnThemeChanged()
+    {
+        // Re-apply syntax highlighting with new theme colors
+        if (_currentExtension != null && TextPreview.Visibility == Visibility.Visible && _diffColorizer == null)
+        {
+            TextPreview.SyntaxHighlighting = ThemeManager.GetHighlighting(_currentExtension);
+        }
+
+        TextPreview.TextArea.TextView.Redraw();
     }
 
     public void ShowFile(string filePath)
@@ -101,8 +114,8 @@ public partial class FilePreviewControl : UserControl
             }
 
             TextPreview.Load(filePath);
-            TextPreview.SyntaxHighlighting = HighlightingManager.Instance
-                .GetDefinitionByExtension(extension);
+            _currentExtension = extension;
+            TextPreview.SyntaxHighlighting = ThemeManager.GetHighlighting(extension);
             TextPreview.ScrollToHome();
             TextPreview.Visibility = Visibility.Visible;
         }

@@ -12,7 +12,7 @@
                    HorizontalAlignment="Center"
                    VerticalAlignment="Center"
                    FontSize="16"
-                   Foreground="#999" />
+                   Foreground="{DynamicResource PreviewEmptyForeground}" />
 
         <!-- Text/code preview -->
         <avalonedit:TextEditor x:Name="TextPreview"
@@ -22,6 +22,8 @@
                                FontFamily="Cascadia Code, Consolas, Courier New"
                                FontSize="13"
                                BorderThickness="0"
+                               Background="{DynamicResource PreviewBackground}"
+                               Foreground="{DynamicResource PreviewForeground}"
                                HorizontalScrollBarVisibility="Auto"
                                VerticalScrollBarVisibility="Auto" />
 
@@ -45,6 +47,6 @@
                    HorizontalAlignment="Center"
                    VerticalAlignment="Center"
                    FontSize="18"
-                   Foreground="#AAA" />
+                   Foreground="{DynamicResource PreviewNoPreviewForeground}" />
     </Grid>
 </UserControl>

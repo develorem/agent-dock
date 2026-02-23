@@ -1,6 +1,8 @@
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
 using AgentDock.Controls;
@@ -8,12 +10,18 @@ using AgentDock.Models;
 using AgentDock.Services;
 using AvalonDock;
 using AvalonDock.Layout;
+using AvalonDock.Themes;
 using Microsoft.Win32;
 
 namespace AgentDock;
 
 public partial class MainWindow : Window
 {
+    // --- Dark title bar via DWM ---
+    [DllImport("dwmapi.dll", PreserveSig = true)]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int dwAttribute, ref int pvAttribute, int cbAttribute);
+    private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+
     public static readonly RoutedUICommand AddProjectCommand =
         new("Add Project", nameof(AddProjectCommand), typeof(MainWindow));
 
@@ -32,6 +40,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<ProjectInfo, AiChatControl> _projectChatControls = [];
     private readonly Dictionary<ProjectInfo, Grid> _projectTabIcons = [];
     private readonly Dictionary<ProjectInfo, DispatcherTimer> _tabIconTimers = [];
+    private readonly Dictionary<ProjectInfo, DockingManager> _projectDockingManagers = [];
     private ProjectInfo? _activeProject;
 
     public MainWindow()
@@ -44,7 +53,26 @@ public partial class MainWindow : Window
         CommandBindings.Add(new CommandBinding(AddProjectCommand, (_, _) => AddProject()));
         CommandBindings.Add(new CommandBinding(SaveWorkspaceCommand, (_, _) => SaveWorkspace()));
         CommandBindings.Add(new CommandBinding(CloseProjectCommand, (_, _) => CloseActiveProject()));
+
+        // Set initial theme menu checkmarks
+        UpdateThemeMenuCheckmarks();
+        ThemeManager.ThemeChanged += OnThemeChanged;
+
         Log.Info("MainWindow constructor complete");
+    }
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        SetTitleBarDarkMode(ThemeManager.CurrentTheme == AppTheme.Dark);
+    }
+
+    private void SetTitleBarDarkMode(bool dark)
+    {
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero) return;
+        int value = dark ? 1 : 0;
+        DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref value, sizeof(int));
     }
 
     // --- File Menu ---
@@ -67,16 +95,12 @@ public partial class MainWindow : Window
 
     private void ThemeLight_Click(object sender, RoutedEventArgs e)
     {
-        ThemeLightMenu.IsChecked = true;
-        ThemeDarkMenu.IsChecked = false;
-        // Theme switching — Task 11
+        ThemeManager.ApplyTheme(AppTheme.Light);
     }
 
     private void ThemeDark_Click(object sender, RoutedEventArgs e)
     {
-        ThemeDarkMenu.IsChecked = true;
-        ThemeLightMenu.IsChecked = false;
-        // Theme switching — Task 11
+        ThemeManager.ApplyTheme(AppTheme.Dark);
     }
 
     private void ToolbarPosition_Click(object sender, RoutedEventArgs e)
@@ -230,7 +254,7 @@ public partial class MainWindow : Window
             Margin = new Thickness(2),
             Padding = new Thickness(8, 4, 8, 4),
             Background = Brushes.Transparent,
-            BorderBrush = new SolidColorBrush(Color.FromRgb(0xAA, 0xAA, 0xAA)),
+            BorderBrush = ThemeManager.GetBrush("TabButtonBorderBrush"),
             BorderThickness = new Thickness(1),
             Cursor = Cursors.Hand,
             HorizontalContentAlignment = HorizontalAlignment.Left,
@@ -247,7 +271,7 @@ public partial class MainWindow : Window
                         Text = project.FolderName,
                         FontSize = 12,
                         VerticalAlignment = VerticalAlignment.Center,
-                        Foreground = new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33))
+                        Foreground = ThemeManager.GetBrush("TabButtonForeground")
                     }
                 }
             }
@@ -275,10 +299,15 @@ public partial class MainWindow : Window
         return item;
     }
 
-    private static (DockingManager, AiChatControl) CreateProjectDockingLayout(ProjectInfo project)
+    private (DockingManager, AiChatControl) CreateProjectDockingLayout(ProjectInfo project)
     {
         Log.Info("CreateDockingLayout: starting");
-        var dockingManager = new DockingManager();
+        var dockingManager = new DockingManager
+        {
+            Theme = ThemeManager.CurrentTheme == AppTheme.Dark
+                ? new Vs2013DarkTheme()
+                : new Vs2013LightTheme()
+        };
 
         // --- Left column: File Explorer (top) + Git Status (bottom) ---
         Log.Info("CreateDockingLayout: creating FileExplorerControl");
@@ -387,6 +416,7 @@ public partial class MainWindow : Window
         layoutRoot.RootPanel = rootPanel;
 
         dockingManager.Layout = layoutRoot;
+        _projectDockingManagers[project] = dockingManager;
 
         Log.Info("CreateDockingLayout: complete");
         return (dockingManager, aiChatControl);
@@ -396,7 +426,7 @@ public partial class MainWindow : Window
     {
         return new Border
         {
-            Background = new SolidColorBrush(Color.FromRgb(0xFA, 0xFA, 0xFA)),
+            Background = ThemeManager.GetBrush("PlaceholderBackground"),
             Child = new StackPanel
             {
                 HorizontalAlignment = HorizontalAlignment.Center,
@@ -408,7 +438,7 @@ public partial class MainWindow : Window
                         Text = title,
                         FontSize = 16,
                         FontWeight = FontWeights.SemiBold,
-                        Foreground = new SolidColorBrush(Color.FromRgb(0x66, 0x66, 0x66)),
+                        Foreground = ThemeManager.GetBrush("PlaceholderTitleForeground"),
                         HorizontalAlignment = HorizontalAlignment.Center,
                         Margin = new Thickness(0, 0, 0, 4)
                     },
@@ -416,7 +446,7 @@ public partial class MainWindow : Window
                     {
                         Text = subtitle,
                         FontSize = 12,
-                        Foreground = new SolidColorBrush(Color.FromRgb(0x99, 0x99, 0x99)),
+                        Foreground = ThemeManager.GetBrush("PlaceholderSubtitleForeground"),
                         HorizontalAlignment = HorizontalAlignment.Center
                     }
                 }
@@ -455,13 +485,13 @@ public partial class MainWindow : Window
     {
         if (active)
         {
-            button.Background = new SolidColorBrush(Color.FromRgb(0xD0, 0xE0, 0xF0));
-            button.BorderBrush = new SolidColorBrush(Color.FromRgb(0x40, 0x80, 0xC0));
+            button.Background = ThemeManager.GetBrush("TabButtonActiveBackground");
+            button.BorderBrush = ThemeManager.GetBrush("TabButtonActiveBorderBrush");
         }
         else
         {
-            button.Background = Brushes.Transparent;
-            button.BorderBrush = new SolidColorBrush(Color.FromRgb(0xAA, 0xAA, 0xAA));
+            button.Background = ThemeManager.GetBrush("TabButtonInactiveBackground");
+            button.BorderBrush = ThemeManager.GetBrush("TabButtonBorderBrush");
         }
     }
 
@@ -495,6 +525,7 @@ public partial class MainWindow : Window
         }
 
         _projectTabIcons.Remove(project);
+        _projectDockingManagers.Remove(project);
 
         // Remove content
         _projectContents.Remove(project);
@@ -563,7 +594,7 @@ public partial class MainWindow : Window
             case ClaudeSessionState.NotStarted:
             case ClaudeSessionState.Exited:
                 baseIcon.Text = "\uD83D\uDCC1"; // 📁
-                baseIcon.Foreground = new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33));
+                baseIcon.Foreground = ThemeManager.GetBrush("TabIconNoSessionForeground");
                 break;
 
             case ClaudeSessionState.Initializing:
@@ -690,6 +721,8 @@ public partial class MainWindow : Window
 
     private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
+        ThemeManager.ThemeChanged -= OnThemeChanged;
+
         // Stop all icon animation timers
         foreach (var timer in _tabIconTimers.Values)
             timer.Stop();
@@ -700,5 +733,45 @@ public partial class MainWindow : Window
             chatControl.Shutdown();
 
         _projectChatControls.Clear();
+    }
+
+    // --- Theme ---
+
+    private void OnThemeChanged(AppTheme theme)
+    {
+        UpdateThemeMenuCheckmarks();
+        SetTitleBarDarkMode(theme == AppTheme.Dark);
+
+        // Update AvalonDock theme on all DockingManagers
+        var dockTheme = theme == AppTheme.Dark
+            ? (Theme)new Vs2013DarkTheme()
+            : new Vs2013LightTheme();
+
+        foreach (var dm in _projectDockingManagers.Values)
+            dm.Theme = dockTheme;
+
+        // Re-apply tab button colors
+        foreach (var (project, button) in _projectTabButtons)
+        {
+            var isActive = project == _activeProject;
+            SetTabButtonActive(button, isActive);
+
+            // Update tab text foreground
+            if (button.Content is StackPanel sp && sp.Children.Count > 1 && sp.Children[1] is TextBlock tb)
+                tb.Foreground = ThemeManager.GetBrush("TabButtonForeground");
+        }
+
+        // Re-apply tab icon foregrounds for no-session state
+        foreach (var (project, iconGrid) in _projectTabIcons)
+        {
+            if (_projectChatControls.TryGetValue(project, out var chat))
+                UpdateTabIcon(project, chat.CurrentState);
+        }
+    }
+
+    private void UpdateThemeMenuCheckmarks()
+    {
+        ThemeLightMenu.IsChecked = ThemeManager.CurrentTheme == AppTheme.Light;
+        ThemeDarkMenu.IsChecked = ThemeManager.CurrentTheme == AppTheme.Dark;
     }
 }
