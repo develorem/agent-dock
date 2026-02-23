@@ -31,6 +31,7 @@ PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 ChangesAssociations=yes
+ChangesEnvironment=yes
 SetupIconFile=..\assets\agentdock.ico
 UninstallDisplayIcon={app}\agentdock.ico
 
@@ -40,6 +41,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "fileassoc"; Description: "Associate .agentdock files with {#MyAppName}"; GroupDescription: "File associations:"; Flags: checkedonce
+Name: "addtopath"; Description: "Add to PATH (allows running AgentDock from terminal)"; GroupDescription: "System integration:"; Flags: checkedonce
 
 [Files]
 Source: "..\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -57,5 +59,41 @@ Root: HKA; Subkey: "Software\Classes\AgentDock.Workspace"; ValueType: string; Va
 Root: HKA; Subkey: "Software\Classes\AgentDock.Workspace\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\agentdock.ico,0"; Tasks: fileassoc
 Root: HKA; Subkey: "Software\Classes\AgentDock.Workspace\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Tasks: fileassoc
 
+; Add to user PATH
+Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Check: NeedsAddPath(ExpandConstant('{app}')); Tasks: addtopath
+
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+function NeedsAddPath(Param: string): Boolean;
+var
+  OrigPath: string;
+begin
+  if not RegQueryStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', OrigPath) then
+  begin
+    Result := True;
+    exit;
+  end;
+  Result := Pos(';' + Uppercase(Param) + ';', ';' + Uppercase(OrigPath) + ';') = 0;
+end;
+
+procedure RemovePath(Path: string);
+var
+  OrigPath: string;
+  P: Integer;
+begin
+  if not RegQueryStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', OrigPath) then
+    exit;
+  P := Pos(';' + Uppercase(Path), ';' + Uppercase(OrigPath));
+  if P = 0 then
+    exit;
+  Delete(OrigPath, P - 1, Length(Path) + 1);
+  RegWriteStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', OrigPath);
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usPostUninstall then
+    RemovePath(ExpandConstant('{app}'));
+end;
