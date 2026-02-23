@@ -36,6 +36,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<ProjectInfo, Button> _projectTabButtons = [];
     private readonly Dictionary<ProjectInfo, UIElement> _projectContents = [];
     private readonly Dictionary<ProjectInfo, AiChatControl> _projectChatControls = [];
+    private readonly Dictionary<ProjectInfo, GitStatusControl> _projectGitControls = [];
     private readonly Dictionary<ProjectInfo, Grid> _projectTabIcons = [];
     private readonly Dictionary<ProjectInfo, DispatcherTimer> _tabIconTimers = [];
     private readonly Dictionary<ProjectInfo, DockingManager> _projectDockingManagers = [];
@@ -551,9 +552,10 @@ public partial class MainWindow : Window
         ToolbarBorder.Visibility = Visibility.Visible;
 
         // Create docking layout for this project
-        var (content, chatControl) = CreateProjectDockingLayout(project, layoutXml);
+        var (content, chatControl, gitControl) = CreateProjectDockingLayout(project, layoutXml);
         _projectContents[project] = content;
         _projectChatControls[project] = chatControl;
+        _projectGitControls[project] = gitControl;
         chatControl.SessionStateChanged += state => UpdateTabIcon(project, state);
 
         // Switch to the new project
@@ -749,7 +751,7 @@ public partial class MainWindow : Window
         return item;
     }
 
-    private (DockingManager, AiChatControl) CreateProjectDockingLayout(ProjectInfo project, string? layoutXml = null)
+    private (DockingManager, AiChatControl, GitStatusControl) CreateProjectDockingLayout(ProjectInfo project, string? layoutXml = null)
     {
         Log.Info("CreateDockingLayout: starting");
         var dockingManager = new DockingManager
@@ -784,6 +786,13 @@ public partial class MainWindow : Window
 
         var aiChatControl = new AiChatControl();
         aiChatControl.Initialize(project.FolderPath);
+
+        // Refresh git status when Claude finishes working (transitions to Idle)
+        aiChatControl.SessionStateChanged += state =>
+        {
+            if (state == ClaudeSessionState.Idle)
+                gitStatusControl.RefreshStatus();
+        };
 
         // Map ContentId → control for layout serialization callback
         var controlMap = new Dictionary<string, object>
@@ -867,7 +876,7 @@ public partial class MainWindow : Window
         };
 
         Log.Info("CreateDockingLayout: complete");
-        return (dockingManager, aiChatControl);
+        return (dockingManager, aiChatControl, gitStatusControl);
     }
 
     private void BuildDefaultLayout(
@@ -1070,6 +1079,13 @@ public partial class MainWindow : Window
             _tabIconTimers.Remove(project);
         }
 
+        // Stop file system watcher for git status
+        if (_projectGitControls.TryGetValue(project, out var gitControl))
+        {
+            gitControl.StopWatching();
+            _projectGitControls.Remove(project);
+        }
+
         // Shutdown AI chat session
         if (_projectChatControls.TryGetValue(project, out var chatControl))
         {
@@ -1125,6 +1141,12 @@ public partial class MainWindow : Window
             {
                 timer.Stop();
                 _tabIconTimers.Remove(project);
+            }
+
+            if (_projectGitControls.TryGetValue(project, out var gitControl))
+            {
+                gitControl.StopWatching();
+                _projectGitControls.Remove(project);
             }
 
             if (_projectChatControls.TryGetValue(project, out var chatControl))
@@ -1556,6 +1578,11 @@ public partial class MainWindow : Window
         foreach (var timer in _tabIconTimers.Values)
             timer.Stop();
         _tabIconTimers.Clear();
+
+        // Stop all file system watchers
+        foreach (var gitControl in _projectGitControls.Values)
+            gitControl.StopWatching();
+        _projectGitControls.Clear();
 
         // Kill all Claude sessions gracefully
         foreach (var chatControl in _projectChatControls.Values)

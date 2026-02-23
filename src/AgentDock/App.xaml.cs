@@ -11,6 +11,7 @@ public partial class App : Application
 {
     public static string? StartupWorkspacePath { get; private set; }
     public static List<string> StartupProjectFolders { get; } = [];
+    public static string? StartupLogsFolder { get; private set; }
 
     [DllImport("kernel32.dll")]
     private static extern bool AttachConsole(int dwProcessId);
@@ -21,15 +22,36 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
-        Log.Init();
-        Log.Info("Application starting");
+        // Parse command-line arguments before initializing the logger,
+        // so we know the logs folder and session context.
+        var result = ParseArguments(e.Args);
 
-        // Parse command-line arguments
-        if (!ParseArguments(e.Args))
+        if (result == ParseResult.Exit)
         {
             Shutdown(0);
             return;
         }
+
+        if (result == ParseResult.Error)
+        {
+            Shutdown(1);
+            return;
+        }
+
+        // Determine session context for log file name
+        string? sessionContext = null;
+        if (StartupWorkspacePath != null)
+            sessionContext = Path.GetFileNameWithoutExtension(StartupWorkspacePath);
+        else if (StartupProjectFolders.Count > 0)
+            sessionContext = Path.GetFileName(StartupProjectFolders[0]);
+
+        Log.Init(StartupLogsFolder, sessionContext);
+        Log.Info("Application starting");
+
+        if (StartupWorkspacePath != null)
+            Log.Info($"Startup workspace: {StartupWorkspacePath}");
+        foreach (var folder in StartupProjectFolders)
+            Log.Info($"Startup project folder: {folder}");
 
         ThemeManager.Initialize();
 
@@ -43,10 +65,13 @@ public partial class App : Application
         TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
     }
 
+    private enum ParseResult { Continue, Exit, Error }
+
     /// <summary>
-    /// Parses command-line arguments. Returns false if the app should exit (e.g. --help).
+    /// Parses command-line arguments.
+    /// Returns Exit for --help/--version, Error for invalid input, Continue otherwise.
     /// </summary>
-    private static bool ParseArguments(string[] args)
+    private static ParseResult ParseArguments(string[] args)
     {
         for (int i = 0; i < args.Length; i++)
         {
@@ -56,11 +81,29 @@ public partial class App : Application
             {
                 case "--help" or "-h" or "-?" or "/?" or "/help":
                     ShowHelp();
-                    return false;
+                    return ParseResult.Exit;
 
                 case "--version" or "-v":
                     ShowVersion();
-                    return false;
+                    return ParseResult.Exit;
+
+                case "--logs" or "-l":
+                    if (i + 1 < args.Length)
+                    {
+                        var path = args[++i];
+                        if (!Directory.Exists(path))
+                        {
+                            WriteConsoleError($"Error: logs folder not found: {path}");
+                            return ParseResult.Error;
+                        }
+                        StartupLogsFolder = Path.GetFullPath(path);
+                    }
+                    else
+                    {
+                        WriteConsoleError("Error: --logs requires a folder path argument.");
+                        return ParseResult.Error;
+                    }
+                    break;
 
                 case "--workspace" or "-w":
                     if (i + 1 < args.Length)
@@ -68,19 +111,18 @@ public partial class App : Application
                         var path = args[++i];
                         if (File.Exists(path))
                         {
-                            StartupWorkspacePath = path;
-                            Log.Info($"Startup workspace: {path}");
+                            StartupWorkspacePath = Path.GetFullPath(path);
                         }
                         else
                         {
-                            WriteConsole($"Error: workspace file not found: {path}");
-                            return false;
+                            WriteConsoleError($"Error: workspace file not found: {path}");
+                            return ParseResult.Error;
                         }
                     }
                     else
                     {
-                        WriteConsole("Error: --workspace requires a file path argument.");
-                        return false;
+                        WriteConsoleError("Error: --workspace requires a file path argument.");
+                        return ParseResult.Error;
                     }
                     break;
 
@@ -91,42 +133,48 @@ public partial class App : Application
                         if (Directory.Exists(path))
                         {
                             StartupProjectFolders.Add(Path.GetFullPath(path));
-                            Log.Info($"Startup project folder: {path}");
                         }
                         else
                         {
-                            WriteConsole($"Error: folder not found: {path}");
-                            return false;
+                            WriteConsoleError($"Error: folder not found: {path}");
+                            return ParseResult.Error;
                         }
                     }
                     else
                     {
-                        WriteConsole("Error: --folder requires a folder path argument.");
-                        return false;
+                        WriteConsoleError("Error: --folder requires a folder path argument.");
+                        return ParseResult.Error;
                     }
                     break;
 
                 default:
                     // Bare argument: treat as workspace file if .agentdock, or folder
-                    if (arg.EndsWith(".agentdock", StringComparison.OrdinalIgnoreCase) && File.Exists(arg))
+                    if (arg.EndsWith(".agentdock", StringComparison.OrdinalIgnoreCase))
                     {
-                        StartupWorkspacePath = arg;
-                        Log.Info($"Startup workspace: {arg}");
+                        if (File.Exists(arg))
+                        {
+                            StartupWorkspacePath = Path.GetFullPath(arg);
+                        }
+                        else
+                        {
+                            WriteConsoleError($"Error: workspace file not found: {arg}");
+                            return ParseResult.Error;
+                        }
                     }
                     else if (Directory.Exists(arg))
                     {
                         StartupProjectFolders.Add(Path.GetFullPath(arg));
-                        Log.Info($"Startup project folder: {arg}");
                     }
                     else
                     {
-                        WriteConsole($"Warning: ignoring unknown argument: {arg}");
+                        WriteConsoleError($"Error: unknown argument or path not found: {arg}");
+                        return ParseResult.Error;
                     }
                     break;
             }
         }
 
-        return true;
+        return ParseResult.Continue;
     }
 
     private static void ShowHelp()
@@ -144,6 +192,7 @@ public partial class App : Application
             Options:
               -w, --workspace <file>    Open a workspace file (.agentdock)
               -f, --folder <folder>     Open a project folder (can be repeated)
+              -l, --logs <folder>       Override the logs folder (must exist)
               -h, --help                Show this help message and exit
               -v, --version             Show version information and exit
 
@@ -153,12 +202,13 @@ public partial class App : Application
               AgentDock.exe C:\Projects\MyApp                 Open a project folder
               AgentDock.exe -f ProjectA -f ProjectB           Open multiple projects
               AgentDock.exe -w mywork.agentdock               Open workspace (explicit)
+              AgentDock.exe -l C:\MyLogs                      Use custom logs folder
             """);
     }
 
     public static string Version =>
         typeof(App).Assembly
-            .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
             ?.InformationalVersion ?? "0.0.0";
 
     private static void ShowVersion()
@@ -172,12 +222,23 @@ public partial class App : Application
         Console.WriteLine(message);
     }
 
+    private static void WriteConsoleError(string message)
+    {
+        AttachConsole(AttachParentProcess);
+        Console.Error.WriteLine(message);
+    }
+
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
         Log.Error("UNHANDLED UI EXCEPTION", e.Exception);
         e.Handled = true; // Prevent crash so we can read the log
+
+        var logRef = Log.LogFilePath != null
+            ? $"\n\nSee {Log.LogFilePath} for details."
+            : "";
+
         MessageBox.Show(
-            $"An error occurred:\n\n{e.Exception.Message}\n\nSee logs.txt for details.",
+            $"An error occurred:\n\n{e.Exception.Message}{logRef}",
             "Agent Dock Error",
             MessageBoxButton.OK,
             MessageBoxImage.Error);
