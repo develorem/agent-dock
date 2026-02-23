@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using AgentDock.Controls;
 using AgentDock.Models;
 using AgentDock.Services;
@@ -29,6 +30,8 @@ public partial class MainWindow : Window
     private readonly Dictionary<ProjectInfo, Button> _projectTabButtons = [];
     private readonly Dictionary<ProjectInfo, UIElement> _projectContents = [];
     private readonly Dictionary<ProjectInfo, AiChatControl> _projectChatControls = [];
+    private readonly Dictionary<ProjectInfo, Grid> _projectTabIcons = [];
+    private readonly Dictionary<ProjectInfo, DispatcherTimer> _tabIconTimers = [];
     private ProjectInfo? _activeProject;
 
     public MainWindow()
@@ -163,6 +166,7 @@ public partial class MainWindow : Window
         var (content, chatControl) = CreateProjectDockingLayout(project);
         _projectContents[project] = content;
         _projectChatControls[project] = chatControl;
+        chatControl.SessionStateChanged += state => UpdateTabIcon(project, state);
         Log.Info("AddProject: docking layout created");
 
         // Switch to the new project
@@ -173,6 +177,52 @@ public partial class MainWindow : Window
 
     private Button CreateProjectTabButton(ProjectInfo project)
     {
+        // Icon container: base icon + overlay badges
+        var iconGrid = new Grid
+        {
+            Width = 22,
+            Height = 22,
+            Margin = new Thickness(0, 0, 4, 0),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        var baseIcon = new TextBlock
+        {
+            Name = "baseIcon",
+            Text = "\uD83D\uDCC1", // folder emoji — no session
+            FontSize = 18,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        var skullBadge = new TextBlock
+        {
+            Name = "skullBadge",
+            Text = "\u2620", // ☠
+            FontSize = 10,
+            Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x44, 0x44)),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Visibility = Visibility.Collapsed
+        };
+
+        var statusBadge = new TextBlock
+        {
+            Name = "statusBadge",
+            Text = "",
+            FontSize = 10,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(0, 0, 0, 0),
+            Visibility = Visibility.Collapsed
+        };
+
+        iconGrid.Children.Add(baseIcon);
+        iconGrid.Children.Add(skullBadge);
+        iconGrid.Children.Add(statusBadge);
+
+        _projectTabIcons[project] = iconGrid;
+
         var button = new Button
         {
             MinWidth = 44,
@@ -191,14 +241,7 @@ public partial class MainWindow : Window
                 Orientation = Orientation.Horizontal,
                 Children =
                 {
-                    // Generic project icon (placeholder — Task 10 will add proper icons)
-                    new TextBlock
-                    {
-                        Text = "\uD83D\uDCC1", // folder emoji as placeholder
-                        FontSize = 14,
-                        Margin = new Thickness(0, 0, 4, 0),
-                        VerticalAlignment = VerticalAlignment.Center
-                    },
+                    iconGrid,
                     new TextBlock
                     {
                         Text = project.FolderName,
@@ -430,6 +473,13 @@ public partial class MainWindow : Window
 
     private void CloseProject(ProjectInfo project)
     {
+        // Stop icon animation timer
+        if (_tabIconTimers.TryGetValue(project, out var timer))
+        {
+            timer.Stop();
+            _tabIconTimers.Remove(project);
+        }
+
         // Shutdown AI chat session
         if (_projectChatControls.TryGetValue(project, out var chatControl))
         {
@@ -437,12 +487,14 @@ public partial class MainWindow : Window
             _projectChatControls.Remove(project);
         }
 
-        // Remove tab button
+        // Remove tab button and icon reference
         if (_projectTabButtons.TryGetValue(project, out var button))
         {
             ToolbarPanel.Children.Remove(button);
             _projectTabButtons.Remove(project);
         }
+
+        _projectTabIcons.Remove(project);
 
         // Remove content
         _projectContents.Remove(project);
@@ -476,6 +528,96 @@ public partial class MainWindow : Window
             FileName = project.FolderPath,
             UseShellExecute = true
         });
+    }
+
+    // --- Tab Icon Updates ---
+
+    private void UpdateTabIcon(ProjectInfo project, ClaudeSessionState state)
+    {
+        if (!_projectTabIcons.TryGetValue(project, out var iconGrid))
+            return;
+
+        var baseIcon = (TextBlock)iconGrid.Children[0];
+        var skullBadge = (TextBlock)iconGrid.Children[1];
+        var statusBadge = (TextBlock)iconGrid.Children[2];
+
+        // Stop any existing pulse timer for this project
+        if (_tabIconTimers.TryGetValue(project, out var existingTimer))
+        {
+            existingTimer.Stop();
+            _tabIconTimers.Remove(project);
+        }
+
+        // Check dangerous mode
+        var isDangerous = _projectChatControls.TryGetValue(project, out var chat) && chat.IsDangerousMode;
+
+        // Reset
+        skullBadge.Visibility = Visibility.Collapsed;
+        statusBadge.Visibility = Visibility.Collapsed;
+        statusBadge.Opacity = 1.0;
+        baseIcon.Opacity = 1.0;
+        baseIcon.FontSize = 18;
+
+        switch (state)
+        {
+            case ClaudeSessionState.NotStarted:
+            case ClaudeSessionState.Exited:
+                baseIcon.Text = "\uD83D\uDCC1"; // 📁
+                baseIcon.Foreground = new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33));
+                break;
+
+            case ClaudeSessionState.Initializing:
+                baseIcon.Text = "\u25C6"; // ◆
+                baseIcon.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xB3, 0x47)); // orange — waiting
+                if (isDangerous)
+                    skullBadge.Visibility = Visibility.Visible;
+                break;
+
+            case ClaudeSessionState.Idle:
+                baseIcon.Text = "\u25C6"; // ◆
+                baseIcon.Foreground = new SolidColorBrush(Color.FromRgb(0x4E, 0xC9, 0xB0)); // green
+                if (isDangerous)
+                    skullBadge.Visibility = Visibility.Visible;
+                break;
+
+            case ClaudeSessionState.Working:
+                baseIcon.Text = "\u25C6"; // ◆
+                baseIcon.Foreground = new SolidColorBrush(Color.FromRgb(0x56, 0x9C, 0xD6)); // blue
+                if (isDangerous)
+                    skullBadge.Visibility = Visibility.Visible;
+                // Pulse the main diamond
+                StartBaseIconPulse(project, baseIcon);
+                break;
+
+            case ClaudeSessionState.WaitingForPermission:
+                baseIcon.Text = "\u25C6"; // ◆
+                baseIcon.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xB3, 0x47)); // orange
+                if (isDangerous)
+                    skullBadge.Visibility = Visibility.Visible;
+                break;
+
+            case ClaudeSessionState.Error:
+                baseIcon.Text = "\u25C6"; // ◆
+                baseIcon.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x6B, 0x6B)); // red
+                statusBadge.Text = "!";
+                statusBadge.FontWeight = FontWeights.Bold;
+                statusBadge.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x6B, 0x6B)); // red
+                statusBadge.Visibility = Visibility.Visible;
+                break;
+        }
+    }
+
+    private void StartBaseIconPulse(ProjectInfo project, TextBlock baseIcon)
+    {
+        var bright = true;
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+        timer.Tick += (_, _) =>
+        {
+            bright = !bright;
+            baseIcon.Opacity = bright ? 1.0 : 0.3;
+        };
+        timer.Start();
+        _tabIconTimers[project] = timer;
     }
 
     // --- Workspace ---
@@ -548,6 +690,11 @@ public partial class MainWindow : Window
 
     private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
+        // Stop all icon animation timers
+        foreach (var timer in _tabIconTimers.Values)
+            timer.Stop();
+        _tabIconTimers.Clear();
+
         // Kill all Claude sessions gracefully
         foreach (var chatControl in _projectChatControls.Values)
             chatControl.Shutdown();

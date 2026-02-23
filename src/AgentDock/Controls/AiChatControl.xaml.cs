@@ -42,6 +42,11 @@ public partial class AiChatControl : UserControl
     /// </summary>
     public event Action<ClaudeSessionState>? SessionStateChanged;
 
+    /// <summary>
+    /// Whether the current session is running in dangerous mode.
+    /// </summary>
+    public bool IsDangerousMode => _session?.IsDangerousMode ?? false;
+
     public AiChatControl()
     {
         Log.Info("AiChatControl: constructor");

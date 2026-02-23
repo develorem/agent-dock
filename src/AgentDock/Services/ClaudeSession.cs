@@ -79,7 +79,7 @@ public class ClaudeSession : IDisposable
             throw new InvalidOperationException($"Cannot start session in state {State}");
 
         IsDangerousMode = dangerousMode;
-        SetState(ClaudeSessionState.Idle);
+        SetState(ClaudeSessionState.Initializing);
 
         // Fire a synthetic init so the UI knows we're ready
         Initialized?.Invoke(new ClaudeSystemInit
@@ -90,6 +90,8 @@ public class ClaudeSession : IDisposable
             PermissionMode = dangerousMode ? "bypassPermissions" : "default",
             Tools = []
         });
+
+        SetState(ClaudeSessionState.Idle);
     }
 
     /// <summary>
