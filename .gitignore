@@ -49,3 +49,7 @@ Desktop.ini
 # App config (user-specific)
 appsettings.json
 appsettings.*.json
+
+# Build artifacts
+artifacts/
+publish/
