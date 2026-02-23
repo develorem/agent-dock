@@ -68,6 +68,17 @@
     <SolidColorBrush x:Key="ScrollBarArrowForeground" Color="#999999" />
     <SolidColorBrush x:Key="ScrollBarArrowHover" Color="#1C97EA" />
 
+    <!-- Help / About windows -->
+    <SolidColorBrush x:Key="HelpBackground" Color="#1E1E1E" />
+    <SolidColorBrush x:Key="HelpForeground" Color="#E0E0E0" />
+    <SolidColorBrush x:Key="HelpHeadingForeground" Color="#569CD6" />
+    <SolidColorBrush x:Key="HelpMutedForeground" Color="#888888" />
+    <SolidColorBrush x:Key="HelpLinkForeground" Color="#4EC9B0" />
+    <SolidColorBrush x:Key="HelpCardBackground" Color="#2D2D30" />
+    <SolidColorBrush x:Key="HelpCardBorderBrush" Color="#3F3F46" />
+    <SolidColorBrush x:Key="HelpKbdBackground" Color="#3E3E42" />
+    <SolidColorBrush x:Key="HelpKbdBorderBrush" Color="#555555" />
+
     <!-- Diff colors -->
     <Color x:Key="DiffAddedColor">#1E3A2B</Color>
     <Color x:Key="DiffRemovedColor">#3A1E1E</Color>

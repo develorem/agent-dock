@@ -1,0 +1,213 @@
+<Window x:Class="AgentDock.Windows.GettingStartedWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Getting Started — Agent Dock"
+        Height="640" Width="560"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        Background="{DynamicResource HelpBackground}">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="32,24">
+        <StackPanel Margin="32,24,32,32">
+
+            <!-- Header -->
+            <TextBlock Text="Getting Started"
+                       FontSize="24" FontWeight="SemiBold"
+                       Foreground="{DynamicResource HelpHeadingForeground}"
+                       Margin="0,0,0,4" />
+            <TextBlock Text="Everything you need to start using Agent Dock."
+                       FontSize="13"
+                       Foreground="{DynamicResource HelpMutedForeground}"
+                       Margin="0,0,0,24" />
+
+            <!-- What is Agent Dock -->
+            <TextBlock Text="What is Agent Dock?"
+                       FontSize="16" FontWeight="SemiBold"
+                       Foreground="{DynamicResource HelpHeadingForeground}"
+                       Margin="0,0,0,6" />
+            <TextBlock TextWrapping="Wrap" FontSize="13"
+                       Foreground="{DynamicResource HelpForeground}"
+                       Margin="0,0,0,20">
+                Agent Dock lets you manage multiple Claude Code AI sessions across different
+                projects in a single window. Each project gets its own tabbed workspace with
+                a file explorer, git status panel, file preview, and AI chat panel.
+            </TextBlock>
+
+            <!-- Prerequisites -->
+            <TextBlock Text="Prerequisites"
+                       FontSize="16" FontWeight="SemiBold"
+                       Foreground="{DynamicResource HelpHeadingForeground}"
+                       Margin="0,0,0,6" />
+            <Border Background="{DynamicResource HelpCardBackground}"
+                    BorderBrush="{DynamicResource HelpCardBorderBrush}"
+                    BorderThickness="1" CornerRadius="4"
+                    Padding="14,10" Margin="0,0,0,20">
+                <StackPanel>
+                    <TextBlock TextWrapping="Wrap" FontSize="13"
+                               Foreground="{DynamicResource HelpForeground}" Margin="0,0,0,8">
+                        <Run FontWeight="SemiBold">Claude Code CLI</Run> must be installed and available in your system PATH.
+                    </TextBlock>
+                    <TextBlock FontSize="13" Margin="0,0,0,0">
+                        <Hyperlink x:Name="ClaudeInstallLink"
+                                   NavigateUri="https://docs.anthropic.com/en/docs/claude-code/overview"
+                                   RequestNavigate="Hyperlink_RequestNavigate">
+                            <Run Foreground="{DynamicResource HelpLinkForeground}"
+                                 Text="Claude Code installation docs &#x2197;" />
+                        </Hyperlink>
+                    </TextBlock>
+                </StackPanel>
+            </Border>
+
+            <!-- Adding a Project -->
+            <TextBlock Text="1. Add a Project"
+                       FontSize="16" FontWeight="SemiBold"
+                       Foreground="{DynamicResource HelpHeadingForeground}"
+                       Margin="0,0,0,6" />
+            <TextBlock TextWrapping="Wrap" FontSize="13"
+                       Foreground="{DynamicResource HelpForeground}"
+                       Margin="0,0,0,6">
+                Click the <Run FontWeight="SemiBold">+</Run> button in the toolbar, or use
+                <Run FontWeight="SemiBold">File > Add Project Folder</Run>. Select a folder
+                containing your project. The project appears as a tab in the toolbar with four
+                panels: File Explorer, Git Status, File Preview, and AI Chat.
+            </TextBlock>
+            <TextBlock TextWrapping="Wrap" FontSize="13"
+                       Foreground="{DynamicResource HelpForeground}"
+                       Margin="0,0,0,20">
+                You can open multiple projects and switch between them by clicking their tabs.
+                Panels can be rearranged, tabbed together, or floated within each project.
+            </TextBlock>
+
+            <!-- Starting a Claude Session -->
+            <TextBlock Text="2. Start an AI Session"
+                       FontSize="16" FontWeight="SemiBold"
+                       Foreground="{DynamicResource HelpHeadingForeground}"
+                       Margin="0,0,0,6" />
+            <TextBlock TextWrapping="Wrap" FontSize="13"
+                       Foreground="{DynamicResource HelpForeground}"
+                       Margin="0,0,0,6">
+                In the AI Chat panel, choose how to start Claude Code:
+            </TextBlock>
+            <StackPanel Margin="12,0,0,6">
+                <TextBlock TextWrapping="Wrap" FontSize="13"
+                           Foreground="{DynamicResource HelpForeground}" Margin="0,0,0,4">
+                    <Run FontWeight="SemiBold">Normal mode</Run> — Claude asks permission before
+                    making changes to your files.
+                </TextBlock>
+                <TextBlock TextWrapping="Wrap" FontSize="13"
+                           Foreground="{DynamicResource HelpForeground}" Margin="0,0,0,4">
+                    <Run FontWeight="SemiBold">Dangerous mode</Run> — Claude runs without
+                    permission prompts. Use with caution.
+                </TextBlock>
+            </StackPanel>
+            <TextBlock TextWrapping="Wrap" FontSize="13"
+                       Foreground="{DynamicResource HelpForeground}"
+                       Margin="0,0,0,20">
+                Type your message and press Enter or click Send. Claude's responses stream in
+                real-time. When Claude requests permission (in normal mode), approve or deny
+                inline in the chat panel.
+            </TextBlock>
+
+            <!-- Workspaces -->
+            <TextBlock Text="3. Save Your Workspace"
+                       FontSize="16" FontWeight="SemiBold"
+                       Foreground="{DynamicResource HelpHeadingForeground}"
+                       Margin="0,0,0,6" />
+            <TextBlock TextWrapping="Wrap" FontSize="13"
+                       Foreground="{DynamicResource HelpForeground}"
+                       Margin="0,0,0,20">
+                Use <Run FontWeight="SemiBold">File > Save Workspace</Run> to save your open
+                projects, panel layouts, theme, and toolbar position to an
+                <Run FontFamily="Consolas" FontSize="12">.agentdock</Run> file. Reopen it later
+                with <Run FontWeight="SemiBold">File > Open Workspace</Run> or by double-clicking
+                the file. Recent workspaces appear under
+                <Run FontWeight="SemiBold">File > Recent Workspaces</Run>.
+            </TextBlock>
+
+            <!-- Keyboard Shortcuts -->
+            <TextBlock Text="Keyboard Shortcuts"
+                       FontSize="16" FontWeight="SemiBold"
+                       Foreground="{DynamicResource HelpHeadingForeground}"
+                       Margin="0,0,0,8" />
+            <Border Background="{DynamicResource HelpCardBackground}"
+                    BorderBrush="{DynamicResource HelpCardBorderBrush}"
+                    BorderThickness="1" CornerRadius="4"
+                    Padding="14,10" Margin="0,0,0,20">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition />
+                        <RowDefinition />
+                        <RowDefinition />
+                    </Grid.RowDefinitions>
+
+                    <Border Grid.Row="0" Grid.Column="0" Margin="0,0,16,6"
+                            Background="{DynamicResource HelpKbdBackground}"
+                            BorderBrush="{DynamicResource HelpKbdBorderBrush}"
+                            BorderThickness="1" CornerRadius="3" Padding="6,2">
+                        <TextBlock Text="Ctrl+N" FontFamily="Consolas" FontSize="12"
+                                   Foreground="{DynamicResource HelpForeground}" />
+                    </Border>
+                    <TextBlock Grid.Row="0" Grid.Column="1" Text="Add Project Folder"
+                               FontSize="13" VerticalAlignment="Center"
+                               Foreground="{DynamicResource HelpForeground}" Margin="0,0,0,6" />
+
+                    <Border Grid.Row="1" Grid.Column="0" Margin="0,0,16,6"
+                            Background="{DynamicResource HelpKbdBackground}"
+                            BorderBrush="{DynamicResource HelpKbdBorderBrush}"
+                            BorderThickness="1" CornerRadius="3" Padding="6,2">
+                        <TextBlock Text="Ctrl+S" FontFamily="Consolas" FontSize="12"
+                                   Foreground="{DynamicResource HelpForeground}" />
+                    </Border>
+                    <TextBlock Grid.Row="1" Grid.Column="1" Text="Save Workspace"
+                               FontSize="13" VerticalAlignment="Center"
+                               Foreground="{DynamicResource HelpForeground}" Margin="0,0,0,6" />
+
+                    <Border Grid.Row="2" Grid.Column="0" Margin="0,0,16,0"
+                            Background="{DynamicResource HelpKbdBackground}"
+                            BorderBrush="{DynamicResource HelpKbdBorderBrush}"
+                            BorderThickness="1" CornerRadius="3" Padding="6,2">
+                        <TextBlock Text="Ctrl+W" FontFamily="Consolas" FontSize="12"
+                                   Foreground="{DynamicResource HelpForeground}" />
+                    </Border>
+                    <TextBlock Grid.Row="2" Grid.Column="1" Text="Close Project Tab"
+                               FontSize="13" VerticalAlignment="Center"
+                               Foreground="{DynamicResource HelpForeground}" />
+                </Grid>
+            </Border>
+
+            <!-- Links -->
+            <TextBlock Text="Links"
+                       FontSize="16" FontWeight="SemiBold"
+                       Foreground="{DynamicResource HelpHeadingForeground}"
+                       Margin="0,0,0,8" />
+            <StackPanel Margin="0,0,0,8">
+                <TextBlock FontSize="13" Margin="0,0,0,4">
+                    <Hyperlink NavigateUri="https://github.com/develorem/agent-dock"
+                               RequestNavigate="Hyperlink_RequestNavigate">
+                        <Run Foreground="{DynamicResource HelpLinkForeground}"
+                             Text="Agent Dock on GitHub &#x2197;" />
+                    </Hyperlink>
+                </TextBlock>
+                <TextBlock FontSize="13" Margin="0,0,0,4">
+                    <Hyperlink NavigateUri="https://docs.anthropic.com/en/docs/claude-code/overview"
+                               RequestNavigate="Hyperlink_RequestNavigate">
+                        <Run Foreground="{DynamicResource HelpLinkForeground}"
+                             Text="Claude Code documentation &#x2197;" />
+                    </Hyperlink>
+                </TextBlock>
+                <TextBlock FontSize="13" Margin="0,0,0,4">
+                    <Hyperlink NavigateUri="https://github.com/develorem"
+                               RequestNavigate="Hyperlink_RequestNavigate">
+                        <Run Foreground="{DynamicResource HelpLinkForeground}"
+                             Text="Develorem &#x2197;" />
+                    </Hyperlink>
+                </TextBlock>
+            </StackPanel>
+
+        </StackPanel>
+    </ScrollViewer>
+</Window>

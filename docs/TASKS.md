@@ -196,7 +196,7 @@ Workspace file (.agentdock extension) serializes: list of open project paths, pe
 ---
 
 ## Task 13: Help Documentation
-**Status:** `[ ]`
+**Status:** `[~]`
 
 Help > Getting Started opens an in-app panel/document explaining: what Agent Dock is, prerequisites (Claude Code CLI installed and in PATH), how to add projects, how to start an AI session, keyboard shortcuts, links to Claude Code installation docs, link to Develorem GitHub. Help > About shows version, Develorem logo, license info, GitHub link.
 

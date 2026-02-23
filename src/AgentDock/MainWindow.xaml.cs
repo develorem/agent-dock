@@ -242,19 +242,14 @@ public partial class MainWindow : Window
 
     private void GettingStarted_Click(object sender, RoutedEventArgs e)
     {
-        // Stub — Task 13
+        var window = new Windows.GettingStartedWindow { Owner = this };
+        window.ShowDialog();
     }
 
     private void About_Click(object sender, RoutedEventArgs e)
     {
-        MessageBox.Show(
-            "Agent Dock v0.1.0\n\n" +
-            "Manage multiple Claude Code AI sessions across projects.\n\n" +
-            "Built by Develorem\n" +
-            "https://github.com/develorem/agent-dock",
-            "About Agent Dock",
-            MessageBoxButton.OK,
-            MessageBoxImage.Information);
+        var window = new Windows.AboutWindow { Owner = this };
+        window.ShowDialog();
     }
 
     // --- Project Management ---
