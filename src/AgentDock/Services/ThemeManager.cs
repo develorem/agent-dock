@@ -1,5 +1,3 @@
-using System.IO;
-using System.Text.Json;
 using System.Windows;
 using System.Windows.Media;
 using HL.Interfaces;
@@ -15,11 +13,6 @@ public enum AppTheme
 
 public static class ThemeManager
 {
-    private static readonly string SettingsDir =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AgentDock");
-
-    private static readonly string SettingsFile =
-        Path.Combine(SettingsDir, "settings.json");
 
     private static ResourceDictionary? _currentThemeDictionary;
     private static bool _sharedStylesLoaded;
@@ -106,37 +99,12 @@ public static class ThemeManager
 
     private static AppTheme LoadThemePreference()
     {
-        try
-        {
-            if (!File.Exists(SettingsFile))
-                return AppTheme.Light;
-
-            var json = File.ReadAllText(SettingsFile);
-            using var doc = JsonDocument.Parse(json);
-            if (doc.RootElement.TryGetProperty("Theme", out var val))
-            {
-                return val.GetString() == "Dark" ? AppTheme.Dark : AppTheme.Light;
-            }
-        }
-        catch (Exception ex)
-        {
-            Log.Warn($"ThemeManager: failed to load settings — {ex.Message}");
-        }
-
-        return AppTheme.Light;
+        var value = AppSettings.GetString("Theme", "Light");
+        return value == "Dark" ? AppTheme.Dark : AppTheme.Light;
     }
 
     private static void SaveThemePreference(AppTheme theme)
     {
-        try
-        {
-            Directory.CreateDirectory(SettingsDir);
-            var json = JsonSerializer.Serialize(new { Theme = theme.ToString() });
-            File.WriteAllText(SettingsFile, json);
-        }
-        catch (Exception ex)
-        {
-            Log.Warn($"ThemeManager: failed to save settings — {ex.Message}");
-        }
+        AppSettings.SetString("Theme", theme.ToString());
     }
 }

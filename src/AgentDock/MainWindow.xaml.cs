@@ -1,3 +1,4 @@
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -10,6 +11,7 @@ using AgentDock.Models;
 using AgentDock.Services;
 using AvalonDock;
 using AvalonDock.Layout;
+using AvalonDock.Layout.Serialization;
 using AvalonDock.Themes;
 using Microsoft.Win32;
 
@@ -38,6 +40,16 @@ public partial class MainWindow : Window
     private readonly Dictionary<ProjectInfo, DockingManager> _projectDockingManagers = [];
     private ProjectInfo? _activeProject;
 
+    // Workspace state
+    private string? _currentWorkspacePath;
+    private bool _workspaceDirty;
+
+    // Panel ContentId constants (stable across app runs)
+    private const string FileExplorerId = "fileExplorer";
+    private const string GitStatusId = "gitStatus";
+    private const string FilePreviewId = "filePreview";
+    private const string AiChatId = "aiChat";
+
     public MainWindow()
     {
         Log.Info("MainWindow constructor starting");
@@ -56,6 +68,21 @@ public partial class MainWindow : Window
         // Sync maximize/restore icon whenever window state changes (button click, double-click, aero snap, etc.)
         StateChanged += (_, _) => UpdateMaximizeIcon();
         UpdateMaximizeIcon();
+
+        // Restore saved toolbar position
+        var savedPosition = AppSettings.GetString("ToolbarPosition", "Top");
+        if (savedPosition != "Top")
+            SetToolbarPosition(savedPosition);
+
+        // Populate recent workspaces menu
+        PopulateRecentWorkspacesMenu();
+
+        // Check for startup workspace argument
+        if (App.StartupWorkspacePath != null)
+        {
+            // Defer to after window is fully loaded
+            Loaded += (_, _) => OpenWorkspaceFile(App.StartupWorkspacePath);
+        }
 
         Log.Info("MainWindow constructor complete");
     }
@@ -161,7 +188,21 @@ public partial class MainWindow : Window
 
     private void OpenWorkspace_Click(object sender, RoutedEventArgs e)
     {
-        // Stub — Task 12
+        // Prompt to save if dirty
+        if (!PromptSaveIfDirty())
+            return; // user cancelled
+
+        var dialog = new OpenFileDialog
+        {
+            Title = "Open Workspace",
+            Filter = "Agent Dock Workspace (*.agentdock)|*.agentdock|All Files (*.*)|*.*",
+            DefaultExt = ".agentdock"
+        };
+
+        if (dialog.ShowDialog() != true)
+            return;
+
+        OpenWorkspaceFile(dialog.FileName);
     }
 
     private void SaveWorkspace_Click(object sender, RoutedEventArgs e) => SaveWorkspace();
@@ -189,6 +230,7 @@ public partial class MainWindow : Window
             return;
 
         SetToolbarPosition(position);
+        AppSettings.SetString("ToolbarPosition", position);
     }
 
     private void ClaudePathOverride_Click(object sender, RoutedEventArgs e)
@@ -231,52 +273,64 @@ public partial class MainWindow : Window
             return;
         }
 
-        var folderPath = dialog.FolderName;
-        Log.Info($"AddProject: selected folder '{folderPath}'");
+        AddProjectFromPath(dialog.FolderName);
+    }
+
+    /// <summary>
+    /// Adds a project by folder path. Used both by the dialog-based AddProject and workspace loading.
+    /// </summary>
+    /// <param name="folderPath">Path to the project folder.</param>
+    /// <param name="layoutXml">Optional AvalonDock layout XML to restore instead of default layout.</param>
+    /// <returns>The ProjectInfo if added, or null if duplicate/invalid.</returns>
+    private ProjectInfo? AddProjectFromPath(string folderPath, string? layoutXml = null)
+    {
+        Log.Info($"AddProjectFromPath: '{folderPath}'");
 
         // Prevent duplicates
         if (_projects.Any(p => string.Equals(p.FolderPath, folderPath, StringComparison.OrdinalIgnoreCase)))
         {
-            Log.Warn($"AddProject: duplicate folder '{folderPath}'");
-            MessageBox.Show(
-                $"The folder '{folderPath}' is already open.",
-                "Duplicate Project",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
-
-            // Switch to the existing project
+            Log.Warn($"AddProjectFromPath: duplicate folder '{folderPath}'");
             var existing = _projects.First(p =>
                 string.Equals(p.FolderPath, folderPath, StringComparison.OrdinalIgnoreCase));
             SwitchToProject(existing);
-            return;
+            return existing;
+        }
+
+        if (!Directory.Exists(folderPath))
+        {
+            Log.Warn($"AddProjectFromPath: folder does not exist '{folderPath}'");
+            MessageBox.Show(
+                $"The folder '{folderPath}' does not exist.",
+                "Folder Not Found",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return null;
         }
 
         var project = new ProjectInfo { FolderPath = folderPath };
         _projects.Add(project);
-        Log.Info($"AddProject: created ProjectInfo for '{project.FolderName}'");
+        Log.Info($"AddProjectFromPath: created ProjectInfo for '{project.FolderName}'");
 
         // Create the tab button
-        Log.Info("AddProject: creating tab button");
         var tabButton = CreateProjectTabButton(project);
         _projectTabButtons[project] = tabButton;
 
         // Add tab button to toolbar
         ToolbarPanel.Children.Add(tabButton);
         ToolbarBorder.Visibility = Visibility.Visible;
-        Log.Info("AddProject: tab button added");
 
         // Create docking layout for this project
-        Log.Info("AddProject: creating docking layout");
-        var (content, chatControl) = CreateProjectDockingLayout(project);
+        var (content, chatControl) = CreateProjectDockingLayout(project, layoutXml);
         _projectContents[project] = content;
         _projectChatControls[project] = chatControl;
         chatControl.SessionStateChanged += state => UpdateTabIcon(project, state);
-        Log.Info("AddProject: docking layout created");
 
         // Switch to the new project
-        Log.Info("AddProject: switching to project");
         SwitchToProject(project);
-        Log.Info("AddProject: complete");
+
+        SetWorkspaceDirty();
+        Log.Info("AddProjectFromPath: complete");
+        return project;
     }
 
     private Button CreateProjectTabButton(ProjectInfo project)
@@ -381,7 +435,7 @@ public partial class MainWindow : Window
         return item;
     }
 
-    private (DockingManager, AiChatControl) CreateProjectDockingLayout(ProjectInfo project)
+    private (DockingManager, AiChatControl) CreateProjectDockingLayout(ProjectInfo project, string? layoutXml = null)
     {
         Log.Info("CreateDockingLayout: starting");
         var dockingManager = new DockingManager
@@ -391,49 +445,13 @@ public partial class MainWindow : Window
                 : new Vs2013LightTheme()
         };
 
-        // --- Left column: File Explorer (top) + Git Status (bottom) ---
-        Log.Info("CreateDockingLayout: creating FileExplorerControl");
+        // Create controls
         var fileExplorerControl = new FileExplorerControl();
         fileExplorerControl.LoadDirectory(project.FolderPath);
-        Log.Info("CreateDockingLayout: FileExplorerControl loaded");
 
-        var fileExplorer = new LayoutAnchorable
-        {
-            Title = $"{project.FolderName} — File Explorer",
-            ContentId = $"fileExplorer_{project.FolderPath.GetHashCode()}",
-            CanClose = false,
-            CanHide = false,
-            Content = fileExplorerControl
-        };
-
-        Log.Info("CreateDockingLayout: creating GitStatusControl");
         var gitStatusControl = new GitStatusControl();
         gitStatusControl.LoadRepository(project.FolderPath);
-        Log.Info("CreateDockingLayout: GitStatusControl loaded");
 
-        var gitStatus = new LayoutAnchorable
-        {
-            Title = "Git Status",
-            ContentId = $"gitStatus_{project.FolderPath.GetHashCode()}",
-            CanClose = false,
-            CanHide = false,
-            Content = gitStatusControl
-        };
-
-        var leftTopPane = new LayoutAnchorablePane(fileExplorer);
-        var leftBottomPane = new LayoutAnchorablePane(gitStatus);
-
-        var leftColumn = new LayoutAnchorablePaneGroup
-        {
-            Orientation = Orientation.Vertical,
-            DockWidth = new GridLength(250, GridUnitType.Pixel)
-        };
-        leftColumn.Children.Add(leftTopPane);
-        leftColumn.Children.Add(leftBottomPane);
-        Log.Info("CreateDockingLayout: left column assembled");
-
-        // --- Center column: File Preview ---
-        Log.Info("CreateDockingLayout: creating FilePreviewControl");
         var filePreviewControl = new FilePreviewControl();
 
         // Wire file explorer clicks to preview panel
@@ -450,10 +468,124 @@ public partial class MainWindow : Window
             filePreviewControl.ShowDiff(diffContent);
         };
 
+        var aiChatControl = new AiChatControl();
+        aiChatControl.Initialize(project.FolderPath);
+
+        // Map ContentId → control for layout serialization callback
+        var controlMap = new Dictionary<string, object>
+        {
+            [FileExplorerId] = fileExplorerControl,
+            [GitStatusId] = gitStatusControl,
+            [FilePreviewId] = filePreviewControl,
+            [AiChatId] = aiChatControl
+        };
+
+        // Title map for restored anchorables
+        var titleMap = new Dictionary<string, string>
+        {
+            [FileExplorerId] = $"{project.FolderName} — File Explorer",
+            [GitStatusId] = "Git Status",
+            [FilePreviewId] = "File Preview",
+            [AiChatId] = "AI Chat"
+        };
+
+        if (layoutXml != null)
+        {
+            // Restore layout from saved XML
+            Log.Info("CreateDockingLayout: restoring saved layout");
+            try
+            {
+                var serializer = new XmlLayoutSerializer(dockingManager);
+                serializer.LayoutSerializationCallback += (_, args) =>
+                {
+                    if (args.Model.ContentId != null && controlMap.TryGetValue(args.Model.ContentId, out var control))
+                    {
+                        args.Content = control;
+                        // Restore title for anchorables
+                        if (args.Model is LayoutAnchorable anchorable)
+                        {
+                            if (titleMap.TryGetValue(args.Model.ContentId, out var title))
+                                anchorable.Title = title;
+                            anchorable.CanClose = false;
+                            anchorable.CanHide = false;
+                        }
+                        else if (args.Model is LayoutDocument doc)
+                        {
+                            if (titleMap.TryGetValue(args.Model.ContentId, out var title))
+                                doc.Title = title;
+                            doc.CanClose = false;
+                        }
+                    }
+                    else
+                    {
+                        args.Cancel = true;
+                    }
+                };
+
+                using var reader = new StringReader(layoutXml);
+                serializer.Deserialize(reader);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"CreateDockingLayout: failed to restore layout, falling back to default — {ex.Message}");
+                // Fall through to build default layout
+                BuildDefaultLayout(dockingManager, project, fileExplorerControl, gitStatusControl, filePreviewControl, aiChatControl);
+            }
+        }
+        else
+        {
+            // Build default layout
+            BuildDefaultLayout(dockingManager, project, fileExplorerControl, gitStatusControl, filePreviewControl, aiChatControl);
+        }
+
+        _projectDockingManagers[project] = dockingManager;
+        Log.Info("CreateDockingLayout: complete");
+        return (dockingManager, aiChatControl);
+    }
+
+    private static void BuildDefaultLayout(
+        DockingManager dockingManager,
+        ProjectInfo project,
+        FileExplorerControl fileExplorerControl,
+        GitStatusControl gitStatusControl,
+        FilePreviewControl filePreviewControl,
+        AiChatControl aiChatControl)
+    {
+        // --- Left column: File Explorer (top) + Git Status (bottom) ---
+        var fileExplorer = new LayoutAnchorable
+        {
+            Title = $"{project.FolderName} — File Explorer",
+            ContentId = FileExplorerId,
+            CanClose = false,
+            CanHide = false,
+            Content = fileExplorerControl
+        };
+
+        var gitStatus = new LayoutAnchorable
+        {
+            Title = "Git Status",
+            ContentId = GitStatusId,
+            CanClose = false,
+            CanHide = false,
+            Content = gitStatusControl
+        };
+
+        var leftTopPane = new LayoutAnchorablePane(fileExplorer);
+        var leftBottomPane = new LayoutAnchorablePane(gitStatus);
+
+        var leftColumn = new LayoutAnchorablePaneGroup
+        {
+            Orientation = Orientation.Vertical,
+            DockWidth = new GridLength(250, GridUnitType.Pixel)
+        };
+        leftColumn.Children.Add(leftTopPane);
+        leftColumn.Children.Add(leftBottomPane);
+
+        // --- Center column: File Preview ---
         var filePreview = new LayoutDocument
         {
             Title = "File Preview",
-            ContentId = $"filePreview_{project.FolderPath.GetHashCode()}",
+            ContentId = FilePreviewId,
             CanClose = false,
             Content = filePreviewControl
         };
@@ -461,18 +593,12 @@ public partial class MainWindow : Window
         var centerPane = new LayoutDocumentPane(filePreview);
         var centerColumn = new LayoutDocumentPaneGroup();
         centerColumn.Children.Add(centerPane);
-        Log.Info("CreateDockingLayout: center column assembled");
 
         // --- Right column: AI Chat ---
-        Log.Info("CreateDockingLayout: creating AiChatControl");
-        var aiChatControl = new AiChatControl();
-        aiChatControl.Initialize(project.FolderPath);
-        Log.Info("CreateDockingLayout: AiChatControl initialized");
-
         var aiChat = new LayoutAnchorable
         {
             Title = "AI Chat",
-            ContentId = $"aiChat_{project.FolderPath.GetHashCode()}",
+            ContentId = AiChatId,
             CanClose = false,
             CanHide = false,
             Content = aiChatControl
@@ -483,7 +609,6 @@ public partial class MainWindow : Window
             DockWidth = new GridLength(350, GridUnitType.Pixel)
         };
         rightColumn.Children.Add(new LayoutAnchorablePane(aiChat));
-        Log.Info("CreateDockingLayout: right column assembled");
 
         // --- Assemble the root layout ---
         var rootPanel = new LayoutPanel
@@ -496,12 +621,7 @@ public partial class MainWindow : Window
 
         var layoutRoot = new LayoutRoot();
         layoutRoot.RootPanel = rootPanel;
-
         dockingManager.Layout = layoutRoot;
-        _projectDockingManagers[project] = dockingManager;
-
-        Log.Info("CreateDockingLayout: complete");
-        return (dockingManager, aiChatControl);
     }
 
     private static UIElement CreatePanelPlaceholder(string title, string subtitle)
@@ -560,8 +680,34 @@ public partial class MainWindow : Window
         }
 
         // Update title bar
-        Title = $"Agent Dock — {project.FolderName}";
-        TitleBarText.Text = project.FolderName;
+        UpdateTitleBar();
+    }
+
+    private void UpdateTitleBar()
+    {
+        if (_activeProject == null)
+        {
+            Title = "Agent Dock";
+            TitleBarText.Text = "";
+            return;
+        }
+
+        var workspaceName = _currentWorkspacePath != null
+            ? Path.GetFileNameWithoutExtension(_currentWorkspacePath)
+            : null;
+
+        var dirtyMarker = _workspaceDirty ? " *" : "";
+
+        if (workspaceName != null)
+        {
+            Title = $"Agent Dock — {workspaceName}{dirtyMarker} — {_activeProject.FolderName}";
+            TitleBarText.Text = $"{workspaceName}{dirtyMarker} — {_activeProject.FolderName}";
+        }
+        else
+        {
+            Title = $"Agent Dock — {_activeProject.FolderName}{dirtyMarker}";
+            TitleBarText.Text = $"{_activeProject.FolderName}{dirtyMarker}";
+        }
     }
 
     private static void SetTabButtonActive(Button button, bool active)
@@ -616,6 +762,8 @@ public partial class MainWindow : Window
         // Remove from list
         _projects.Remove(project);
 
+        SetWorkspaceDirty();
+
         // If this was the active project, switch to another or show empty state
         if (_activeProject == project)
         {
@@ -631,10 +779,46 @@ public partial class MainWindow : Window
                 ProjectContentHost.Visibility = Visibility.Collapsed;
                 EmptyStateText.Visibility = Visibility.Visible;
                 ToolbarBorder.Visibility = Visibility.Collapsed;
-                Title = "Agent Dock";
-                TitleBarText.Text = "";
+                UpdateTitleBar();
             }
         }
+    }
+
+    private void CloseAllProjects()
+    {
+        // Close all projects without dirty tracking (caller handles that)
+        var projectsCopy = _projects.ToList();
+        foreach (var project in projectsCopy)
+        {
+            if (_tabIconTimers.TryGetValue(project, out var timer))
+            {
+                timer.Stop();
+                _tabIconTimers.Remove(project);
+            }
+
+            if (_projectChatControls.TryGetValue(project, out var chatControl))
+            {
+                chatControl.Shutdown();
+                _projectChatControls.Remove(project);
+            }
+
+            if (_projectTabButtons.TryGetValue(project, out var button))
+            {
+                ToolbarPanel.Children.Remove(button);
+                _projectTabButtons.Remove(project);
+            }
+
+            _projectTabIcons.Remove(project);
+            _projectDockingManagers.Remove(project);
+            _projectContents.Remove(project);
+        }
+
+        _projects.Clear();
+        _activeProject = null;
+        ProjectContentHost.Content = null;
+        ProjectContentHost.Visibility = Visibility.Collapsed;
+        EmptyStateText.Visibility = Visibility.Visible;
+        ToolbarBorder.Visibility = Visibility.Collapsed;
     }
 
     private static void OpenInExplorer(ProjectInfo project)
@@ -738,11 +922,213 @@ public partial class MainWindow : Window
         _tabIconTimers[project] = timer;
     }
 
-    // --- Workspace ---
+    // --- Workspace Save/Load ---
+
+    private void SetWorkspaceDirty()
+    {
+        if (!_workspaceDirty)
+        {
+            _workspaceDirty = true;
+            UpdateTitleBar();
+        }
+    }
 
     private void SaveWorkspace()
     {
-        // Stub — Task 12
+        if (_currentWorkspacePath == null)
+        {
+            // No existing workspace file — show SaveFileDialog
+            var dialog = new SaveFileDialog
+            {
+                Title = "Save Workspace",
+                Filter = "Agent Dock Workspace (*.agentdock)|*.agentdock",
+                DefaultExt = ".agentdock"
+            };
+
+            if (dialog.ShowDialog() != true)
+                return;
+
+            _currentWorkspacePath = dialog.FileName;
+        }
+
+        Log.Info($"SaveWorkspace: saving to '{_currentWorkspacePath}'");
+
+        var workspace = new WorkspaceFile
+        {
+            Theme = ThemeManager.CurrentTheme.ToString(),
+            ToolbarPosition = _currentToolbarPosition,
+            ActiveProjectPath = _activeProject?.FolderPath
+        };
+
+        foreach (var project in _projects)
+        {
+            var wp = new WorkspaceProject
+            {
+                FolderPath = project.FolderPath
+            };
+
+            // Serialize AvalonDock layout
+            if (_projectDockingManagers.TryGetValue(project, out var dm))
+            {
+                try
+                {
+                    var serializer = new XmlLayoutSerializer(dm);
+                    using var writer = new StringWriter();
+                    serializer.Serialize(writer);
+                    wp.DockingLayout = writer.ToString();
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn($"SaveWorkspace: failed to serialize layout for '{project.FolderName}' — {ex.Message}");
+                }
+            }
+
+            workspace.Projects.Add(wp);
+        }
+
+        try
+        {
+            WorkspaceManager.Save(_currentWorkspacePath, workspace);
+            _workspaceDirty = false;
+            UpdateTitleBar();
+            PopulateRecentWorkspacesMenu();
+            Log.Info("SaveWorkspace: complete");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"SaveWorkspace: failed — {ex.Message}");
+            MessageBox.Show(
+                $"Failed to save workspace:\n\n{ex.Message}",
+                "Save Error",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+    }
+
+    private void OpenWorkspaceFile(string filePath)
+    {
+        Log.Info($"OpenWorkspaceFile: '{filePath}'");
+
+        WorkspaceFile? workspace;
+        try
+        {
+            workspace = WorkspaceManager.Load(filePath);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"OpenWorkspaceFile: failed to load — {ex.Message}");
+            MessageBox.Show(
+                $"Failed to open workspace:\n\n{ex.Message}",
+                "Open Error",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            return;
+        }
+
+        if (workspace == null)
+        {
+            MessageBox.Show(
+                $"Could not read workspace file:\n{filePath}",
+                "Open Error",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            return;
+        }
+
+        // Close all current projects
+        CloseAllProjects();
+
+        // Apply theme
+        if (Enum.TryParse<AppTheme>(workspace.Theme, out var theme))
+            ThemeManager.ApplyTheme(theme);
+
+        // Apply toolbar position
+        if (!string.IsNullOrEmpty(workspace.ToolbarPosition))
+        {
+            SetToolbarPosition(workspace.ToolbarPosition);
+            AppSettings.SetString("ToolbarPosition", workspace.ToolbarPosition);
+        }
+
+        // Restore projects
+        ProjectInfo? activeProject = null;
+        foreach (var wp in workspace.Projects)
+        {
+            var project = AddProjectFromPath(wp.FolderPath, wp.DockingLayout);
+            if (project != null && string.Equals(wp.FolderPath, workspace.ActiveProjectPath, StringComparison.OrdinalIgnoreCase))
+                activeProject = project;
+        }
+
+        // Switch to the active project
+        if (activeProject != null)
+            SwitchToProject(activeProject);
+
+        _currentWorkspacePath = filePath;
+        _workspaceDirty = false;
+        UpdateTitleBar();
+        PopulateRecentWorkspacesMenu();
+        Log.Info("OpenWorkspaceFile: complete");
+    }
+
+    /// <summary>
+    /// Prompts the user to save if the workspace is dirty.
+    /// Returns true if it's OK to proceed, false if user cancelled.
+    /// </summary>
+    private bool PromptSaveIfDirty()
+    {
+        if (!_workspaceDirty || _projects.Count == 0)
+            return true;
+
+        var result = MessageBox.Show(
+            "Save workspace changes before continuing?",
+            "Agent Dock",
+            MessageBoxButton.YesNoCancel,
+            MessageBoxImage.Question);
+
+        switch (result)
+        {
+            case MessageBoxResult.Yes:
+                SaveWorkspace();
+                return true;
+            case MessageBoxResult.No:
+                return true;
+            case MessageBoxResult.Cancel:
+            default:
+                return false;
+        }
+    }
+
+    // --- Recent Workspaces ---
+
+    private void PopulateRecentWorkspacesMenu()
+    {
+        var recent = WorkspaceManager.GetRecentWorkspaces();
+
+        RecentWorkspacesMenu.Items.Clear();
+
+        if (recent.Count == 0)
+        {
+            RecentWorkspacesMenu.IsEnabled = false;
+            return;
+        }
+
+        RecentWorkspacesMenu.IsEnabled = true;
+
+        foreach (var path in recent)
+        {
+            var item = new MenuItem
+            {
+                Header = Path.GetFileNameWithoutExtension(path),
+                ToolTip = path
+            };
+            var capturedPath = path;
+            item.Click += (_, _) =>
+            {
+                if (!PromptSaveIfDirty())
+                    return;
+                OpenWorkspaceFile(capturedPath);
+            };
+            RecentWorkspacesMenu.Items.Add(item);
+        }
     }
 
     // --- Toolbar Position ---
@@ -808,6 +1194,27 @@ public partial class MainWindow : Window
 
     private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
+        // Prompt to save if dirty
+        if (_workspaceDirty && _projects.Count > 0)
+        {
+            var result = MessageBox.Show(
+                "Save workspace changes before closing?",
+                "Agent Dock",
+                MessageBoxButton.YesNoCancel,
+                MessageBoxImage.Question);
+
+            switch (result)
+            {
+                case MessageBoxResult.Cancel:
+                    e.Cancel = true;
+                    return;
+                case MessageBoxResult.Yes:
+                    SaveWorkspace();
+                    break;
+                // No — just close
+            }
+        }
+
         ThemeManager.ThemeChanged -= OnThemeChanged;
 
         // Stop all icon animation timers

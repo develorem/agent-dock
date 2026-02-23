@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Threading;
 using AgentDock.Services;
@@ -6,6 +7,8 @@ namespace AgentDock;
 
 public partial class App : Application
 {
+    public static string? StartupWorkspacePath { get; private set; }
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
@@ -14,6 +17,15 @@ public partial class App : Application
         Log.Info("Application starting");
 
         ThemeManager.Initialize();
+
+        // Check for .agentdock file passed as argument (e.g., double-click from Explorer)
+        if (e.Args.Length > 0
+            && File.Exists(e.Args[0])
+            && e.Args[0].EndsWith(".agentdock", StringComparison.OrdinalIgnoreCase))
+        {
+            StartupWorkspacePath = e.Args[0];
+            Log.Info($"Startup workspace: {StartupWorkspacePath}");
+        }
 
         // Catch unhandled exceptions on the UI thread
         DispatcherUnhandledException += OnDispatcherUnhandledException;
