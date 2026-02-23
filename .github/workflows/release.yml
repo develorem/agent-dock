@@ -61,8 +61,9 @@ jobs:
           }
 
       - name: Build installer
+        shell: pwsh
         run: >
-          "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           /DMyAppVersion=${{ steps.version.outputs.version }}
           installer\AgentDock.iss
 
