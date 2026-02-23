@@ -8,6 +8,7 @@
 
     <!-- Tab buttons -->
     <SolidColorBrush x:Key="TabButtonBorderBrush" Color="#555555" />
+    <SolidColorBrush x:Key="TabButtonHoverBorderBrush" Color="#888888" />
     <SolidColorBrush x:Key="TabButtonForeground" Color="#CCCCCC" />
     <SolidColorBrush x:Key="TabButtonActiveBackground" Color="#264F78" />
     <SolidColorBrush x:Key="TabButtonActiveBorderBrush" Color="#569CD6" />
@@ -22,6 +23,11 @@
 
     <!-- Tab icon -->
     <SolidColorBrush x:Key="TabIconNoSessionForeground" Color="#CCCCCC" />
+    <SolidColorBrush x:Key="TabIconInactiveDiamondForeground" Color="#9580D0" />
+    <SolidColorBrush x:Key="TabIconIdleForeground" Color="#4EC9B0" />
+    <SolidColorBrush x:Key="TabIconWorkingForeground" Color="#569CD6" />
+    <SolidColorBrush x:Key="TabIconWaitingForeground" Color="#FFB347" />
+    <SolidColorBrush x:Key="TabIconErrorForeground" Color="#FF6B6B" />
 
     <!-- File preview -->
     <SolidColorBrush x:Key="PreviewEmptyForeground" Color="#888888" />

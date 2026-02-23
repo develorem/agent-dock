@@ -17,6 +17,12 @@ public class ClaudeSession : IDisposable
     private CancellationTokenSource? _readCts;
     private bool _disposed;
 
+    /// <summary>
+    /// Path to the claude binary. Defaults to "claude" (found via PATH).
+    /// Set via Settings > Claude Path Override and persisted in AppSettings.
+    /// </summary>
+    public static string ClaudeBinaryPath { get; set; } = "claude";
+
     public ClaudeSessionState State { get; private set; } = ClaudeSessionState.NotStarted;
     public string? SessionId { get; private set; }
     public string? Model { get; private set; }
@@ -47,7 +53,7 @@ public class ClaudeSession : IDisposable
         {
             var psi = new ProcessStartInfo
             {
-                FileName = "claude",
+                FileName = ClaudeBinaryPath,
                 Arguments = "--version",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,

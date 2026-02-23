@@ -9,6 +9,7 @@ using System.Windows.Threading;
 using AgentDock.Controls;
 using AgentDock.Models;
 using AgentDock.Services;
+using AgentDock.Windows;
 using AvalonDock;
 using AvalonDock.Layout;
 using AvalonDock.Layout.Serialization;
@@ -43,6 +44,7 @@ public partial class MainWindow : Window
     // Workspace state
     private string? _currentWorkspacePath;
     private bool _workspaceDirty;
+    private bool _suppressDirty; // suppress during workspace load
 
     // Panel ContentId constants (stable across app runs)
     private const string FileExplorerId = "fileExplorer";
@@ -73,6 +75,11 @@ public partial class MainWindow : Window
         var savedPosition = AppSettings.GetString("ToolbarPosition", "Top");
         if (savedPosition != "Top")
             SetToolbarPosition(savedPosition);
+
+        // Restore saved Claude path override
+        var savedClaudePath = AppSettings.GetString("ClaudePath", "");
+        if (!string.IsNullOrEmpty(savedClaudePath))
+            ClaudeSession.ClaudeBinaryPath = savedClaudePath;
 
         // Populate recent workspaces menu
         PopulateRecentWorkspacesMenu();
@@ -235,7 +242,40 @@ public partial class MainWindow : Window
 
     private void ClaudePathOverride_Click(object sender, RoutedEventArgs e)
     {
-        // Stub — Task 13/Settings
+        var currentPath = ClaudeSession.ClaudeBinaryPath;
+        var result = ThemedMessageBox.Show(
+            this,
+            $"Current Claude path: {currentPath}\n\n" +
+            "Do you want to select a custom Claude binary?\n" +
+            "Click Yes to browse, No to reset to default (\"claude\" from PATH).",
+            "Claude Path Override",
+            MessageBoxButton.YesNoCancel,
+            MessageBoxImage.Question);
+
+        if (result == MessageBoxResult.Cancel)
+            return;
+
+        if (result == MessageBoxResult.No)
+        {
+            ClaudeSession.ClaudeBinaryPath = "claude";
+            AppSettings.SetString("ClaudePath", "");
+            Log.Info("ClaudePathOverride: reset to default");
+            return;
+        }
+
+        var dialog = new OpenFileDialog
+        {
+            Title = "Select Claude Binary",
+            Filter = "Executable (*.exe)|*.exe|All Files (*.*)|*.*",
+            FileName = currentPath == "claude" ? "" : currentPath
+        };
+
+        if (dialog.ShowDialog() != true)
+            return;
+
+        ClaudeSession.ClaudeBinaryPath = dialog.FileName;
+        AppSettings.SetString("ClaudePath", dialog.FileName);
+        Log.Info($"ClaudePathOverride: set to '{dialog.FileName}'");
     }
 
     // --- Help Menu ---
@@ -250,6 +290,63 @@ public partial class MainWindow : Window
     {
         var window = new Windows.AboutWindow { Owner = this };
         window.ShowDialog();
+    }
+
+    private void CheckPrerequisites_Click(object sender, RoutedEventArgs e)
+    {
+        var checks = new (string Name, string Command, string Args)[]
+        {
+            ("Claude Code CLI", ClaudeSession.ClaudeBinaryPath, "--version"),
+            ("Git", "git", "--version"),
+        };
+
+        var lines = new List<string>();
+
+        foreach (var (name, command, args) in checks)
+        {
+            try
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = command,
+                    Arguments = args,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+
+                using var process = System.Diagnostics.Process.Start(psi);
+                if (process == null)
+                {
+                    lines.Add($"\u2716  {name} — not found");
+                    continue;
+                }
+
+                var output = process.StandardOutput.ReadToEnd().Trim();
+                process.WaitForExit(5000);
+
+                if (process.ExitCode == 0)
+                    lines.Add($"\u2714  {name} — {output}");
+                else
+                    lines.Add($"\u2716  {name} — exited with code {process.ExitCode}");
+            }
+            catch
+            {
+                lines.Add($"\u2716  {name} — not found in PATH");
+            }
+        }
+
+        var allPassed = lines.All(l => l.StartsWith("\u2714"));
+        var icon = allPassed ? MessageBoxImage.Information : MessageBoxImage.Warning;
+        var summary = allPassed ? "All prerequisites found." : "Some prerequisites are missing.";
+
+        ThemedMessageBox.Show(
+            this,
+            string.Join("\n", lines) + "\n\n" + summary,
+            "Prerequisites Check",
+            MessageBoxButton.OK,
+            icon);
     }
 
     // --- Project Management ---
@@ -294,7 +391,8 @@ public partial class MainWindow : Window
         if (!Directory.Exists(folderPath))
         {
             Log.Warn($"AddProjectFromPath: folder does not exist '{folderPath}'");
-            MessageBox.Show(
+            ThemedMessageBox.Show(
+                this,
                 $"The folder '{folderPath}' does not exist.",
                 "Folder Not Found",
                 MessageBoxButton.OK,
@@ -328,24 +426,79 @@ public partial class MainWindow : Window
         return project;
     }
 
+    private static string? FindProjectLogo(string folderPath)
+    {
+        var folderName = Path.GetFileName(folderPath).ToLowerInvariant();
+        var folderNameCompact = folderName.Replace("-", "").Replace("_", "").Replace(" ", "");
+        // Search for common logo/icon file names, plus <foldername>.png/ico
+        var basenames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            { "logo", "icon", folderName, folderNameCompact };
+        string[] extensions = [".png", ".ico"]; // WPF can't render .svg natively
+        string[] dirs = [folderPath, Path.Combine(folderPath, "assets")];
+
+        foreach (var dir in dirs)
+        {
+            if (!Directory.Exists(dir)) continue;
+            foreach (var basename in basenames)
+            {
+                foreach (var ext in extensions)
+                {
+                    var path = Path.Combine(dir, basename + ext);
+                    if (File.Exists(path)) return path;
+                }
+            }
+        }
+        return null;
+    }
+
     private Button CreateProjectTabButton(ProjectInfo project)
     {
-        // Icon container: base icon + overlay badges
-        var iconGrid = new Grid
+        // Project logo or fallback folder icon
+        var logoPath = FindProjectLogo(project.FolderPath);
+        UIElement iconElement;
+
+        if (logoPath != null && !logoPath.EndsWith(".svg", StringComparison.OrdinalIgnoreCase))
         {
-            Width = 22,
-            Height = 22,
-            Margin = new Thickness(0, 0, 4, 0),
+            var img = new Image
+            {
+                Source = new System.Windows.Media.Imaging.BitmapImage(new Uri(logoPath)),
+                Width = 16,
+                Height = 16,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 5, 0)
+            };
+            RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
+            iconElement = img;
+        }
+        else
+        {
+            iconElement = new TextBlock
+            {
+                Text = "\uED25",
+                FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                FontSize = 14,
+                Foreground = ThemeManager.GetBrush("TabIconNoSessionForeground"),
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 5, 0)
+            };
+        }
+
+        // Status diamond area (right of name): diamond + skull badge + error badge
+        var statusGrid = new Grid
+        {
+            Width = 20,
+            Height = 20,
+            Margin = new Thickness(5, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center
         };
 
-        var baseIcon = new TextBlock
+        var diamondIcon = new TextBlock
         {
-            Name = "baseIcon",
-            Text = "\uED25", // folder icon — no session
-            FontFamily = new FontFamily("Segoe MDL2 Assets"),
-            FontSize = 16,
-            Foreground = ThemeManager.GetBrush("TabIconNoSessionForeground"),
+            Name = "diamondIcon",
+            Text = "\u25C7", // ◇ outline diamond — no session
+            FontFamily = new FontFamily("Segoe UI Symbol"),
+            FontSize = 14,
+            Foreground = ThemeManager.GetBrush("TabIconInactiveDiamondForeground"),
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center
         };
@@ -354,7 +507,7 @@ public partial class MainWindow : Window
         {
             Name = "skullBadge",
             Text = "\u2620", // ☠
-            FontSize = 10,
+            FontSize = 9,
             Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x44, 0x44)),
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Bottom,
@@ -365,18 +518,30 @@ public partial class MainWindow : Window
         {
             Name = "statusBadge",
             Text = "",
-            FontSize = 10,
+            FontSize = 9,
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Bottom,
-            Margin = new Thickness(0, 0, 0, 0),
             Visibility = Visibility.Collapsed
         };
 
-        iconGrid.Children.Add(baseIcon);
-        iconGrid.Children.Add(skullBadge);
-        iconGrid.Children.Add(statusBadge);
+        statusGrid.Children.Add(diamondIcon);
+        statusGrid.Children.Add(skullBadge);
+        statusGrid.Children.Add(statusBadge);
 
-        _projectTabIcons[project] = iconGrid;
+        _projectTabIcons[project] = statusGrid;
+
+        // Custom template: border only, no default button chrome
+        var tabTemplate = new ControlTemplate(typeof(Button));
+        var borderFactory = new FrameworkElementFactory(typeof(Border), "Bd");
+        borderFactory.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(BackgroundProperty));
+        borderFactory.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(BorderBrushProperty));
+        borderFactory.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(BorderThicknessProperty));
+        borderFactory.SetValue(Border.CornerRadiusProperty, new CornerRadius(3));
+        borderFactory.SetValue(Border.PaddingProperty, new TemplateBindingExtension(PaddingProperty));
+        var contentPresenter = new FrameworkElementFactory(typeof(ContentPresenter));
+        contentPresenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+        borderFactory.AppendChild(contentPresenter);
+        tabTemplate.VisualTree = borderFactory;
 
         var button = new Button
         {
@@ -391,24 +556,40 @@ public partial class MainWindow : Window
             HorizontalContentAlignment = HorizontalAlignment.Left,
             Tag = project,
             ToolTip = project.FolderPath,
+            Template = tabTemplate,
             Content = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
                 Children =
                 {
-                    iconGrid,
+                    iconElement,
                     new TextBlock
                     {
                         Text = project.FolderName,
                         FontSize = 12,
                         VerticalAlignment = VerticalAlignment.Center,
                         Foreground = ThemeManager.GetBrush("TabButtonForeground")
-                    }
+                    },
+                    statusGrid
                 }
             }
         };
 
         button.Click += (_, _) => SwitchToProject(project);
+
+        // Hover: highlight border only (no background fill)
+        button.MouseEnter += (_, _) =>
+        {
+            if (project != _activeProject)
+                button.BorderBrush = ThemeManager.GetBrush("TabButtonHoverBorderBrush");
+        };
+        button.MouseLeave += (_, _) =>
+        {
+            if (project != _activeProject)
+                button.BorderBrush = ThemeManager.GetBrush("TabButtonBorderBrush");
+            else
+                button.BorderBrush = ThemeManager.GetBrush("TabButtonActiveBorderBrush");
+        };
 
         // Right-click context menu
         button.ContextMenu = new ContextMenu
@@ -534,11 +715,24 @@ public partial class MainWindow : Window
         }
 
         _projectDockingManagers[project] = dockingManager;
+
+        // Track layout changes (panel rearrangement) for dirty state.
+        // Subscribe to Layout.Updated, and re-subscribe if AvalonDock replaces the Layout.
+        void SubscribeLayoutUpdated(LayoutRoot layout)
+            => layout.Updated += (_, _) => SetWorkspaceDirty();
+        SubscribeLayoutUpdated(dockingManager.Layout);
+        dockingManager.LayoutChanged += (_, _) =>
+        {
+            if (dockingManager.Layout != null)
+                SubscribeLayoutUpdated(dockingManager.Layout);
+            SetWorkspaceDirty();
+        };
+
         Log.Info("CreateDockingLayout: complete");
         return (dockingManager, aiChatControl);
     }
 
-    private static void BuildDefaultLayout(
+    private void BuildDefaultLayout(
         DockingManager dockingManager,
         ProjectInfo project,
         FileExplorerControl fileExplorerControl,
@@ -546,7 +740,40 @@ public partial class MainWindow : Window
         FilePreviewControl filePreviewControl,
         AiChatControl aiChatControl)
     {
-        // --- Left column: File Explorer (top) + Git Status (bottom) ---
+        // Calculate column widths as ~33% each based on actual window width
+        var availableWidth = ActualWidth > 0 ? ActualWidth : SystemParameters.PrimaryScreenWidth;
+        var thirdWidth = (int)(availableWidth / 3);
+
+        // --- Left column: AI Chat ---
+        var aiChat = new LayoutAnchorable
+        {
+            Title = "AI Chat",
+            ContentId = AiChatId,
+            CanClose = false,
+            CanHide = false,
+            Content = aiChatControl
+        };
+
+        var leftColumn = new LayoutAnchorablePaneGroup
+        {
+            DockWidth = new GridLength(thirdWidth, GridUnitType.Pixel)
+        };
+        leftColumn.Children.Add(new LayoutAnchorablePane(aiChat));
+
+        // --- Center column: File Preview ---
+        var filePreview = new LayoutDocument
+        {
+            Title = "File Preview",
+            ContentId = FilePreviewId,
+            CanClose = false,
+            Content = filePreviewControl
+        };
+
+        var centerPane = new LayoutDocumentPane(filePreview);
+        var centerColumn = new LayoutDocumentPaneGroup();
+        centerColumn.Children.Add(centerPane);
+
+        // --- Right column: File Explorer (top) + Git Status (bottom) ---
         var fileExplorer = new LayoutAnchorable
         {
             Title = $"{project.FolderName} — File Explorer",
@@ -568,42 +795,13 @@ public partial class MainWindow : Window
         var leftTopPane = new LayoutAnchorablePane(fileExplorer);
         var leftBottomPane = new LayoutAnchorablePane(gitStatus);
 
-        var leftColumn = new LayoutAnchorablePaneGroup
-        {
-            Orientation = Orientation.Vertical,
-            DockWidth = new GridLength(250, GridUnitType.Pixel)
-        };
-        leftColumn.Children.Add(leftTopPane);
-        leftColumn.Children.Add(leftBottomPane);
-
-        // --- Center column: File Preview ---
-        var filePreview = new LayoutDocument
-        {
-            Title = "File Preview",
-            ContentId = FilePreviewId,
-            CanClose = false,
-            Content = filePreviewControl
-        };
-
-        var centerPane = new LayoutDocumentPane(filePreview);
-        var centerColumn = new LayoutDocumentPaneGroup();
-        centerColumn.Children.Add(centerPane);
-
-        // --- Right column: AI Chat ---
-        var aiChat = new LayoutAnchorable
-        {
-            Title = "AI Chat",
-            ContentId = AiChatId,
-            CanClose = false,
-            CanHide = false,
-            Content = aiChatControl
-        };
-
         var rightColumn = new LayoutAnchorablePaneGroup
         {
-            DockWidth = new GridLength(350, GridUnitType.Pixel)
+            Orientation = Orientation.Vertical,
+            DockWidth = new GridLength(thirdWidth, GridUnitType.Pixel)
         };
-        rightColumn.Children.Add(new LayoutAnchorablePane(aiChat));
+        rightColumn.Children.Add(leftTopPane);
+        rightColumn.Children.Add(leftBottomPane);
 
         // --- Assemble the root layout ---
         var rootPanel = new LayoutPanel
@@ -671,7 +869,7 @@ public partial class MainWindow : Window
         {
             ProjectContentHost.Content = content;
             ProjectContentHost.Visibility = Visibility.Visible;
-            EmptyStateText.Visibility = Visibility.Collapsed;
+            EmptyStatePanel.Visibility = Visibility.Collapsed;
         }
 
         // Update title bar
@@ -772,7 +970,7 @@ public partial class MainWindow : Window
             {
                 ProjectContentHost.Content = null;
                 ProjectContentHost.Visibility = Visibility.Collapsed;
-                EmptyStateText.Visibility = Visibility.Visible;
+                EmptyStatePanel.Visibility = Visibility.Visible;
                 ToolbarBorder.Visibility = Visibility.Collapsed;
                 UpdateTitleBar();
             }
@@ -812,7 +1010,7 @@ public partial class MainWindow : Window
         _activeProject = null;
         ProjectContentHost.Content = null;
         ProjectContentHost.Visibility = Visibility.Collapsed;
-        EmptyStateText.Visibility = Visibility.Visible;
+        EmptyStatePanel.Visibility = Visibility.Visible;
         ToolbarBorder.Visibility = Visibility.Collapsed;
     }
 
@@ -829,12 +1027,12 @@ public partial class MainWindow : Window
 
     private void UpdateTabIcon(ProjectInfo project, ClaudeSessionState state)
     {
-        if (!_projectTabIcons.TryGetValue(project, out var iconGrid))
+        if (!_projectTabIcons.TryGetValue(project, out var statusGrid))
             return;
 
-        var baseIcon = (TextBlock)iconGrid.Children[0];
-        var skullBadge = (TextBlock)iconGrid.Children[1];
-        var statusBadge = (TextBlock)iconGrid.Children[2];
+        var diamondIcon = (TextBlock)statusGrid.Children[0];
+        var skullBadge = (TextBlock)statusGrid.Children[1];
+        var statusBadge = (TextBlock)statusGrid.Children[2];
 
         // Stop any existing pulse timer for this project
         if (_tabIconTimers.TryGetValue(project, out var existingTimer))
@@ -850,68 +1048,64 @@ public partial class MainWindow : Window
         skullBadge.Visibility = Visibility.Collapsed;
         statusBadge.Visibility = Visibility.Collapsed;
         statusBadge.Opacity = 1.0;
-        baseIcon.Opacity = 1.0;
-        baseIcon.FontSize = 18;
+        diamondIcon.Opacity = 1.0;
 
         switch (state)
         {
             case ClaudeSessionState.NotStarted:
             case ClaudeSessionState.Exited:
-                baseIcon.Text = "\uED25"; // folder icon
-                baseIcon.FontFamily = new FontFamily("Segoe MDL2 Assets");
-                baseIcon.FontSize = 16;
-                baseIcon.Foreground = ThemeManager.GetBrush("TabIconNoSessionForeground");
+                diamondIcon.Text = "\u25C7"; // ◇ outline diamond
+                diamondIcon.Foreground = ThemeManager.GetBrush("TabIconInactiveDiamondForeground");
                 break;
 
             case ClaudeSessionState.Initializing:
-                baseIcon.Text = "\u25C6"; // ◆
-                baseIcon.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xB3, 0x47)); // orange — waiting
+                diamondIcon.Text = "\u25C6"; // ◆ filled diamond
+                diamondIcon.Foreground = ThemeManager.GetBrush("TabIconWaitingForeground");
                 if (isDangerous)
                     skullBadge.Visibility = Visibility.Visible;
                 break;
 
             case ClaudeSessionState.Idle:
-                baseIcon.Text = "\u25C6"; // ◆
-                baseIcon.Foreground = new SolidColorBrush(Color.FromRgb(0x4E, 0xC9, 0xB0)); // green
+                diamondIcon.Text = "\u25C6"; // ◆
+                diamondIcon.Foreground = ThemeManager.GetBrush("TabIconIdleForeground");
                 if (isDangerous)
                     skullBadge.Visibility = Visibility.Visible;
                 break;
 
             case ClaudeSessionState.Working:
-                baseIcon.Text = "\u25C6"; // ◆
-                baseIcon.Foreground = new SolidColorBrush(Color.FromRgb(0x56, 0x9C, 0xD6)); // blue
+                diamondIcon.Text = "\u25C6"; // ◆
+                diamondIcon.Foreground = ThemeManager.GetBrush("TabIconWorkingForeground");
                 if (isDangerous)
                     skullBadge.Visibility = Visibility.Visible;
-                // Pulse the main diamond
-                StartBaseIconPulse(project, baseIcon);
+                StartDiamondPulse(project, diamondIcon);
                 break;
 
             case ClaudeSessionState.WaitingForPermission:
-                baseIcon.Text = "\u25C6"; // ◆
-                baseIcon.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xB3, 0x47)); // orange
+                diamondIcon.Text = "\u25C6"; // ◆
+                diamondIcon.Foreground = ThemeManager.GetBrush("TabIconWaitingForeground");
                 if (isDangerous)
                     skullBadge.Visibility = Visibility.Visible;
                 break;
 
             case ClaudeSessionState.Error:
-                baseIcon.Text = "\u25C6"; // ◆
-                baseIcon.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x6B, 0x6B)); // red
+                diamondIcon.Text = "\u25C6"; // ◆
+                diamondIcon.Foreground = ThemeManager.GetBrush("TabIconErrorForeground");
                 statusBadge.Text = "!";
                 statusBadge.FontWeight = FontWeights.Bold;
-                statusBadge.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x6B, 0x6B)); // red
+                statusBadge.Foreground = ThemeManager.GetBrush("TabIconErrorForeground");
                 statusBadge.Visibility = Visibility.Visible;
                 break;
         }
     }
 
-    private void StartBaseIconPulse(ProjectInfo project, TextBlock baseIcon)
+    private void StartDiamondPulse(ProjectInfo project, TextBlock diamondIcon)
     {
         var bright = true;
         var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
         timer.Tick += (_, _) =>
         {
             bright = !bright;
-            baseIcon.Opacity = bright ? 1.0 : 0.3;
+            diamondIcon.Opacity = bright ? 1.0 : 0.3;
         };
         timer.Start();
         _tabIconTimers[project] = timer;
@@ -921,11 +1115,10 @@ public partial class MainWindow : Window
 
     private void SetWorkspaceDirty()
     {
-        if (!_workspaceDirty)
-        {
-            _workspaceDirty = true;
-            UpdateTitleBar();
-        }
+        if (_suppressDirty || _workspaceDirty)
+            return;
+        _workspaceDirty = true;
+        UpdateTitleBar();
     }
 
     private void SaveWorkspace()
@@ -992,7 +1185,8 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             Log.Error($"SaveWorkspace: failed — {ex.Message}");
-            MessageBox.Show(
+            ThemedMessageBox.Show(
+                this,
                 $"Failed to save workspace:\n\n{ex.Message}",
                 "Save Error",
                 MessageBoxButton.OK,
@@ -1012,7 +1206,8 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             Log.Error($"OpenWorkspaceFile: failed to load — {ex.Message}");
-            MessageBox.Show(
+            ThemedMessageBox.Show(
+                this,
                 $"Failed to open workspace:\n\n{ex.Message}",
                 "Open Error",
                 MessageBoxButton.OK,
@@ -1022,7 +1217,8 @@ public partial class MainWindow : Window
 
         if (workspace == null)
         {
-            MessageBox.Show(
+            ThemedMessageBox.Show(
+                this,
                 $"Could not read workspace file:\n{filePath}",
                 "Open Error",
                 MessageBoxButton.OK,
@@ -1032,6 +1228,9 @@ public partial class MainWindow : Window
 
         // Close all current projects
         CloseAllProjects();
+
+        // Suppress dirty tracking while restoring
+        _suppressDirty = true;
 
         // Apply theme
         if (Enum.TryParse<AppTheme>(workspace.Theme, out var theme))
@@ -1057,6 +1256,7 @@ public partial class MainWindow : Window
         if (activeProject != null)
             SwitchToProject(activeProject);
 
+        _suppressDirty = false;
         _currentWorkspacePath = filePath;
         _workspaceDirty = false;
         UpdateTitleBar();
@@ -1073,7 +1273,8 @@ public partial class MainWindow : Window
         if (!_workspaceDirty || _projects.Count == 0)
             return true;
 
-        var result = MessageBox.Show(
+        var result = ThemedMessageBox.Show(
+            this,
             "Save workspace changes before continuing?",
             "Agent Dock",
             MessageBoxButton.YesNoCancel,
@@ -1192,7 +1393,8 @@ public partial class MainWindow : Window
         // Prompt to save if dirty
         if (_workspaceDirty && _projects.Count > 0)
         {
-            var result = MessageBox.Show(
+            var result = ThemedMessageBox.Show(
+                this,
                 "Save workspace changes before closing?",
                 "Agent Dock",
                 MessageBoxButton.YesNoCancel,
@@ -1244,9 +1446,16 @@ public partial class MainWindow : Window
             var isActive = project == _activeProject;
             SetTabButtonActive(button, isActive);
 
-            // Update tab text foreground
-            if (button.Content is StackPanel sp && sp.Children.Count > 1 && sp.Children[1] is TextBlock tb)
-                tb.Foreground = ThemeManager.GetBrush("TabButtonForeground");
+            if (button.Content is StackPanel sp)
+            {
+                // Update folder icon foreground (child 0)
+                if (sp.Children.Count > 0 && sp.Children[0] is TextBlock folderIcon)
+                    folderIcon.Foreground = ThemeManager.GetBrush("TabIconNoSessionForeground");
+
+                // Update tab text foreground (child 1)
+                if (sp.Children.Count > 1 && sp.Children[1] is TextBlock tb)
+                    tb.Foreground = ThemeManager.GetBrush("TabButtonForeground");
+            }
         }
 
         // Re-apply tab icon foregrounds for no-session state

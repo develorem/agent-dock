@@ -5,6 +5,7 @@
         Height="640" Width="560"
         WindowStartupLocation="CenterOwner"
         ResizeMode="NoResize"
+        Icon="/Assets/agentdock.png"
         Background="{DynamicResource HelpBackground}">
 
     <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="32,24">

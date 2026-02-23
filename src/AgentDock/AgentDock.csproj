@@ -20,6 +20,7 @@
     <FileVersion>0.1.0.0</FileVersion>
     <RepositoryUrl>https://github.com/develorem/agent-dock</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
+    <ApplicationIcon>..\..\assets\agentdock.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -33,6 +34,10 @@
     <None Update="appsettings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="..\..\assets\agentdock.png" Link="Assets\agentdock.png" />
   </ItemGroup>
 
 </Project>

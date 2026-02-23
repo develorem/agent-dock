@@ -196,7 +196,7 @@ Workspace file (.agentdock extension) serializes: list of open project paths, pe
 ---
 
 ## Task 13: Help Documentation
-**Status:** `[~]`
+**Status:** `[x]`
 
 Help > Getting Started opens an in-app panel/document explaining: what Agent Dock is, prerequisites (Claude Code CLI installed and in PATH), how to add projects, how to start an AI session, keyboard shortcuts, links to Claude Code installation docs, link to Develorem GitHub. Help > About shows version, Develorem logo, license info, GitHub link.
 
@@ -209,7 +209,7 @@ Help > Getting Started opens an in-app panel/document explaining: what Agent Doc
 ---
 
 ## Task 14: Polish + Branding
-**Status:** `[ ]`
+**Status:** `[~]`
 
 Fetch and integrate Develorem logo. App icon for taskbar/title bar. Consistent styling across all panels. Keyboard shortcuts: Ctrl+N (new project), Ctrl+S (save workspace), Ctrl+W (close project tab), etc. Edge case handling: opening same folder twice (warning), invalid folder paths, Claude crash recovery (show error in AI panel, allow restart), empty project folder.
 
