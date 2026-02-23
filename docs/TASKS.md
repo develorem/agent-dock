@@ -181,17 +181,21 @@ Global theme toggle via Settings menu. Dark theme: dark backgrounds, light text,
 ---
 
 ## Task 12: Workspace Save/Load
-**Status:** `[~]`
+**Status:** `[x]`
 
 Workspace file (.agentdock extension) serializes: list of open project paths, per-project docking layouts, toolbar position, theme setting, per-project Claude session mode (not the session itself). File > Save Workspace and File > Open Workspace dialogs. Recent Workspaces submenu under File menu (last 5-10 workspaces). On close: if workspace has unsaved changes since last save, prompt "Save workspace?" with Yes/No/Cancel. Closing the app kills all running Claude instances gracefully.
 
 **Done criteria:**
-- Can save a workspace with 2+ projects to a .agentdock file
-- Can load a workspace and see all projects restored with correct layouts
-- Recent Workspaces submenu shows previously opened workspace files
-- Closing with unsaved changes prompts the user
-- All Claude instances are killed on app close
-- Workspace file is human-readable (JSON)
+- [x] Can save a workspace with 2+ projects to a .agentdock file
+- [x] Can load a workspace and see all projects restored with correct layouts
+- [x] Recent Workspaces submenu shows previously opened workspace files
+- [x] Closing with unsaved changes prompts the user (themed Yes/No/Cancel dialog)
+- [x] All Claude instances are killed on app close
+- [x] Workspace file is human-readable (JSON)
+- [x] Dirty tracking: layout changes, add/remove projects mark workspace as modified
+- [x] Dirty state suppressed during workspace restore to avoid false positives
+- [x] Title bar shows workspace name with `*` dirty indicator
+- [x] CLI support: `AgentDock.exe workspace.agentdock` opens workspace on startup
 
 ---
 
@@ -209,17 +213,29 @@ Help > Getting Started opens an in-app panel/document explaining: what Agent Doc
 ---
 
 ## Task 14: Polish + Branding
-**Status:** `[~]`
+**Status:** `[x]`
 
 Fetch and integrate Develorem logo. App icon for taskbar/title bar. Consistent styling across all panels. Keyboard shortcuts: Ctrl+N (new project), Ctrl+S (save workspace), Ctrl+W (close project tab), etc. Edge case handling: opening same folder twice (warning), invalid folder paths, Claude crash recovery (show error in AI panel, allow restart), empty project folder.
 
 **Done criteria:**
-- App icon is set (Develorem branded)
-- About dialog shows logo
-- Keyboard shortcuts work
-- Edge cases don't crash the app
-- Overall visual consistency and polish
-- App feels professional and complete
+- [x] App icon is set (Develorem branded)
+- [x] About dialog shows logo, version from assembly metadata, links
+- [x] Keyboard shortcuts work (Ctrl+N, Ctrl+S, Ctrl+W, F1)
+- [x] Edge cases don't crash the app
+- [x] Overall visual consistency and polish
+- [x] App feels professional and complete
+
+**Additional polish completed:**
+- [x] Themed message boxes — all system MessageBox dialogs replaced with custom `ThemedMessageBox` that follows light/dark theme
+- [x] Default layout reorder — AI Chat (left), File Preview (center), File Explorer + Git Status (right), each column ~33% width calculated dynamically
+- [x] Project logos in tabs — searches for logo/icon/{foldername}.png/.ico in root and /assets; falls back to folder icon
+- [x] Tab hover — border-only highlight instead of background fill, custom ControlTemplate removes default WPF chrome
+- [x] Startup prerequisite checks — async check for Claude, Git, VS Code, Cursor, Visual Studio on startup with cached results
+- [x] File explorer context menus — right-click Open in VS Code, Cursor, Visual Studio (.sln/.slnx), Explorer, Command Line
+- [x] File explorer dark mode fix — custom TreeViewItem template with themed selection/hover colors
+- [x] Markdown link colors — `MarkdownLinkColorizer` (DocumentColorizingTransformer) applies themed link colors at render time
+- [x] CLI argument parsing — `--help/-h`, `--version/-v`, `--workspace/-w`, `--folder/-f`, bare .agentdock files, bare folders
+- [x] Version centralization — `App.Version` reads from `AssemblyInformationalVersionAttribute` (set via `<Version>` in .csproj), used by About window and `--version` flag
 
 ---
 

@@ -46,6 +46,9 @@ public partial class MainWindow : Window
     private bool _workspaceDirty;
     private bool _suppressDirty; // suppress during workspace load
 
+    // Prerequisites check results (populated on startup)
+    private List<(string Name, bool Found, string Detail)>? _prerequisiteResults;
+
     // Panel ContentId constants (stable across app runs)
     private const string FileExplorerId = "fileExplorer";
     private const string GitStatusId = "gitStatus";
@@ -84,12 +87,23 @@ public partial class MainWindow : Window
         // Populate recent workspaces menu
         PopulateRecentWorkspacesMenu();
 
-        // Check for startup workspace argument
+        // Check for startup arguments
         if (App.StartupWorkspacePath != null)
         {
             // Defer to after window is fully loaded
             Loaded += (_, _) => OpenWorkspaceFile(App.StartupWorkspacePath);
         }
+        else if (App.StartupProjectFolders.Count > 0)
+        {
+            Loaded += (_, _) =>
+            {
+                foreach (var folder in App.StartupProjectFolders)
+                    AddProjectFromPath(folder);
+            };
+        }
+
+        // Run prerequisite checks in background on startup
+        Loaded += async (_, _) => await RunStartupPrerequisiteChecks();
 
         Log.Info("MainWindow constructor complete");
     }
@@ -294,50 +308,23 @@ public partial class MainWindow : Window
 
     private void CheckPrerequisites_Click(object sender, RoutedEventArgs e)
     {
-        var checks = new (string Name, string Command, string Args)[]
+        if (_prerequisiteResults == null)
         {
-            ("Claude Code CLI", ClaudeSession.ClaudeBinaryPath, "--version"),
-            ("Git", "git", "--version"),
-        };
-
-        var lines = new List<string>();
-
-        foreach (var (name, command, args) in checks)
-        {
-            try
-            {
-                var psi = new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = command,
-                    Arguments = args,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
-
-                using var process = System.Diagnostics.Process.Start(psi);
-                if (process == null)
-                {
-                    lines.Add($"\u2716  {name} — not found");
-                    continue;
-                }
-
-                var output = process.StandardOutput.ReadToEnd().Trim();
-                process.WaitForExit(5000);
-
-                if (process.ExitCode == 0)
-                    lines.Add($"\u2714  {name} — {output}");
-                else
-                    lines.Add($"\u2716  {name} — exited with code {process.ExitCode}");
-            }
-            catch
-            {
-                lines.Add($"\u2716  {name} — not found in PATH");
-            }
+            // Shouldn't happen, but run synchronously as fallback
+            _prerequisiteResults = RunPrerequisiteChecks();
         }
+        ShowPrerequisiteResults();
+    }
 
-        var allPassed = lines.All(l => l.StartsWith("\u2714"));
+    private void ShowPrerequisiteResults()
+    {
+        var lines = _prerequisiteResults!
+            .Select(r => r.Found
+                ? $"\u2714  {r.Name} — {r.Detail}"
+                : $"\u2716  {r.Name} — not found")
+            .ToList();
+
+        var allPassed = _prerequisiteResults!.All(r => r.Found);
         var icon = allPassed ? MessageBoxImage.Information : MessageBoxImage.Warning;
         var summary = allPassed ? "All prerequisites found." : "Some prerequisites are missing.";
 
@@ -347,6 +334,157 @@ public partial class MainWindow : Window
             "Prerequisites Check",
             MessageBoxButton.OK,
             icon);
+    }
+
+    private static List<(string Name, bool Found, string Detail)> RunPrerequisiteChecks()
+    {
+        var results = new List<(string Name, bool Found, string Detail)>();
+
+        // Command-line tools
+        var cliChecks = new (string Name, string Command, string Args)[]
+        {
+            ("Claude Code CLI", ClaudeSession.ClaudeBinaryPath, "--version"),
+            ("Git", "git", "--version"),
+            ("VS Code", "code", "--version"),
+            ("Cursor", "cursor", "--version"),
+        };
+
+        foreach (var (name, command, args) in cliChecks)
+        {
+            var (found, detail) = CheckCommand(command, args);
+            results.Add((name, found, detail));
+        }
+
+        // Visual Studio — check install directories
+        var vsResult = FindVisualStudio();
+        results.Add(vsResult);
+
+        return results;
+    }
+
+    private static (bool Found, string Detail) CheckCommand(string command, string args)
+    {
+        try
+        {
+            // Use cmd.exe /c to resolve .cmd/.bat wrappers (e.g. code, cursor)
+            var psi = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments = $"/c {command} {args}",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using var process = System.Diagnostics.Process.Start(psi);
+            if (process == null)
+                return (false, "");
+
+            var output = process.StandardOutput.ReadToEnd().Trim();
+            process.WaitForExit(5000);
+
+            if (process.ExitCode == 0)
+            {
+                // Take just the first line (e.g. VS Code outputs multiple lines)
+                var firstLine = output.Split('\n')[0].Trim();
+                return (true, firstLine);
+            }
+
+            return (false, "");
+        }
+        catch
+        {
+            return (false, "");
+        }
+    }
+
+    private static (string Name, bool Found, string Detail) FindVisualStudio()
+    {
+        // Try vswhere.exe first (official VS detection tool)
+        var vswhere = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+            "Microsoft Visual Studio", "Installer", "vswhere.exe");
+
+        if (File.Exists(vswhere))
+        {
+            try
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = vswhere,
+                    Arguments = "-latest -property catalog_productDisplayVersion -format value",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+
+                using var process = System.Diagnostics.Process.Start(psi);
+                if (process != null)
+                {
+                    var output = process.StandardOutput.ReadToEnd().Trim();
+                    process.WaitForExit(5000);
+
+                    if (process.ExitCode == 0 && !string.IsNullOrEmpty(output))
+                    {
+                        // Get the display name too
+                        var namePsi = new System.Diagnostics.ProcessStartInfo
+                        {
+                            FileName = vswhere,
+                            Arguments = "-latest -property catalog_productLineVersion -format value",
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true,
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                        };
+                        using var nameProcess = System.Diagnostics.Process.Start(namePsi);
+                        var yearName = nameProcess?.StandardOutput.ReadToEnd().Trim() ?? "";
+                        nameProcess?.WaitForExit(5000);
+
+                        return ("Visual Studio", true, $"{yearName} ({output})".Trim());
+                    }
+                }
+            }
+            catch { /* fall through to directory scan */ }
+        }
+
+        // Fallback: scan install directories
+        var editions = new[] { "Enterprise", "Professional", "Community", "Preview", "BuildTools" };
+        var years = new[] { "2026", "2022" };
+
+        foreach (var year in years)
+        {
+            foreach (var edition in editions)
+            {
+                var path = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                    "Microsoft Visual Studio", year, edition, "Common7", "IDE", "devenv.exe");
+                if (File.Exists(path))
+                    return ("Visual Studio", true, $"{year} {edition}");
+            }
+        }
+
+        return ("Visual Studio", false, "");
+    }
+
+    private async System.Threading.Tasks.Task RunStartupPrerequisiteChecks()
+    {
+        Log.Info("Startup prerequisite check: starting");
+        TitleBarText.Text = "Checking prerequisites...";
+
+        _prerequisiteResults = await System.Threading.Tasks.Task.Run(RunPrerequisiteChecks);
+
+        // Populate the static available tools set for context menus
+        FileExplorerControl.AvailableTools.Clear();
+        foreach (var (name, found, _) in _prerequisiteResults)
+        {
+            if (found)
+                FileExplorerControl.AvailableTools.Add(name);
+        }
+
+        UpdateTitleBar(); // restore normal title
+        Log.Info("Startup prerequisite check: complete");
     }
 
     // --- Project Management ---

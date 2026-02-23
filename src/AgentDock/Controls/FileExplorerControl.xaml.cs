@@ -1,8 +1,10 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using AgentDock.Services;
 
 namespace AgentDock.Controls;
@@ -16,6 +18,12 @@ public partial class FileExplorerControl : UserControl
 
     private GitIgnoreFilter? _gitIgnoreFilter;
     private string _rootPath = string.Empty;
+
+    /// <summary>
+    /// Global set of available tool names (e.g. "VS Code", "Cursor", "Visual Studio").
+    /// Populated from prerequisite check results on startup.
+    /// </summary>
+    public static HashSet<string> AvailableTools { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     public FileExplorerControl()
     {
@@ -129,12 +137,140 @@ public partial class FileExplorerControl : UserControl
         e.Handled = true; // prevent bubbling to parent
     }
 
-    private void TreeViewItem_MouseLeftButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    private void TreeViewItem_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
         if (e.OriginalSource is FrameworkElement { DataContext: FileNode node } && !node.IsDirectory && node.FullPath != null)
         {
             FileSelected?.Invoke(node.FullPath);
         }
+    }
+
+    private void TreeViewItem_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is not FrameworkElement { DataContext: FileNode node } || node.FullPath == null)
+            return;
+
+        // Select the right-clicked item
+        if (sender is TreeViewItem tvi)
+            tvi.IsSelected = true;
+
+        var menu = new ContextMenu();
+        var ext = Path.GetExtension(node.FullPath).ToLowerInvariant();
+
+        if (node.IsDirectory)
+        {
+            // Folder context menu
+            if (AvailableTools.Contains("VS Code"))
+                menu.Items.Add(MakeMenuItem("Open in VS Code", "\uE70F", () => LaunchTool("code", node.FullPath)));
+
+            if (AvailableTools.Contains("Cursor"))
+                menu.Items.Add(MakeMenuItem("Open in Cursor", "\uE70F", () => LaunchTool("cursor", node.FullPath)));
+
+            if (menu.Items.Count > 0)
+                menu.Items.Add(new Separator());
+
+            menu.Items.Add(MakeMenuItem("Open in Explorer", "\uED25", () => OpenInExplorer(node.FullPath)));
+            menu.Items.Add(MakeMenuItem("Open Command Line", "\uE756", () => OpenCommandLine(node.FullPath)));
+        }
+        else
+        {
+            // File context menu
+            if (ext is ".sln" or ".slnx")
+            {
+                if (AvailableTools.Contains("Visual Studio"))
+                {
+                    menu.Items.Add(MakeMenuItem("Open in Visual Studio", "\u2699", () => LaunchFile(node.FullPath)));
+                }
+            }
+
+            if (AvailableTools.Contains("VS Code"))
+                menu.Items.Add(MakeMenuItem("Open in VS Code", "\uE70F", () => LaunchTool("code", node.FullPath)));
+
+            if (AvailableTools.Contains("Cursor"))
+                menu.Items.Add(MakeMenuItem("Open in Cursor", "\uE70F", () => LaunchTool("cursor", node.FullPath)));
+
+            if (menu.Items.Count > 0)
+                menu.Items.Add(new Separator());
+
+            menu.Items.Add(MakeMenuItem("Open in Explorer", "\uED25",
+                () => OpenInExplorer(Path.GetDirectoryName(node.FullPath)!)));
+        }
+
+        if (menu.Items.Count > 0)
+        {
+            menu.IsOpen = true;
+            e.Handled = true;
+        }
+    }
+
+    private static MenuItem MakeMenuItem(string header, string iconGlyph, Action action)
+    {
+        var item = new MenuItem { Header = header };
+        item.Icon = new TextBlock
+        {
+            Text = iconGlyph,
+            FontFamily = new System.Windows.Media.FontFamily("Segoe MDL2 Assets"),
+            FontSize = 12,
+            Foreground = (System.Windows.Media.Brush)Application.Current.FindResource("MenuIconForeground")
+        };
+        item.Click += (_, _) => action();
+        return item;
+    }
+
+    private static void LaunchTool(string command, string path)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments = $"/c {command} \"{path}\"",
+                UseShellExecute = false,
+                CreateNoWindow = true
+            });
+        }
+        catch { /* tool not available */ }
+    }
+
+    private static void LaunchFile(string filePath)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = filePath,
+                UseShellExecute = true
+            });
+        }
+        catch { /* failed to open */ }
+    }
+
+    private static void OpenInExplorer(string path)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                Arguments = Directory.Exists(path) ? path : $"/select,\"{path}\"",
+                UseShellExecute = true
+            });
+        }
+        catch { /* failed */ }
+    }
+
+    private static void OpenCommandLine(string folderPath)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                WorkingDirectory = folderPath,
+                UseShellExecute = true
+            });
+        }
+        catch { /* failed */ }
     }
 
     private static string GetFileIcon(string extension)

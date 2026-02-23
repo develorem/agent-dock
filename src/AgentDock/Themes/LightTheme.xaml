@@ -34,6 +34,7 @@
     <SolidColorBrush x:Key="PreviewNoPreviewForeground" Color="#AAAAAA" />
     <SolidColorBrush x:Key="PreviewBackground" Color="#FFFFFF" />
     <SolidColorBrush x:Key="PreviewForeground" Color="#1E1E1E" />
+    <SolidColorBrush x:Key="PreviewLinkForeground" Color="#0066CC" />
 
     <!-- Git status -->
     <SolidColorBrush x:Key="GitPlaceholderForeground" Color="#999999" />
@@ -43,6 +44,9 @@
 
     <!-- File explorer -->
     <SolidColorBrush x:Key="ExplorerForeground" Color="#1E1E1E" />
+    <SolidColorBrush x:Key="ExplorerSelectedBackground" Color="#C9DEF5" />
+    <SolidColorBrush x:Key="ExplorerSelectedForeground" Color="#1E1E1E" />
+    <SolidColorBrush x:Key="ExplorerHoverBackground" Color="#E8E8E8" />
 
     <!-- Panel placeholder -->
     <SolidColorBrush x:Key="PlaceholderBackground" Color="#FAFAFA" />

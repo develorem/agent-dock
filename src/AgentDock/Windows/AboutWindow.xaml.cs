@@ -9,6 +9,7 @@ public partial class AboutWindow : Window
     public AboutWindow()
     {
         InitializeComponent();
+        VersionText.Text = $"Version {App.Version}";
     }
 
     private void Hyperlink_RequestNavigate(object sender, RequestNavigateEventArgs e)
