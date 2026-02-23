@@ -85,7 +85,8 @@ public static class ThemeManager
 
     /// <summary>
     /// Gets a syntax highlighting definition appropriate for the current theme.
-    /// Falls back to the built-in AvalonEdit manager for unsupported extensions.
+    /// Falls back to the built-in AvalonEdit manager only in light mode (its colors
+    /// assume a white background and are invisible on dark backgrounds).
     /// </summary>
     public static IHighlightingDefinition? GetHighlighting(string extension)
     {
@@ -93,9 +94,14 @@ public static class ThemeManager
         if (themed != null)
             return themed;
 
-        // Fallback: built-in AvalonEdit definitions (not theme-aware)
-        return ICSharpCode.AvalonEdit.Highlighting.HighlightingManager.Instance
-            .GetDefinitionByExtension(extension);
+        // Only fall back to non-themed AvalonEdit in light mode
+        if (CurrentTheme == AppTheme.Light)
+        {
+            return ICSharpCode.AvalonEdit.Highlighting.HighlightingManager.Instance
+                .GetDefinitionByExtension(extension);
+        }
+
+        return null;
     }
 
     private static AppTheme LoadThemePreference()

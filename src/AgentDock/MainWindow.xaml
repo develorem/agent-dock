@@ -9,78 +9,285 @@
         Height="720" Width="1280"
         WindowStartupLocation="CenterScreen"
         WindowState="Maximized"
+        WindowStyle="None"
         Closing="MainWindow_Closing">
 
-    <DockPanel LastChildFill="True">
-        <!-- Menu Bar - always at top -->
-        <Menu DockPanel.Dock="Top">
-            <MenuItem Header="_File">
-                <MenuItem Header="_Add Project Folder" InputGestureText="Ctrl+N" Click="AddProject_Click">
-                    <MenuItem.Icon>
-                        <TextBlock Text="+" FontWeight="Bold" FontSize="14" />
-                    </MenuItem.Icon>
-                </MenuItem>
-                <Separator />
-                <MenuItem Header="_Open Workspace" Click="OpenWorkspace_Click" />
-                <MenuItem Header="_Save Workspace" InputGestureText="Ctrl+S" Click="SaveWorkspace_Click" />
-                <MenuItem Header="Recent _Workspaces" x:Name="RecentWorkspacesMenu" IsEnabled="False" />
-                <Separator />
-                <MenuItem Header="E_xit" InputGestureText="Alt+F4" Click="Exit_Click" />
-            </MenuItem>
-            <MenuItem Header="S_ettings">
-                <MenuItem Header="_Theme">
-                    <MenuItem Header="_Light" x:Name="ThemeLightMenu" IsCheckable="True" IsChecked="True"
-                              Click="ThemeLight_Click" />
-                    <MenuItem Header="_Dark" x:Name="ThemeDarkMenu" IsCheckable="True"
-                              Click="ThemeDark_Click" />
-                </MenuItem>
-                <MenuItem Header="Toolbar _Position">
-                    <MenuItem Header="_Top" x:Name="ToolbarTopMenu" IsCheckable="True" IsChecked="True"
-                              Click="ToolbarPosition_Click" Tag="Top" />
-                    <MenuItem Header="_Left" x:Name="ToolbarLeftMenu" IsCheckable="True"
-                              Click="ToolbarPosition_Click" Tag="Left" />
-                    <MenuItem Header="_Right" x:Name="ToolbarRightMenu" IsCheckable="True"
-                              Click="ToolbarPosition_Click" Tag="Right" />
-                    <MenuItem Header="_Bottom" x:Name="ToolbarBottomMenu" IsCheckable="True"
-                              Click="ToolbarPosition_Click" Tag="Bottom" />
-                </MenuItem>
-                <Separator />
-                <MenuItem Header="_Claude Path Override..." Click="ClaudePathOverride_Click" />
-            </MenuItem>
-            <MenuItem Header="_Help">
-                <MenuItem Header="_Getting Started" Click="GettingStarted_Click" />
-                <MenuItem Header="_About Agent Dock" Click="About_Click" />
-            </MenuItem>
-        </Menu>
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="44"
+                      ResizeBorderThickness="4"
+                      GlassFrameThickness="0"
+                      CornerRadius="0" />
+    </WindowChrome.WindowChrome>
 
-        <!-- Everything below the menu uses a DockPanel for toolbar positioning -->
+    <DockPanel x:Name="RootPanel" LastChildFill="True">
+
+        <!-- ===== Custom Title Bar ===== -->
+        <Border DockPanel.Dock="Top"
+                Background="{DynamicResource TitleBarBackground}"
+                Height="44">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" /> <!-- Icon -->
+                    <ColumnDefinition Width="Auto" /> <!-- Product name -->
+                    <ColumnDefinition Width="Auto" /> <!-- Menu -->
+                    <ColumnDefinition Width="Auto" /> <!-- Add button -->
+                    <ColumnDefinition Width="*" />    <!-- Title (fills) -->
+                    <ColumnDefinition Width="Auto" /> <!-- Minimize -->
+                    <ColumnDefinition Width="Auto" /> <!-- Maximize -->
+                    <ColumnDefinition Width="Auto" /> <!-- Close -->
+                </Grid.ColumnDefinitions>
+
+                <!-- App icon -->
+                <TextBlock Grid.Column="0"
+                           Text="&#xE799;"
+                           FontFamily="Segoe MDL2 Assets"
+                           FontSize="16"
+                           Foreground="{DynamicResource TitleBarForeground}"
+                           VerticalAlignment="Center"
+                           Margin="10,0,6,0"
+                           WindowChrome.IsHitTestVisibleInChrome="True" />
+
+                <!-- Product name -->
+                <TextBlock Grid.Column="1"
+                           Text="Agent Dock"
+                           FontSize="12"
+                           FontWeight="SemiBold"
+                           Foreground="{DynamicResource TitleBarForeground}"
+                           VerticalAlignment="Center"
+                           Margin="0,0,8,0" />
+
+                <!-- Separator between product name and menu -->
+                <Border Grid.Column="1"
+                        Width="1" Height="18"
+                        Background="{DynamicResource TabButtonBorderBrush}"
+                        VerticalAlignment="Center"
+                        HorizontalAlignment="Right"
+                        Margin="4,0,0,0" />
+
+                <!-- Menu bar -->
+                <Menu Grid.Column="2"
+                      VerticalAlignment="Center"
+                      Margin="4,0,0,0"
+                      WindowChrome.IsHitTestVisibleInChrome="True">
+                    <MenuItem Header="_File">
+                        <MenuItem Header="_Add Project Folder" InputGestureText="Ctrl+N" Click="AddProject_Click">
+                            <MenuItem.Icon>
+                                <TextBlock Text="&#xED25;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                           Foreground="{DynamicResource MenuIconForeground}" />
+                            </MenuItem.Icon>
+                        </MenuItem>
+                        <Separator />
+                        <MenuItem Header="_Open Workspace" Click="OpenWorkspace_Click">
+                            <MenuItem.Icon>
+                                <TextBlock Text="&#xE8E5;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                           Foreground="{DynamicResource MenuIconForeground}" />
+                            </MenuItem.Icon>
+                        </MenuItem>
+                        <MenuItem Header="_Save Workspace" InputGestureText="Ctrl+S" Click="SaveWorkspace_Click">
+                            <MenuItem.Icon>
+                                <TextBlock Text="&#xE74E;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                           Foreground="{DynamicResource MenuIconForeground}" />
+                            </MenuItem.Icon>
+                        </MenuItem>
+                        <MenuItem Header="Recent _Workspaces" x:Name="RecentWorkspacesMenu" IsEnabled="False">
+                            <MenuItem.Icon>
+                                <TextBlock Text="&#xE81C;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                           Foreground="{DynamicResource MenuIconForeground}" />
+                            </MenuItem.Icon>
+                        </MenuItem>
+                        <Separator />
+                        <MenuItem Header="E_xit" InputGestureText="Alt+F4" Click="Exit_Click">
+                            <MenuItem.Icon>
+                                <TextBlock Text="&#xE8BB;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                           Foreground="{DynamicResource MenuIconForeground}" />
+                            </MenuItem.Icon>
+                        </MenuItem>
+                    </MenuItem>
+                    <MenuItem Header="S_ettings">
+                        <MenuItem Header="_Theme">
+                            <MenuItem.Icon>
+                                <TextBlock Text="&#xE790;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                           Foreground="{DynamicResource MenuIconForeground}" />
+                            </MenuItem.Icon>
+                            <MenuItem Header="_Light" x:Name="ThemeLightMenu" IsCheckable="True" IsChecked="True"
+                                      Click="ThemeLight_Click">
+                                <MenuItem.Icon>
+                                    <TextBlock Text="&#xE706;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                               Foreground="{DynamicResource MenuIconForeground}" />
+                                </MenuItem.Icon>
+                            </MenuItem>
+                            <MenuItem Header="_Dark" x:Name="ThemeDarkMenu" IsCheckable="True"
+                                      Click="ThemeDark_Click">
+                                <MenuItem.Icon>
+                                    <TextBlock Text="&#xE708;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                               Foreground="{DynamicResource MenuIconForeground}" />
+                                </MenuItem.Icon>
+                            </MenuItem>
+                        </MenuItem>
+                        <MenuItem Header="Toolbar _Position">
+                            <MenuItem.Icon>
+                                <TextBlock Text="&#xE8E4;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                           Foreground="{DynamicResource MenuIconForeground}" />
+                            </MenuItem.Icon>
+                            <MenuItem Header="_Top" x:Name="ToolbarTopMenu" IsCheckable="True" IsChecked="True"
+                                      Click="ToolbarPosition_Click" Tag="Top">
+                                <MenuItem.Icon>
+                                    <TextBlock Text="&#xE74A;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                               Foreground="{DynamicResource MenuIconForeground}" />
+                                </MenuItem.Icon>
+                            </MenuItem>
+                            <MenuItem Header="_Left" x:Name="ToolbarLeftMenu" IsCheckable="True"
+                                      Click="ToolbarPosition_Click" Tag="Left">
+                                <MenuItem.Icon>
+                                    <TextBlock Text="&#xE76B;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                               Foreground="{DynamicResource MenuIconForeground}" />
+                                </MenuItem.Icon>
+                            </MenuItem>
+                            <MenuItem Header="_Right" x:Name="ToolbarRightMenu" IsCheckable="True"
+                                      Click="ToolbarPosition_Click" Tag="Right">
+                                <MenuItem.Icon>
+                                    <TextBlock Text="&#xE76C;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                               Foreground="{DynamicResource MenuIconForeground}" />
+                                </MenuItem.Icon>
+                            </MenuItem>
+                            <MenuItem Header="_Bottom" x:Name="ToolbarBottomMenu" IsCheckable="True"
+                                      Click="ToolbarPosition_Click" Tag="Bottom">
+                                <MenuItem.Icon>
+                                    <TextBlock Text="&#xE74B;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                               Foreground="{DynamicResource MenuIconForeground}" />
+                                </MenuItem.Icon>
+                            </MenuItem>
+                        </MenuItem>
+                        <Separator />
+                        <MenuItem Header="_Claude Path Override..." Click="ClaudePathOverride_Click">
+                            <MenuItem.Icon>
+                                <TextBlock Text="&#xE713;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                           Foreground="{DynamicResource MenuIconForeground}" />
+                            </MenuItem.Icon>
+                        </MenuItem>
+                    </MenuItem>
+                    <MenuItem Header="_Help">
+                        <MenuItem Header="_Getting Started" Click="GettingStarted_Click">
+                            <MenuItem.Icon>
+                                <TextBlock Text="&#xE736;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                           Foreground="{DynamicResource MenuIconForeground}" />
+                            </MenuItem.Icon>
+                        </MenuItem>
+                        <MenuItem Header="_About Agent Dock" Click="About_Click">
+                            <MenuItem.Icon>
+                                <TextBlock Text="&#xE946;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                           Foreground="{DynamicResource MenuIconForeground}" />
+                            </MenuItem.Icon>
+                        </MenuItem>
+                    </MenuItem>
+                </Menu>
+
+                <!-- Add project button -->
+                <Button x:Name="AddProjectButton" Grid.Column="3"
+                        Click="AddProject_Click"
+                        ToolTip="Add Project Folder (Ctrl+N)"
+                        Height="24"
+                        VerticalAlignment="Center"
+                        Margin="4,0,0,0"
+                        Padding="6,0"
+                        Cursor="Hand"
+                        WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Button.Style>
+                        <Style TargetType="{x:Type Button}">
+                            <Setter Property="Background" Value="Transparent" />
+                            <Setter Property="BorderBrush" Value="{DynamicResource AddButtonBorderBrush}" />
+                            <Setter Property="BorderThickness" Value="1" />
+                            <Setter Property="Foreground" Value="{DynamicResource AddButtonForeground}" />
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="{x:Type Button}">
+                                        <Border x:Name="Bd"
+                                                Background="{TemplateBinding Background}"
+                                                BorderBrush="{TemplateBinding BorderBrush}"
+                                                BorderThickness="{TemplateBinding BorderThickness}"
+                                                CornerRadius="3"
+                                                Padding="{TemplateBinding Padding}">
+                                            <ContentPresenter HorizontalAlignment="Center"
+                                                              VerticalAlignment="Center" />
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="Bd" Property="Background"
+                                                        Value="{DynamicResource TitleBarButtonHover}" />
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </Button.Style>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE710;"
+                                   FontFamily="Segoe MDL2 Assets"
+                                   FontSize="10"
+                                   Foreground="{DynamicResource AddButtonForeground}"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+
+                <!-- Window title (fills remaining space, shows project name) -->
+                <TextBlock x:Name="TitleBarText" Grid.Column="4"
+                           Text=""
+                           FontSize="12"
+                           Foreground="{DynamicResource TitleBarForeground}"
+                           VerticalAlignment="Center"
+                           HorizontalAlignment="Center"
+                           Opacity="0.7" />
+
+                <!-- Window buttons (right side) -->
+                <Button Grid.Column="5"
+                        Style="{StaticResource TitleBarButtonStyle}"
+                        Click="MinimizeButton_Click"
+                        ToolTip="Minimize"
+                        WindowChrome.IsHitTestVisibleInChrome="True">
+                    <TextBlock Text="&#xE921;"
+                               FontFamily="Segoe MDL2 Assets"
+                               FontSize="13"
+                               Foreground="{DynamicResource TitleBarForeground}" />
+                </Button>
+
+                <Button x:Name="MaximizeButton" Grid.Column="6"
+                        Style="{StaticResource TitleBarButtonStyle}"
+                        Click="MaximizeButton_Click"
+                        ToolTip="Maximize"
+                        WindowChrome.IsHitTestVisibleInChrome="True">
+                    <TextBlock x:Name="MaximizeIcon"
+                               Text="&#xE922;"
+                               FontFamily="Segoe MDL2 Assets"
+                               FontSize="13"
+                               Foreground="{DynamicResource TitleBarForeground}" />
+                </Button>
+
+                <Button Grid.Column="7"
+                        Style="{StaticResource TitleBarCloseButtonStyle}"
+                        Click="CloseButton_Click"
+                        ToolTip="Close"
+                        WindowChrome.IsHitTestVisibleInChrome="True" />
+
+            </Grid>
+        </Border>
+
+        <!-- ===== Workspace area below title bar ===== -->
         <DockPanel x:Name="WorkspacePanel" LastChildFill="True">
 
             <!-- Project Toolbar -->
             <Border x:Name="ToolbarBorder" DockPanel.Dock="Top"
                     Background="{DynamicResource ToolbarBackground}"
-                    BorderBrush="{DynamicResource ToolbarBorderBrush}" BorderThickness="0,0,0,1">
+                    BorderBrush="{DynamicResource ToolbarBorderBrush}" BorderThickness="0,0,0,1"
+                    Visibility="Collapsed">
                 <StackPanel x:Name="ToolbarPanel" Orientation="Horizontal"
                             Margin="4">
                     <!-- Project tab buttons are inserted here dynamically -->
-
-                    <Button x:Name="AddProjectButton" Click="AddProject_Click"
-                            ToolTip="Add Project Folder (Ctrl+N)"
-                            Width="36" Height="36"
-                            Margin="2"
-                            Background="Transparent"
-                            BorderBrush="{DynamicResource AddButtonBorderBrush}" BorderThickness="1"
-                            Cursor="Hand">
-                        <TextBlock Text="+" FontSize="20" FontWeight="Bold"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center"
-                                   Foreground="{DynamicResource AddButtonForeground}" />
-                    </Button>
                 </StackPanel>
             </Border>
 
-            <!-- Main Content Area - switches between empty state and project content -->
+            <!-- Main Content Area -->
             <Grid x:Name="ContentArea" Background="{DynamicResource ContentBackground}">
-                <!-- Empty state message - shown when no projects are open -->
                 <TextBlock x:Name="EmptyStateText"
                            Text="Open a project folder to get started"
                            HorizontalAlignment="Center"
@@ -88,7 +295,6 @@
                            FontSize="18"
                            Foreground="{DynamicResource EmptyStateForeground}" />
 
-                <!-- Project content host - holds the active project's content -->
                 <ContentPresenter x:Name="ProjectContentHost"
                                   Visibility="Collapsed" />
             </Grid>

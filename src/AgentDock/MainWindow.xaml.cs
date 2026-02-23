@@ -17,11 +17,6 @@ namespace AgentDock;
 
 public partial class MainWindow : Window
 {
-    // --- Dark title bar via DWM ---
-    [DllImport("dwmapi.dll", PreserveSig = true)]
-    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int dwAttribute, ref int pvAttribute, int cbAttribute);
-    private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
-
     public static readonly RoutedUICommand AddProjectCommand =
         new("Add Project", nameof(AddProjectCommand), typeof(MainWindow));
 
@@ -58,21 +53,106 @@ public partial class MainWindow : Window
         UpdateThemeMenuCheckmarks();
         ThemeManager.ThemeChanged += OnThemeChanged;
 
+        // Sync maximize/restore icon whenever window state changes (button click, double-click, aero snap, etc.)
+        StateChanged += (_, _) => UpdateMaximizeIcon();
+        UpdateMaximizeIcon();
+
         Log.Info("MainWindow constructor complete");
     }
+
+    // --- Maximized window sizing (prevent overflow beyond screen) ---
 
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
-        SetTitleBarDarkMode(ThemeManager.CurrentTheme == AppTheme.Dark);
+        var source = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
+        source?.AddHook(WndProc);
     }
 
-    private void SetTitleBarDarkMode(bool dark)
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
-        var hwnd = new WindowInteropHelper(this).Handle;
-        if (hwnd == IntPtr.Zero) return;
-        int value = dark ? 1 : 0;
-        DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref value, sizeof(int));
+        // WM_GETMINMAXINFO — constrain maximized size to the work area
+        if (msg == 0x0024)
+        {
+            var mmi = Marshal.PtrToStructure<MINMAXINFO>(lParam);
+            var monitor = MonitorFromWindow(hwnd, 2); // MONITOR_DEFAULTTONEAREST
+            if (monitor != IntPtr.Zero)
+            {
+                var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+                GetMonitorInfo(monitor, ref mi);
+                mmi.ptMaxPosition.X = Math.Abs(mi.rcWork.Left - mi.rcMonitor.Left);
+                mmi.ptMaxPosition.Y = Math.Abs(mi.rcWork.Top - mi.rcMonitor.Top);
+                mmi.ptMaxSize.X = Math.Abs(mi.rcWork.Right - mi.rcWork.Left);
+                mmi.ptMaxSize.Y = Math.Abs(mi.rcWork.Bottom - mi.rcWork.Top);
+            }
+            Marshal.StructureToPtr(mmi, lParam, true);
+            handled = true;
+        }
+        return IntPtr.Zero;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT { public int X, Y; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int Left, Top, Right, Bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MINMAXINFO
+    {
+        public POINT ptReserved;
+        public POINT ptMaxSize;
+        public POINT ptMaxPosition;
+        public POINT ptMinTrackSize;
+        public POINT ptMaxTrackSize;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MONITORINFO
+    {
+        public int cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public int dwFlags;
+    }
+
+    // --- Window Buttons ---
+
+    private void MinimizeButton_Click(object sender, RoutedEventArgs e)
+    {
+        WindowState = WindowState.Minimized;
+    }
+
+    private void MaximizeButton_Click(object sender, RoutedEventArgs e)
+    {
+        WindowState = WindowState == WindowState.Maximized
+            ? WindowState.Normal
+            : WindowState.Maximized;
+    }
+
+    private void UpdateMaximizeIcon()
+    {
+        if (WindowState == WindowState.Maximized)
+        {
+            MaximizeIcon.Text = "\uE923"; // Restore
+            MaximizeButton.ToolTip = "Restore Down";
+        }
+        else
+        {
+            MaximizeIcon.Text = "\uE922"; // Maximize
+            MaximizeButton.ToolTip = "Maximize";
+        }
+    }
+
+    private void CloseButton_Click(object sender, RoutedEventArgs e)
+    {
+        Close();
     }
 
     // --- File Menu ---
@@ -180,10 +260,10 @@ public partial class MainWindow : Window
         var tabButton = CreateProjectTabButton(project);
         _projectTabButtons[project] = tabButton;
 
-        // Insert tab button before the + button
-        var addButtonIndex = ToolbarPanel.Children.IndexOf(AddProjectButton);
-        ToolbarPanel.Children.Insert(addButtonIndex, tabButton);
-        Log.Info("AddProject: tab button inserted");
+        // Add tab button to toolbar
+        ToolbarPanel.Children.Add(tabButton);
+        ToolbarBorder.Visibility = Visibility.Visible;
+        Log.Info("AddProject: tab button added");
 
         // Create docking layout for this project
         Log.Info("AddProject: creating docking layout");
@@ -213,8 +293,10 @@ public partial class MainWindow : Window
         var baseIcon = new TextBlock
         {
             Name = "baseIcon",
-            Text = "\uD83D\uDCC1", // folder emoji — no session
-            FontSize = 18,
+            Text = "\uED25", // folder icon — no session
+            FontFamily = new FontFamily("Segoe MDL2 Assets"),
+            FontSize = 16,
+            Foreground = ThemeManager.GetBrush("TabIconNoSessionForeground"),
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center
         };
@@ -479,6 +561,7 @@ public partial class MainWindow : Window
 
         // Update title bar
         Title = $"Agent Dock — {project.FolderName}";
+        TitleBarText.Text = project.FolderName;
     }
 
     private static void SetTabButtonActive(Button button, bool active)
@@ -547,7 +630,9 @@ public partial class MainWindow : Window
                 ProjectContentHost.Content = null;
                 ProjectContentHost.Visibility = Visibility.Collapsed;
                 EmptyStateText.Visibility = Visibility.Visible;
+                ToolbarBorder.Visibility = Visibility.Collapsed;
                 Title = "Agent Dock";
+                TitleBarText.Text = "";
             }
         }
     }
@@ -593,7 +678,9 @@ public partial class MainWindow : Window
         {
             case ClaudeSessionState.NotStarted:
             case ClaudeSessionState.Exited:
-                baseIcon.Text = "\uD83D\uDCC1"; // 📁
+                baseIcon.Text = "\uED25"; // folder icon
+                baseIcon.FontFamily = new FontFamily("Segoe MDL2 Assets");
+                baseIcon.FontSize = 16;
                 baseIcon.Foreground = ThemeManager.GetBrush("TabIconNoSessionForeground");
                 break;
 
@@ -740,7 +827,6 @@ public partial class MainWindow : Window
     private void OnThemeChanged(AppTheme theme)
     {
         UpdateThemeMenuCheckmarks();
-        SetTitleBarDarkMode(theme == AppTheme.Dark);
 
         // Update AvalonDock theme on all DockingManagers
         var dockTheme = theme == AppTheme.Dark

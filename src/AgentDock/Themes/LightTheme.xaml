@@ -43,6 +43,14 @@
     <SolidColorBrush x:Key="PlaceholderTitleForeground" Color="#666666" />
     <SolidColorBrush x:Key="PlaceholderSubtitleForeground" Color="#999999" />
 
+    <!-- Title bar -->
+    <SolidColorBrush x:Key="TitleBarBackground" Color="#F0F0F0" />
+    <SolidColorBrush x:Key="TitleBarForeground" Color="#333333" />
+    <SolidColorBrush x:Key="TitleBarButtonHover" Color="#E0E0E0" />
+    <SolidColorBrush x:Key="CloseButtonHover" Color="#E81123" />
+    <SolidColorBrush x:Key="CloseButtonHoverForeground" Color="#FFFFFF" />
+    <SolidColorBrush x:Key="MenuIconForeground" Color="#555555" />
+
     <!-- Menu -->
     <SolidColorBrush x:Key="MenuBackground" Color="#F0F0F0" />
     <SolidColorBrush x:Key="MenuForeground" Color="#1E1E1E" />
