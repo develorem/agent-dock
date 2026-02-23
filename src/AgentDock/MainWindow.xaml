@@ -10,6 +10,7 @@
         WindowStartupLocation="CenterScreen"
         WindowState="Maximized"
         WindowStyle="None"
+        Icon="/Assets/agentdock.png"
         Closing="MainWindow_Closing">
 
     <WindowChrome.WindowChrome>
@@ -38,14 +39,13 @@
                 </Grid.ColumnDefinitions>
 
                 <!-- App icon -->
-                <TextBlock Grid.Column="0"
-                           Text="&#xE799;"
-                           FontFamily="Segoe MDL2 Assets"
-                           FontSize="16"
-                           Foreground="{DynamicResource TitleBarForeground}"
-                           VerticalAlignment="Center"
-                           Margin="10,0,6,0"
-                           WindowChrome.IsHitTestVisibleInChrome="True" />
+                <Image Grid.Column="0"
+                       Source="/Assets/agentdock.png"
+                       Width="18" Height="18"
+                       RenderOptions.BitmapScalingMode="HighQuality"
+                       VerticalAlignment="Center"
+                       Margin="10,0,6,0"
+                       WindowChrome.IsHitTestVisibleInChrome="True" />
 
                 <!-- Product name -->
                 <TextBlock Grid.Column="1"
@@ -173,6 +173,13 @@
                                            Foreground="{DynamicResource MenuIconForeground}" />
                             </MenuItem.Icon>
                         </MenuItem>
+                        <MenuItem Header="Check _Prerequisites" Click="CheckPrerequisites_Click">
+                            <MenuItem.Icon>
+                                <TextBlock Text="&#xE9D5;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                           Foreground="{DynamicResource MenuIconForeground}" />
+                            </MenuItem.Icon>
+                        </MenuItem>
+                        <Separator />
                         <MenuItem Header="_About Agent Dock" Click="About_Click">
                             <MenuItem.Icon>
                                 <TextBlock Text="&#xE946;" FontFamily="Segoe MDL2 Assets" FontSize="12"
@@ -288,12 +295,60 @@
 
             <!-- Main Content Area -->
             <Grid x:Name="ContentArea" Background="{DynamicResource ContentBackground}">
-                <TextBlock x:Name="EmptyStateText"
-                           Text="Open a project folder to get started"
+                <StackPanel x:Name="EmptyStatePanel"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center">
+                    <Image Source="/Assets/agentdock.png"
+                           Width="192" Height="192"
+                           RenderOptions.BitmapScalingMode="HighQuality"
                            HorizontalAlignment="Center"
-                           VerticalAlignment="Center"
-                           FontSize="18"
-                           Foreground="{DynamicResource EmptyStateForeground}" />
+                           Margin="0,0,0,20" />
+                    <TextBlock Text="Open a project folder to get started"
+                               HorizontalAlignment="Center"
+                               FontSize="18"
+                               Foreground="{DynamicResource EmptyStateForeground}"
+                               Margin="0,0,0,16" />
+                    <Button Click="AddProject_Click"
+                            HorizontalAlignment="Center"
+                            Cursor="Hand"
+                            Padding="16,8"
+                            Background="{DynamicResource TabButtonActiveBackground}"
+                            BorderBrush="{DynamicResource TabButtonActiveBorderBrush}"
+                            BorderThickness="1"
+                            Foreground="{DynamicResource TabButtonForeground}">
+                        <Button.Template>
+                            <ControlTemplate TargetType="{x:Type Button}">
+                                <Border x:Name="Bd"
+                                        Background="{TemplateBinding Background}"
+                                        BorderBrush="{TemplateBinding BorderBrush}"
+                                        BorderThickness="{TemplateBinding BorderThickness}"
+                                        CornerRadius="4"
+                                        Padding="{TemplateBinding Padding}">
+                                    <ContentPresenter HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center" />
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="Bd" Property="Background"
+                                                Value="{DynamicResource TitleBarButtonHover}" />
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE710;"
+                                       FontFamily="Segoe MDL2 Assets"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TabButtonForeground}"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,6,0" />
+                            <TextBlock Text="Add Project Folder"
+                                       FontSize="13"
+                                       Foreground="{DynamicResource TabButtonForeground}"
+                                       VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
 
                 <ContentPresenter x:Name="ProjectContentHost"
                                   Visibility="Collapsed" />

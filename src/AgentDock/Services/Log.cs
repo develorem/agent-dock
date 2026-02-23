@@ -1,56 +1,51 @@
 using System.IO;
-using System.Text.Json;
 
 namespace AgentDock.Services;
 
 /// <summary>
-/// Simple file logger. Reads config from appsettings.json.
-/// Call Log.Init() once at app startup.
+/// Simple file logger. Creates a per-session log file in the logs folder.
+/// Call Log.Init() once at app startup after parsing arguments.
 /// </summary>
 public static class Log
 {
     private static string? _logFilePath;
     private static readonly object Lock = new();
 
-    public static void Init()
+    /// <summary>
+    /// The full path to the current session's log file.
+    /// </summary>
+    public static string? LogFilePath => _logFilePath;
+
+    /// <summary>
+    /// Initializes the logger with a per-session log file.
+    /// </summary>
+    /// <param name="logsFolder">
+    /// Directory to store logs. If null, defaults to a "logs" folder next to the exe.
+    /// </param>
+    /// <param name="sessionContext">
+    /// Optional context string (folder name or workspace name) included in the file name.
+    /// </param>
+    public static void Init(string? logsFolder = null, string? sessionContext = null)
     {
         try
         {
-            var settingsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "appsettings.json");
-            if (!File.Exists(settingsPath))
-            {
-                // Fallback defaults
-                _logFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs.txt");
-                File.WriteAllText(_logFilePath, $"[{DateTime.Now:HH:mm:ss.fff}] [INIT] Log started (no appsettings.json found, using default path)\n");
-                return;
-            }
+            logsFolder ??= Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs");
+            Directory.CreateDirectory(logsFolder);
 
-            var json = File.ReadAllText(settingsPath);
-            using var doc = JsonDocument.Parse(json);
-            var logging = doc.RootElement.GetProperty("Logging");
+            var timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
+            var safeName = SanitizeFileName(sessionContext);
+            var fileName = string.IsNullOrEmpty(safeName)
+                ? $"{timestamp}.log"
+                : $"{timestamp}_{safeName}.log";
 
-            var rawPath = logging.GetProperty("LogFilePath").GetString() ?? "logs.txt";
-            var clearOnStart = logging.GetProperty("ClearOnStart").GetBoolean();
-
-            // Resolve relative paths from the exe directory
-            _logFilePath = Path.IsPathRooted(rawPath)
-                ? rawPath
-                : Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, rawPath));
-
-            // Ensure directory exists
-            var dir = Path.GetDirectoryName(_logFilePath);
-            if (dir != null && !Directory.Exists(dir))
-                Directory.CreateDirectory(dir);
-
-            if (clearOnStart && File.Exists(_logFilePath))
-                File.Delete(_logFilePath);
+            _logFilePath = Path.Combine(logsFolder, fileName);
 
             Write("INIT", $"Log started — file: {_logFilePath}");
         }
         catch (Exception ex)
         {
             // Last resort — try writing next to the exe
-            _logFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs.txt");
+            _logFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "agent-dock.log");
             try { File.WriteAllText(_logFilePath, $"Log init error: {ex}\n"); } catch { }
         }
     }
@@ -76,5 +71,18 @@ public static class Log
                 // Swallow — can't log a logging failure
             }
         }
+    }
+
+    private static string? SanitizeFileName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return null;
+
+        var invalid = Path.GetInvalidFileNameChars();
+        var sanitized = new char[name.Length];
+        for (int i = 0; i < name.Length; i++)
+            sanitized[i] = Array.IndexOf(invalid, name[i]) >= 0 ? '_' : name[i];
+
+        return new string(sanitized).Trim();
     }
 }

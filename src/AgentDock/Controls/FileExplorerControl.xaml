@@ -4,8 +4,77 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              mc:Ignorable="d">
+    <UserControl.Resources>
+        <Style x:Key="ExplorerToolbarButton" TargetType="{x:Type Button}">
+            <Setter Property="Width" Value="28" />
+            <Setter Property="Height" Value="28" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource ExplorerForeground}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type Button}">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="3"
+                                Width="{TemplateBinding Width}"
+                                Height="{TemplateBinding Height}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource MenuHighlightBackground}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
     <Grid>
-        <TreeView x:Name="FileTree"
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Toolbar -->
+        <Border Grid.Row="0"
+                Background="{DynamicResource ExplorerToolbarBackground}"
+                BorderBrush="{DynamicResource ExplorerToolbarBorderBrush}"
+                BorderThickness="0,0,0,1">
+        <StackPanel Orientation="Horizontal" Margin="4,2,4,2">
+            <Button x:Name="VsCodeButton"
+                    Style="{StaticResource ExplorerToolbarButton}"
+                    ToolTip="Open in VS Code"
+                    Click="OpenInVsCode_Click"
+                    Visibility="Collapsed">
+                <TextBlock Text="&#xE70F;"
+                           FontFamily="Segoe MDL2 Assets"
+                           FontSize="14"
+                           Foreground="{DynamicResource ExplorerForeground}" />
+            </Button>
+            <Button Style="{StaticResource ExplorerToolbarButton}"
+                    ToolTip="Open in Explorer"
+                    Click="OpenInExplorer_Click">
+                <TextBlock Text="&#xED25;"
+                           FontFamily="Segoe MDL2 Assets"
+                           FontSize="14"
+                           Foreground="{DynamicResource ExplorerForeground}" />
+            </Button>
+            <Button Style="{StaticResource ExplorerToolbarButton}"
+                    ToolTip="Project Settings"
+                    Click="OpenSettings_Click">
+                <TextBlock Text="&#xE713;"
+                           FontFamily="Segoe MDL2 Assets"
+                           FontSize="14"
+                           Foreground="{DynamicResource ExplorerForeground}" />
+            </Button>
+        </StackPanel>
+        </Border>
+
+        <TreeView x:Name="FileTree" Grid.Row="1"
                   BorderThickness="0"
                   Background="Transparent"
                   VirtualizingPanel.IsVirtualizing="True"
@@ -13,8 +82,90 @@
             <TreeView.ItemContainerStyle>
                 <Style TargetType="TreeViewItem">
                     <Setter Property="IsExpanded" Value="False" />
+                    <Setter Property="Background" Value="Transparent" />
+                    <Setter Property="Foreground" Value="{DynamicResource ExplorerForeground}" />
+                    <Setter Property="Padding" Value="2,0" />
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="TreeViewItem">
+                                <StackPanel>
+                                    <Border x:Name="Bd"
+                                            Background="{TemplateBinding Background}"
+                                            Padding="{TemplateBinding Padding}">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <ToggleButton x:Name="Expander"
+                                                          Grid.Column="0"
+                                                          ClickMode="Press"
+                                                          IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}}"
+                                                          Width="16" Height="16"
+                                                          Margin="0,0,2,0">
+                                                <ToggleButton.Style>
+                                                    <Style TargetType="ToggleButton">
+                                                        <Setter Property="Focusable" Value="False" />
+                                                        <Setter Property="Template">
+                                                            <Setter.Value>
+                                                                <ControlTemplate TargetType="ToggleButton">
+                                                                    <Border Background="Transparent" Width="16" Height="16">
+                                                                        <Path x:Name="Arrow"
+                                                                              Data="M 4 0 L 8 4 L 4 8 Z"
+                                                                              Fill="{DynamicResource ExplorerForeground}"
+                                                                              HorizontalAlignment="Center"
+                                                                              VerticalAlignment="Center"
+                                                                              Width="8" Height="8"
+                                                                              Stretch="Uniform"
+                                                                              Opacity="0.6" />
+                                                                    </Border>
+                                                                    <ControlTemplate.Triggers>
+                                                                        <Trigger Property="IsChecked" Value="True">
+                                                                            <Setter TargetName="Arrow"
+                                                                                    Property="Data"
+                                                                                    Value="M 0 4 L 8 4 L 4 8 Z" />
+                                                                        </Trigger>
+                                                                    </ControlTemplate.Triggers>
+                                                                </ControlTemplate>
+                                                            </Setter.Value>
+                                                        </Setter>
+                                                    </Style>
+                                                </ToggleButton.Style>
+                                            </ToggleButton>
+                                            <ContentPresenter x:Name="PART_Header"
+                                                              Grid.Column="1"
+                                                              ContentSource="Header"
+                                                              HorizontalAlignment="Stretch" />
+                                        </Grid>
+                                    </Border>
+                                    <ItemsPresenter x:Name="ItemsHost" Margin="16,0,0,0" />
+                                </StackPanel>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="HasItems" Value="False">
+                                        <Setter TargetName="Expander" Property="Visibility" Value="Hidden" />
+                                    </Trigger>
+                                    <Trigger Property="IsSelected" Value="True">
+                                        <Setter TargetName="Bd" Property="Background"
+                                                Value="{DynamicResource ExplorerSelectedBackground}" />
+                                    </Trigger>
+                                    <MultiTrigger>
+                                        <MultiTrigger.Conditions>
+                                            <Condition Property="IsMouseOver" Value="True" />
+                                            <Condition Property="IsSelected" Value="False" />
+                                        </MultiTrigger.Conditions>
+                                        <Setter TargetName="Bd" Property="Background"
+                                                Value="{DynamicResource ExplorerHoverBackground}" />
+                                    </MultiTrigger>
+                                    <Trigger Property="IsExpanded" Value="False">
+                                        <Setter TargetName="ItemsHost" Property="Visibility" Value="Collapsed" />
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
                     <EventSetter Event="Expanded" Handler="TreeViewItem_Expanded" />
                     <EventSetter Event="MouseLeftButtonUp" Handler="TreeViewItem_MouseLeftButtonUp" />
+                    <EventSetter Event="MouseRightButtonUp" Handler="TreeViewItem_MouseRightButtonUp" />
                 </Style>
             </TreeView.ItemContainerStyle>
             <TreeView.ItemTemplate>

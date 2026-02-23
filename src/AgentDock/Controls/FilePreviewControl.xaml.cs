@@ -30,11 +30,14 @@ public partial class FilePreviewControl : UserControl
     public FilePreviewControl()
     {
         InitializeComponent();
+        ApplyLinkColor();
         ThemeManager.ThemeChanged += _ => OnThemeChanged();
     }
 
     private void OnThemeChanged()
     {
+        ApplyLinkColor();
+
         // Re-apply syntax highlighting with new theme colors
         if (_currentExtension != null && TextPreview.Visibility == Visibility.Visible && _diffColorizer == null)
         {
@@ -42,6 +45,35 @@ public partial class FilePreviewControl : UserControl
         }
 
         TextPreview.TextArea.TextView.Redraw();
+    }
+
+    private void ApplyLinkColor()
+    {
+        TextPreview.TextArea.TextView.LinkTextForegroundBrush =
+            ThemeManager.GetBrush("PreviewLinkForeground");
+    }
+
+    private MarkdownLinkColorizer? _linkColorizer;
+
+    private void ApplyMarkdownLinkColorizer(string extension)
+    {
+        RemoveMarkdownLinkColorizer();
+
+        if (extension.Equals(".md", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".markdown", StringComparison.OrdinalIgnoreCase))
+        {
+            _linkColorizer = new MarkdownLinkColorizer();
+            TextPreview.TextArea.TextView.LineTransformers.Add(_linkColorizer);
+        }
+    }
+
+    private void RemoveMarkdownLinkColorizer()
+    {
+        if (_linkColorizer != null)
+        {
+            TextPreview.TextArea.TextView.LineTransformers.Remove(_linkColorizer);
+            _linkColorizer = null;
+        }
     }
 
     public void ShowFile(string filePath)
@@ -116,6 +148,7 @@ public partial class FilePreviewControl : UserControl
             TextPreview.Load(filePath);
             _currentExtension = extension;
             TextPreview.SyntaxHighlighting = ThemeManager.GetHighlighting(extension);
+            ApplyMarkdownLinkColorizer(extension);
             TextPreview.ScrollToHome();
             TextPreview.Visibility = Visibility.Visible;
         }
@@ -165,6 +198,7 @@ public partial class FilePreviewControl : UserControl
         ImageContainer.Visibility = Visibility.Collapsed;
         NoPreviewMessage.Visibility = Visibility.Collapsed;
         RemoveDiffColorizer();
+        RemoveMarkdownLinkColorizer();
     }
 
     private void RemoveDiffColorizer()

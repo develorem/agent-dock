@@ -25,11 +25,6 @@
 
         <!-- File list -->
         <DockPanel x:Name="StatusPanel" Visibility="Collapsed">
-            <!-- Refresh button -->
-            <Button DockPanel.Dock="Top" Content="Refresh" Click="Refresh_Click"
-                    HorizontalAlignment="Left" Margin="4" Padding="8,2"
-                    FontSize="11" Cursor="Hand" />
-
             <ListView x:Name="FileList" BorderThickness="0" Background="Transparent"
                       SelectionMode="Single"
                       SelectionChanged="FileList_SelectionChanged">

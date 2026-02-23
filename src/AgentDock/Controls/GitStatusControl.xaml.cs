@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -15,7 +16,8 @@ public partial class GitStatusControl : UserControl
     public event Action<string, string>? DiffRequested;
 
     private GitService? _gitService;
-    private DispatcherTimer? _refreshTimer;
+    private FileSystemWatcher? _watcher;
+    private DispatcherTimer? _debounceTimer;
 
     public GitStatusControl()
     {
@@ -36,23 +38,101 @@ public partial class GitStatusControl : UserControl
         }
 
         RefreshStatus();
+        StartWatching(projectPath);
+    }
 
-        // Auto-refresh every 3 seconds
-        _refreshTimer = new DispatcherTimer
+    private void StartWatching(string projectPath)
+    {
+        // Debounce timer — coalesces rapid file changes into a single refresh
+        _debounceTimer = new DispatcherTimer
         {
-            Interval = TimeSpan.FromSeconds(3)
+            Interval = TimeSpan.FromMilliseconds(500)
         };
-        _refreshTimer.Tick += (_, _) => RefreshStatus();
-        _refreshTimer.Start();
+        _debounceTimer.Tick += (_, _) =>
+        {
+            _debounceTimer.Stop();
+            RefreshStatus();
+        };
+
+        try
+        {
+            _watcher = new FileSystemWatcher(projectPath)
+            {
+                IncludeSubdirectories = true,
+                NotifyFilter = NotifyFilters.FileName
+                             | NotifyFilters.DirectoryName
+                             | NotifyFilters.LastWrite
+                             | NotifyFilters.Size,
+                EnableRaisingEvents = true
+            };
+
+            _watcher.Changed += OnFileChanged;
+            _watcher.Created += OnFileChanged;
+            _watcher.Deleted += OnFileChanged;
+            _watcher.Renamed += OnFileChanged;
+            _watcher.Error += OnWatcherError;
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"GitStatusControl: FileSystemWatcher failed, falling back to polling — {ex.Message}");
+            FallBackToPolling();
+        }
+    }
+
+    private void OnFileChanged(object sender, FileSystemEventArgs e)
+    {
+        // Ignore .git/index.lock churn during git operations — wait for it to settle
+        Dispatcher.BeginInvoke(() =>
+        {
+            // Reset the debounce timer on every change
+            _debounceTimer?.Stop();
+            _debounceTimer?.Start();
+        });
+    }
+
+    private void OnWatcherError(object sender, ErrorEventArgs e)
+    {
+        Log.Warn($"GitStatusControl: FileSystemWatcher error — {e.GetException().Message}");
+
+        // Watcher buffer overflow or disconnection — do a refresh and restart
+        Dispatcher.BeginInvoke(() =>
+        {
+            RefreshStatus();
+            FallBackToPolling();
+        });
+    }
+
+    /// <summary>
+    /// Falls back to 3-second polling if FileSystemWatcher fails.
+    /// </summary>
+    private void FallBackToPolling()
+    {
+        DisposeWatcher();
+
+        var pollTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+        pollTimer.Tick += (_, _) => RefreshStatus();
+        pollTimer.Start();
+        _debounceTimer = pollTimer; // reuse field for cleanup
     }
 
     public void StopWatching()
     {
-        _refreshTimer?.Stop();
-        _refreshTimer = null;
+        _debounceTimer?.Stop();
+        _debounceTimer = null;
+        DisposeWatcher();
     }
 
-    private void RefreshStatus()
+    private void DisposeWatcher()
+    {
+        if (_watcher != null)
+        {
+            _watcher.EnableRaisingEvents = false;
+            _watcher.Dispose();
+            _watcher = null;
+        }
+    }
+
+    public void RefreshStatus()
     {
         if (_gitService == null)
             return;
@@ -79,11 +159,6 @@ public partial class GitStatusControl : UserControl
             .ToList();
 
         FileList.ItemsSource = viewItems;
-    }
-
-    private void Refresh_Click(object sender, RoutedEventArgs e)
-    {
-        RefreshStatus();
     }
 
     private void FileList_SelectionChanged(object sender, SelectionChangedEventArgs e)

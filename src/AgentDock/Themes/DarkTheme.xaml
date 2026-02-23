@@ -8,6 +8,7 @@
 
     <!-- Tab buttons -->
     <SolidColorBrush x:Key="TabButtonBorderBrush" Color="#555555" />
+    <SolidColorBrush x:Key="TabButtonHoverBorderBrush" Color="#888888" />
     <SolidColorBrush x:Key="TabButtonForeground" Color="#CCCCCC" />
     <SolidColorBrush x:Key="TabButtonActiveBackground" Color="#264F78" />
     <SolidColorBrush x:Key="TabButtonActiveBorderBrush" Color="#569CD6" />
@@ -22,12 +23,18 @@
 
     <!-- Tab icon -->
     <SolidColorBrush x:Key="TabIconNoSessionForeground" Color="#CCCCCC" />
+    <SolidColorBrush x:Key="TabIconInactiveDiamondForeground" Color="#9580D0" />
+    <SolidColorBrush x:Key="TabIconIdleForeground" Color="#4EC9B0" />
+    <SolidColorBrush x:Key="TabIconWorkingForeground" Color="#569CD6" />
+    <SolidColorBrush x:Key="TabIconWaitingForeground" Color="#FFB347" />
+    <SolidColorBrush x:Key="TabIconErrorForeground" Color="#FF6B6B" />
 
     <!-- File preview -->
     <SolidColorBrush x:Key="PreviewEmptyForeground" Color="#888888" />
     <SolidColorBrush x:Key="PreviewNoPreviewForeground" Color="#888888" />
     <SolidColorBrush x:Key="PreviewBackground" Color="#1E1E1E" />
     <SolidColorBrush x:Key="PreviewForeground" Color="#E0E0E0" />
+    <SolidColorBrush x:Key="PreviewLinkForeground" Color="#4EC9B0" />
 
     <!-- Git status -->
     <SolidColorBrush x:Key="GitPlaceholderForeground" Color="#888888" />
@@ -36,7 +43,12 @@
     <SolidColorBrush x:Key="GitStagedLabelForeground" Color="#888888" />
 
     <!-- File explorer -->
+    <SolidColorBrush x:Key="ExplorerToolbarBackground" Color="#2D2D30" />
+    <SolidColorBrush x:Key="ExplorerToolbarBorderBrush" Color="#3F3F46" />
     <SolidColorBrush x:Key="ExplorerForeground" Color="#E0E0E0" />
+    <SolidColorBrush x:Key="ExplorerSelectedBackground" Color="#264F78" />
+    <SolidColorBrush x:Key="ExplorerSelectedForeground" Color="#FFFFFF" />
+    <SolidColorBrush x:Key="ExplorerHoverBackground" Color="#2A2D2E" />
 
     <!-- Panel placeholder -->
     <SolidColorBrush x:Key="PlaceholderBackground" Color="#252526" />
@@ -67,6 +79,17 @@
     <SolidColorBrush x:Key="ScrollBarThumbPressed" Color="#EFEBEF" />
     <SolidColorBrush x:Key="ScrollBarArrowForeground" Color="#999999" />
     <SolidColorBrush x:Key="ScrollBarArrowHover" Color="#1C97EA" />
+
+    <!-- Help / About windows -->
+    <SolidColorBrush x:Key="HelpBackground" Color="#1E1E1E" />
+    <SolidColorBrush x:Key="HelpForeground" Color="#E0E0E0" />
+    <SolidColorBrush x:Key="HelpHeadingForeground" Color="#569CD6" />
+    <SolidColorBrush x:Key="HelpMutedForeground" Color="#888888" />
+    <SolidColorBrush x:Key="HelpLinkForeground" Color="#4EC9B0" />
+    <SolidColorBrush x:Key="HelpCardBackground" Color="#2D2D30" />
+    <SolidColorBrush x:Key="HelpCardBorderBrush" Color="#3F3F46" />
+    <SolidColorBrush x:Key="HelpKbdBackground" Color="#3E3E42" />
+    <SolidColorBrush x:Key="HelpKbdBorderBrush" Color="#555555" />
 
     <!-- Diff colors -->
     <Color x:Key="DiffAddedColor">#1E3A2B</Color>

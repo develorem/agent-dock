@@ -9,6 +9,7 @@ using System.Windows.Threading;
 using AgentDock.Controls;
 using AgentDock.Models;
 using AgentDock.Services;
+using AgentDock.Windows;
 using AvalonDock;
 using AvalonDock.Layout;
 using AvalonDock.Layout.Serialization;
@@ -35,6 +36,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<ProjectInfo, Button> _projectTabButtons = [];
     private readonly Dictionary<ProjectInfo, UIElement> _projectContents = [];
     private readonly Dictionary<ProjectInfo, AiChatControl> _projectChatControls = [];
+    private readonly Dictionary<ProjectInfo, GitStatusControl> _projectGitControls = [];
     private readonly Dictionary<ProjectInfo, Grid> _projectTabIcons = [];
     private readonly Dictionary<ProjectInfo, DispatcherTimer> _tabIconTimers = [];
     private readonly Dictionary<ProjectInfo, DockingManager> _projectDockingManagers = [];
@@ -43,6 +45,10 @@ public partial class MainWindow : Window
     // Workspace state
     private string? _currentWorkspacePath;
     private bool _workspaceDirty;
+    private bool _suppressDirty; // suppress during workspace load
+
+    // Prerequisites check results (populated on startup)
+    private List<(string Name, bool Found, string Detail)>? _prerequisiteResults;
 
     // Panel ContentId constants (stable across app runs)
     private const string FileExplorerId = "fileExplorer";
@@ -74,15 +80,31 @@ public partial class MainWindow : Window
         if (savedPosition != "Top")
             SetToolbarPosition(savedPosition);
 
+        // Restore saved Claude path override
+        var savedClaudePath = AppSettings.GetString("ClaudePath", "");
+        if (!string.IsNullOrEmpty(savedClaudePath))
+            ClaudeSession.ClaudeBinaryPath = savedClaudePath;
+
         // Populate recent workspaces menu
         PopulateRecentWorkspacesMenu();
 
-        // Check for startup workspace argument
+        // Check for startup arguments
         if (App.StartupWorkspacePath != null)
         {
             // Defer to after window is fully loaded
             Loaded += (_, _) => OpenWorkspaceFile(App.StartupWorkspacePath);
         }
+        else if (App.StartupProjectFolders.Count > 0)
+        {
+            Loaded += (_, _) =>
+            {
+                foreach (var folder in App.StartupProjectFolders)
+                    AddProjectFromPath(folder);
+            };
+        }
+
+        // Run prerequisite checks in background on startup
+        Loaded += async (_, _) => await RunStartupPrerequisiteChecks();
 
         Log.Info("MainWindow constructor complete");
     }
@@ -235,26 +257,235 @@ public partial class MainWindow : Window
 
     private void ClaudePathOverride_Click(object sender, RoutedEventArgs e)
     {
-        // Stub — Task 13/Settings
+        var currentPath = ClaudeSession.ClaudeBinaryPath;
+        var result = ThemedMessageBox.Show(
+            this,
+            $"Current Claude path: {currentPath}\n\n" +
+            "Do you want to select a custom Claude binary?\n" +
+            "Click Yes to browse, No to reset to default (\"claude\" from PATH).",
+            "Claude Path Override",
+            MessageBoxButton.YesNoCancel,
+            MessageBoxImage.Question);
+
+        if (result == MessageBoxResult.Cancel)
+            return;
+
+        if (result == MessageBoxResult.No)
+        {
+            ClaudeSession.ClaudeBinaryPath = "claude";
+            AppSettings.SetString("ClaudePath", "");
+            Log.Info("ClaudePathOverride: reset to default");
+            return;
+        }
+
+        var dialog = new OpenFileDialog
+        {
+            Title = "Select Claude Binary",
+            Filter = "Executable (*.exe)|*.exe|All Files (*.*)|*.*",
+            FileName = currentPath == "claude" ? "" : currentPath
+        };
+
+        if (dialog.ShowDialog() != true)
+            return;
+
+        ClaudeSession.ClaudeBinaryPath = dialog.FileName;
+        AppSettings.SetString("ClaudePath", dialog.FileName);
+        Log.Info($"ClaudePathOverride: set to '{dialog.FileName}'");
     }
 
     // --- Help Menu ---
 
     private void GettingStarted_Click(object sender, RoutedEventArgs e)
     {
-        // Stub — Task 13
+        var window = new Windows.GettingStartedWindow { Owner = this };
+        window.ShowDialog();
     }
 
     private void About_Click(object sender, RoutedEventArgs e)
     {
-        MessageBox.Show(
-            "Agent Dock v0.1.0\n\n" +
-            "Manage multiple Claude Code AI sessions across projects.\n\n" +
-            "Built by Develorem\n" +
-            "https://github.com/develorem/agent-dock",
-            "About Agent Dock",
+        var window = new Windows.AboutWindow { Owner = this };
+        window.ShowDialog();
+    }
+
+    private void CheckPrerequisites_Click(object sender, RoutedEventArgs e)
+    {
+        if (_prerequisiteResults == null)
+        {
+            // Shouldn't happen, but run synchronously as fallback
+            _prerequisiteResults = RunPrerequisiteChecks();
+        }
+        ShowPrerequisiteResults();
+    }
+
+    private void ShowPrerequisiteResults()
+    {
+        var lines = _prerequisiteResults!
+            .Select(r => r.Found
+                ? $"\u2714  {r.Name} — {r.Detail}"
+                : $"\u2716  {r.Name} — not found")
+            .ToList();
+
+        var allPassed = _prerequisiteResults!.All(r => r.Found);
+        var icon = allPassed ? MessageBoxImage.Information : MessageBoxImage.Warning;
+        var summary = allPassed ? "All prerequisites found." : "Some prerequisites are missing.";
+
+        ThemedMessageBox.Show(
+            this,
+            string.Join("\n", lines) + "\n\n" + summary,
+            "Prerequisites Check",
             MessageBoxButton.OK,
-            MessageBoxImage.Information);
+            icon);
+    }
+
+    private static List<(string Name, bool Found, string Detail)> RunPrerequisiteChecks()
+    {
+        var results = new List<(string Name, bool Found, string Detail)>();
+
+        // Command-line tools
+        var cliChecks = new (string Name, string Command, string Args)[]
+        {
+            ("Claude Code CLI", ClaudeSession.ClaudeBinaryPath, "--version"),
+            ("Git", "git", "--version"),
+            ("VS Code", "code", "--version"),
+            ("Cursor", "cursor", "--version"),
+        };
+
+        foreach (var (name, command, args) in cliChecks)
+        {
+            var (found, detail) = CheckCommand(command, args);
+            results.Add((name, found, detail));
+        }
+
+        // Visual Studio — check install directories
+        var vsResult = FindVisualStudio();
+        results.Add(vsResult);
+
+        return results;
+    }
+
+    private static (bool Found, string Detail) CheckCommand(string command, string args)
+    {
+        try
+        {
+            // Use cmd.exe /c to resolve .cmd/.bat wrappers (e.g. code, cursor)
+            var psi = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments = $"/c {command} {args}",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using var process = System.Diagnostics.Process.Start(psi);
+            if (process == null)
+                return (false, "");
+
+            var output = process.StandardOutput.ReadToEnd().Trim();
+            process.WaitForExit(5000);
+
+            if (process.ExitCode == 0)
+            {
+                // Take just the first line (e.g. VS Code outputs multiple lines)
+                var firstLine = output.Split('\n')[0].Trim();
+                return (true, firstLine);
+            }
+
+            return (false, "");
+        }
+        catch
+        {
+            return (false, "");
+        }
+    }
+
+    private static (string Name, bool Found, string Detail) FindVisualStudio()
+    {
+        // Try vswhere.exe first (official VS detection tool)
+        var vswhere = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+            "Microsoft Visual Studio", "Installer", "vswhere.exe");
+
+        if (File.Exists(vswhere))
+        {
+            try
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = vswhere,
+                    Arguments = "-latest -property catalog_productDisplayVersion -format value",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+
+                using var process = System.Diagnostics.Process.Start(psi);
+                if (process != null)
+                {
+                    var output = process.StandardOutput.ReadToEnd().Trim();
+                    process.WaitForExit(5000);
+
+                    if (process.ExitCode == 0 && !string.IsNullOrEmpty(output))
+                    {
+                        // Get the display name too
+                        var namePsi = new System.Diagnostics.ProcessStartInfo
+                        {
+                            FileName = vswhere,
+                            Arguments = "-latest -property catalog_productLineVersion -format value",
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true,
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                        };
+                        using var nameProcess = System.Diagnostics.Process.Start(namePsi);
+                        var yearName = nameProcess?.StandardOutput.ReadToEnd().Trim() ?? "";
+                        nameProcess?.WaitForExit(5000);
+
+                        return ("Visual Studio", true, $"{yearName} ({output})".Trim());
+                    }
+                }
+            }
+            catch { /* fall through to directory scan */ }
+        }
+
+        // Fallback: scan install directories
+        var editions = new[] { "Enterprise", "Professional", "Community", "Preview", "BuildTools" };
+        var years = new[] { "2026", "2022" };
+
+        foreach (var year in years)
+        {
+            foreach (var edition in editions)
+            {
+                var path = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                    "Microsoft Visual Studio", year, edition, "Common7", "IDE", "devenv.exe");
+                if (File.Exists(path))
+                    return ("Visual Studio", true, $"{year} {edition}");
+            }
+        }
+
+        return ("Visual Studio", false, "");
+    }
+
+    private async System.Threading.Tasks.Task RunStartupPrerequisiteChecks()
+    {
+        Log.Info("Startup prerequisite check: starting");
+        TitleBarText.Text = "Checking prerequisites...";
+
+        _prerequisiteResults = await System.Threading.Tasks.Task.Run(RunPrerequisiteChecks);
+
+        // Populate the static available tools set for context menus
+        FileExplorerControl.AvailableTools.Clear();
+        foreach (var (name, found, _) in _prerequisiteResults)
+        {
+            if (found)
+                FileExplorerControl.AvailableTools.Add(name);
+        }
+
+        UpdateTitleBar(); // restore normal title
+        Log.Info("Startup prerequisite check: complete");
     }
 
     // --- Project Management ---
@@ -299,7 +530,8 @@ public partial class MainWindow : Window
         if (!Directory.Exists(folderPath))
         {
             Log.Warn($"AddProjectFromPath: folder does not exist '{folderPath}'");
-            MessageBox.Show(
+            ThemedMessageBox.Show(
+                this,
                 $"The folder '{folderPath}' does not exist.",
                 "Folder Not Found",
                 MessageBoxButton.OK,
@@ -320,9 +552,10 @@ public partial class MainWindow : Window
         ToolbarBorder.Visibility = Visibility.Visible;
 
         // Create docking layout for this project
-        var (content, chatControl) = CreateProjectDockingLayout(project, layoutXml);
+        var (content, chatControl, gitControl) = CreateProjectDockingLayout(project, layoutXml);
         _projectContents[project] = content;
         _projectChatControls[project] = chatControl;
+        _projectGitControls[project] = gitControl;
         chatControl.SessionStateChanged += state => UpdateTabIcon(project, state);
 
         // Switch to the new project
@@ -333,24 +566,167 @@ public partial class MainWindow : Window
         return project;
     }
 
+    /// <summary>
+    /// Discovers all candidate project logo/icon image files in the project folder.
+    /// Returns absolute paths.
+    /// </summary>
+    internal static List<string> FindAllProjectLogos(string folderPath)
+    {
+        var results = new List<string>();
+        var folderName = Path.GetFileName(folderPath).ToLowerInvariant();
+        var folderNameCompact = folderName.Replace("-", "").Replace("_", "").Replace(" ", "");
+        var basenames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            { "logo", "icon", folderName, folderNameCompact };
+        string[] extensions = [".png", ".ico"]; // WPF can't render .svg natively
+        string[] dirs = [folderPath, Path.Combine(folderPath, "assets")];
+
+        foreach (var dir in dirs)
+        {
+            if (!Directory.Exists(dir)) continue;
+            foreach (var basename in basenames)
+            {
+                foreach (var ext in extensions)
+                {
+                    var path = Path.Combine(dir, basename + ext);
+                    if (File.Exists(path) && !results.Contains(path))
+                        results.Add(path);
+                }
+            }
+        }
+        return results;
+    }
+
+    private static string? FindProjectLogo(string folderPath)
+        => FindAllProjectLogos(folderPath).FirstOrDefault();
+
+    /// <summary>
+    /// Resolves the project icon: reads from .agentdock/settings.json,
+    /// auto-discovers if not set, persists the result, and creates the UI element.
+    /// </summary>
+    private static UIElement ResolveProjectIcon(string folderPath)
+    {
+        var settings = ProjectSettingsManager.Load(folderPath);
+
+        if (settings.Icon == null)
+        {
+            // Auto-discover and persist
+            var discovered = FindProjectLogo(folderPath);
+            if (discovered != null)
+            {
+                // Store as relative path if inside the project folder
+                settings.Icon = discovered.StartsWith(folderPath, StringComparison.OrdinalIgnoreCase)
+                    ? Path.GetRelativePath(folderPath, discovered)
+                    : discovered;
+            }
+            else
+            {
+                settings.Icon = "folder"; // default built-in
+            }
+
+            ProjectSettingsManager.Save(folderPath, settings);
+        }
+
+        return CreateIconElement(settings.Icon, folderPath, settings.IconColor);
+    }
+
+    /// <summary>
+    /// Creates a UIElement for the given icon value (built-in name or file path).
+    /// </summary>
+    private static UIElement CreateIconElement(string icon, string folderPath,
+        string? iconColor = null)
+    {
+        // Check if it's a built-in icon name
+        var builtIn = BuiltInIcons.Find(icon);
+        if (builtIn != null)
+        {
+            var foreground = iconColor != null
+                ? ParseHexBrush(iconColor) ?? ThemeManager.GetBrush("TabIconNoSessionForeground")
+                : ThemeManager.GetBrush("TabIconNoSessionForeground");
+
+            return new TextBlock
+            {
+                Text = builtIn.Glyph,
+                FontFamily = new FontFamily(builtIn.FontFamily),
+                FontSize = 14,
+                Foreground = foreground,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 5, 0)
+            };
+        }
+
+        // Resolve file path (relative to project folder or absolute)
+        var filePath = Path.IsPathRooted(icon) ? icon : Path.Combine(folderPath, icon);
+
+        if (File.Exists(filePath) && !filePath.EndsWith(".svg", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var img = new Image
+                {
+                    Source = new System.Windows.Media.Imaging.BitmapImage(new Uri(filePath)),
+                    Width = 16,
+                    Height = 16,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, 0, 5, 0)
+                };
+                RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
+                return img;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"Failed to load project icon '{filePath}': {ex.Message}");
+            }
+        }
+
+        // Fallback to default folder icon
+        var fallback = BuiltInIcons.Default;
+        return new TextBlock
+        {
+            Text = fallback.Glyph,
+            FontFamily = new FontFamily(fallback.FontFamily),
+            FontSize = 14,
+            Foreground = ThemeManager.GetBrush("TabIconNoSessionForeground"),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 5, 0)
+        };
+    }
+
+    /// <summary>
+    /// Parses a hex colour string (#RRGGBB) into a SolidColorBrush, or null if invalid.
+    /// </summary>
+    private static SolidColorBrush? ParseHexBrush(string hex)
+    {
+        try
+        {
+            var color = (Color)ColorConverter.ConvertFromString(hex);
+            return new SolidColorBrush(color);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private Button CreateProjectTabButton(ProjectInfo project)
     {
-        // Icon container: base icon + overlay badges
-        var iconGrid = new Grid
+        var iconElement = ResolveProjectIcon(project.FolderPath);
+
+        // Status diamond area (right of name): diamond + skull badge + error badge
+        var statusGrid = new Grid
         {
-            Width = 22,
-            Height = 22,
-            Margin = new Thickness(0, 0, 4, 0),
+            Width = 20,
+            Height = 20,
+            Margin = new Thickness(5, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center
         };
 
-        var baseIcon = new TextBlock
+        var diamondIcon = new TextBlock
         {
-            Name = "baseIcon",
-            Text = "\uED25", // folder icon — no session
-            FontFamily = new FontFamily("Segoe MDL2 Assets"),
-            FontSize = 16,
-            Foreground = ThemeManager.GetBrush("TabIconNoSessionForeground"),
+            Name = "diamondIcon",
+            Text = "\u25C7", // ◇ outline diamond — no session
+            FontFamily = new FontFamily("Segoe UI Symbol"),
+            FontSize = 14,
+            Foreground = ThemeManager.GetBrush("TabIconInactiveDiamondForeground"),
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center
         };
@@ -359,7 +735,7 @@ public partial class MainWindow : Window
         {
             Name = "skullBadge",
             Text = "\u2620", // ☠
-            FontSize = 10,
+            FontSize = 9,
             Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x44, 0x44)),
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Bottom,
@@ -370,18 +746,30 @@ public partial class MainWindow : Window
         {
             Name = "statusBadge",
             Text = "",
-            FontSize = 10,
+            FontSize = 9,
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Bottom,
-            Margin = new Thickness(0, 0, 0, 0),
             Visibility = Visibility.Collapsed
         };
 
-        iconGrid.Children.Add(baseIcon);
-        iconGrid.Children.Add(skullBadge);
-        iconGrid.Children.Add(statusBadge);
+        statusGrid.Children.Add(diamondIcon);
+        statusGrid.Children.Add(skullBadge);
+        statusGrid.Children.Add(statusBadge);
 
-        _projectTabIcons[project] = iconGrid;
+        _projectTabIcons[project] = statusGrid;
+
+        // Custom template: border only, no default button chrome
+        var tabTemplate = new ControlTemplate(typeof(Button));
+        var borderFactory = new FrameworkElementFactory(typeof(Border), "Bd");
+        borderFactory.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(BackgroundProperty));
+        borderFactory.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(BorderBrushProperty));
+        borderFactory.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(BorderThicknessProperty));
+        borderFactory.SetValue(Border.CornerRadiusProperty, new CornerRadius(3));
+        borderFactory.SetValue(Border.PaddingProperty, new TemplateBindingExtension(PaddingProperty));
+        var contentPresenter = new FrameworkElementFactory(typeof(ContentPresenter));
+        contentPresenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+        borderFactory.AppendChild(contentPresenter);
+        tabTemplate.VisualTree = borderFactory;
 
         var button = new Button
         {
@@ -396,24 +784,40 @@ public partial class MainWindow : Window
             HorizontalContentAlignment = HorizontalAlignment.Left,
             Tag = project,
             ToolTip = project.FolderPath,
+            Template = tabTemplate,
             Content = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
                 Children =
                 {
-                    iconGrid,
+                    iconElement,
                     new TextBlock
                     {
                         Text = project.FolderName,
                         FontSize = 12,
                         VerticalAlignment = VerticalAlignment.Center,
                         Foreground = ThemeManager.GetBrush("TabButtonForeground")
-                    }
+                    },
+                    statusGrid
                 }
             }
         };
 
         button.Click += (_, _) => SwitchToProject(project);
+
+        // Hover: highlight border only (no background fill)
+        button.MouseEnter += (_, _) =>
+        {
+            if (project != _activeProject)
+                button.BorderBrush = ThemeManager.GetBrush("TabButtonHoverBorderBrush");
+        };
+        button.MouseLeave += (_, _) =>
+        {
+            if (project != _activeProject)
+                button.BorderBrush = ThemeManager.GetBrush("TabButtonBorderBrush");
+            else
+                button.BorderBrush = ThemeManager.GetBrush("TabButtonActiveBorderBrush");
+        };
 
         // Right-click context menu
         button.ContextMenu = new ContextMenu
@@ -435,7 +839,7 @@ public partial class MainWindow : Window
         return item;
     }
 
-    private (DockingManager, AiChatControl) CreateProjectDockingLayout(ProjectInfo project, string? layoutXml = null)
+    private (DockingManager, AiChatControl, GitStatusControl) CreateProjectDockingLayout(ProjectInfo project, string? layoutXml = null)
     {
         Log.Info("CreateDockingLayout: starting");
         var dockingManager = new DockingManager
@@ -454,6 +858,20 @@ public partial class MainWindow : Window
 
         var filePreviewControl = new FilePreviewControl();
 
+        // Wire settings change from file explorer settings dialog
+        fileExplorerControl.ProjectSettingsChanged += () =>
+        {
+            if (_projectTabButtons.TryGetValue(project, out var tabBtn) &&
+                tabBtn.Content is StackPanel sp && sp.Children.Count > 0)
+            {
+                var settings = ProjectSettingsManager.Load(project.FolderPath);
+                sp.Children.RemoveAt(0);
+                sp.Children.Insert(0, CreateIconElement(
+                    settings.Icon ?? "folder", project.FolderPath,
+                    settings.IconColor));
+            }
+        };
+
         // Wire file explorer clicks to preview panel
         fileExplorerControl.FileSelected += filePath =>
         {
@@ -470,6 +888,13 @@ public partial class MainWindow : Window
 
         var aiChatControl = new AiChatControl();
         aiChatControl.Initialize(project.FolderPath);
+
+        // Refresh git status when Claude finishes working (transitions to Idle)
+        aiChatControl.SessionStateChanged += state =>
+        {
+            if (state == ClaudeSessionState.Idle)
+                gitStatusControl.RefreshStatus();
+        };
 
         // Map ContentId → control for layout serialization callback
         var controlMap = new Dictionary<string, object>
@@ -539,11 +964,24 @@ public partial class MainWindow : Window
         }
 
         _projectDockingManagers[project] = dockingManager;
+
+        // Track layout changes (panel rearrangement) for dirty state.
+        // Subscribe to Layout.Updated, and re-subscribe if AvalonDock replaces the Layout.
+        void SubscribeLayoutUpdated(LayoutRoot layout)
+            => layout.Updated += (_, _) => SetWorkspaceDirty();
+        SubscribeLayoutUpdated(dockingManager.Layout);
+        dockingManager.LayoutChanged += (_, _) =>
+        {
+            if (dockingManager.Layout != null)
+                SubscribeLayoutUpdated(dockingManager.Layout);
+            SetWorkspaceDirty();
+        };
+
         Log.Info("CreateDockingLayout: complete");
-        return (dockingManager, aiChatControl);
+        return (dockingManager, aiChatControl, gitStatusControl);
     }
 
-    private static void BuildDefaultLayout(
+    private void BuildDefaultLayout(
         DockingManager dockingManager,
         ProjectInfo project,
         FileExplorerControl fileExplorerControl,
@@ -551,7 +989,40 @@ public partial class MainWindow : Window
         FilePreviewControl filePreviewControl,
         AiChatControl aiChatControl)
     {
-        // --- Left column: File Explorer (top) + Git Status (bottom) ---
+        // Calculate column widths as ~33% each based on actual window width
+        var availableWidth = ActualWidth > 0 ? ActualWidth : SystemParameters.PrimaryScreenWidth;
+        var thirdWidth = (int)(availableWidth / 3);
+
+        // --- Left column: AI Chat ---
+        var aiChat = new LayoutAnchorable
+        {
+            Title = "AI Chat",
+            ContentId = AiChatId,
+            CanClose = false,
+            CanHide = false,
+            Content = aiChatControl
+        };
+
+        var leftColumn = new LayoutAnchorablePaneGroup
+        {
+            DockWidth = new GridLength(thirdWidth, GridUnitType.Pixel)
+        };
+        leftColumn.Children.Add(new LayoutAnchorablePane(aiChat));
+
+        // --- Center column: File Preview ---
+        var filePreview = new LayoutDocument
+        {
+            Title = "File Preview",
+            ContentId = FilePreviewId,
+            CanClose = false,
+            Content = filePreviewControl
+        };
+
+        var centerPane = new LayoutDocumentPane(filePreview);
+        var centerColumn = new LayoutDocumentPaneGroup();
+        centerColumn.Children.Add(centerPane);
+
+        // --- Right column: File Explorer (top) + Git Status (bottom) ---
         var fileExplorer = new LayoutAnchorable
         {
             Title = $"{project.FolderName} — File Explorer",
@@ -573,42 +1044,13 @@ public partial class MainWindow : Window
         var leftTopPane = new LayoutAnchorablePane(fileExplorer);
         var leftBottomPane = new LayoutAnchorablePane(gitStatus);
 
-        var leftColumn = new LayoutAnchorablePaneGroup
-        {
-            Orientation = Orientation.Vertical,
-            DockWidth = new GridLength(250, GridUnitType.Pixel)
-        };
-        leftColumn.Children.Add(leftTopPane);
-        leftColumn.Children.Add(leftBottomPane);
-
-        // --- Center column: File Preview ---
-        var filePreview = new LayoutDocument
-        {
-            Title = "File Preview",
-            ContentId = FilePreviewId,
-            CanClose = false,
-            Content = filePreviewControl
-        };
-
-        var centerPane = new LayoutDocumentPane(filePreview);
-        var centerColumn = new LayoutDocumentPaneGroup();
-        centerColumn.Children.Add(centerPane);
-
-        // --- Right column: AI Chat ---
-        var aiChat = new LayoutAnchorable
-        {
-            Title = "AI Chat",
-            ContentId = AiChatId,
-            CanClose = false,
-            CanHide = false,
-            Content = aiChatControl
-        };
-
         var rightColumn = new LayoutAnchorablePaneGroup
         {
-            DockWidth = new GridLength(350, GridUnitType.Pixel)
+            Orientation = Orientation.Vertical,
+            DockWidth = new GridLength(thirdWidth, GridUnitType.Pixel)
         };
-        rightColumn.Children.Add(new LayoutAnchorablePane(aiChat));
+        rightColumn.Children.Add(leftTopPane);
+        rightColumn.Children.Add(leftBottomPane);
 
         // --- Assemble the root layout ---
         var rootPanel = new LayoutPanel
@@ -676,7 +1118,7 @@ public partial class MainWindow : Window
         {
             ProjectContentHost.Content = content;
             ProjectContentHost.Visibility = Visibility.Visible;
-            EmptyStateText.Visibility = Visibility.Collapsed;
+            EmptyStatePanel.Visibility = Visibility.Collapsed;
         }
 
         // Update title bar
@@ -739,6 +1181,13 @@ public partial class MainWindow : Window
             _tabIconTimers.Remove(project);
         }
 
+        // Stop file system watcher for git status
+        if (_projectGitControls.TryGetValue(project, out var gitControl))
+        {
+            gitControl.StopWatching();
+            _projectGitControls.Remove(project);
+        }
+
         // Shutdown AI chat session
         if (_projectChatControls.TryGetValue(project, out var chatControl))
         {
@@ -777,7 +1226,7 @@ public partial class MainWindow : Window
             {
                 ProjectContentHost.Content = null;
                 ProjectContentHost.Visibility = Visibility.Collapsed;
-                EmptyStateText.Visibility = Visibility.Visible;
+                EmptyStatePanel.Visibility = Visibility.Visible;
                 ToolbarBorder.Visibility = Visibility.Collapsed;
                 UpdateTitleBar();
             }
@@ -794,6 +1243,12 @@ public partial class MainWindow : Window
             {
                 timer.Stop();
                 _tabIconTimers.Remove(project);
+            }
+
+            if (_projectGitControls.TryGetValue(project, out var gitControl))
+            {
+                gitControl.StopWatching();
+                _projectGitControls.Remove(project);
             }
 
             if (_projectChatControls.TryGetValue(project, out var chatControl))
@@ -817,7 +1272,7 @@ public partial class MainWindow : Window
         _activeProject = null;
         ProjectContentHost.Content = null;
         ProjectContentHost.Visibility = Visibility.Collapsed;
-        EmptyStateText.Visibility = Visibility.Visible;
+        EmptyStatePanel.Visibility = Visibility.Visible;
         ToolbarBorder.Visibility = Visibility.Collapsed;
     }
 
@@ -834,12 +1289,12 @@ public partial class MainWindow : Window
 
     private void UpdateTabIcon(ProjectInfo project, ClaudeSessionState state)
     {
-        if (!_projectTabIcons.TryGetValue(project, out var iconGrid))
+        if (!_projectTabIcons.TryGetValue(project, out var statusGrid))
             return;
 
-        var baseIcon = (TextBlock)iconGrid.Children[0];
-        var skullBadge = (TextBlock)iconGrid.Children[1];
-        var statusBadge = (TextBlock)iconGrid.Children[2];
+        var diamondIcon = (TextBlock)statusGrid.Children[0];
+        var skullBadge = (TextBlock)statusGrid.Children[1];
+        var statusBadge = (TextBlock)statusGrid.Children[2];
 
         // Stop any existing pulse timer for this project
         if (_tabIconTimers.TryGetValue(project, out var existingTimer))
@@ -855,68 +1310,64 @@ public partial class MainWindow : Window
         skullBadge.Visibility = Visibility.Collapsed;
         statusBadge.Visibility = Visibility.Collapsed;
         statusBadge.Opacity = 1.0;
-        baseIcon.Opacity = 1.0;
-        baseIcon.FontSize = 18;
+        diamondIcon.Opacity = 1.0;
 
         switch (state)
         {
             case ClaudeSessionState.NotStarted:
             case ClaudeSessionState.Exited:
-                baseIcon.Text = "\uED25"; // folder icon
-                baseIcon.FontFamily = new FontFamily("Segoe MDL2 Assets");
-                baseIcon.FontSize = 16;
-                baseIcon.Foreground = ThemeManager.GetBrush("TabIconNoSessionForeground");
+                diamondIcon.Text = "\u25C7"; // ◇ outline diamond
+                diamondIcon.Foreground = ThemeManager.GetBrush("TabIconInactiveDiamondForeground");
                 break;
 
             case ClaudeSessionState.Initializing:
-                baseIcon.Text = "\u25C6"; // ◆
-                baseIcon.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xB3, 0x47)); // orange — waiting
+                diamondIcon.Text = "\u25C6"; // ◆ filled diamond
+                diamondIcon.Foreground = ThemeManager.GetBrush("TabIconWaitingForeground");
                 if (isDangerous)
                     skullBadge.Visibility = Visibility.Visible;
                 break;
 
             case ClaudeSessionState.Idle:
-                baseIcon.Text = "\u25C6"; // ◆
-                baseIcon.Foreground = new SolidColorBrush(Color.FromRgb(0x4E, 0xC9, 0xB0)); // green
+                diamondIcon.Text = "\u25C6"; // ◆
+                diamondIcon.Foreground = ThemeManager.GetBrush("TabIconIdleForeground");
                 if (isDangerous)
                     skullBadge.Visibility = Visibility.Visible;
                 break;
 
             case ClaudeSessionState.Working:
-                baseIcon.Text = "\u25C6"; // ◆
-                baseIcon.Foreground = new SolidColorBrush(Color.FromRgb(0x56, 0x9C, 0xD6)); // blue
+                diamondIcon.Text = "\u25C6"; // ◆
+                diamondIcon.Foreground = ThemeManager.GetBrush("TabIconWorkingForeground");
                 if (isDangerous)
                     skullBadge.Visibility = Visibility.Visible;
-                // Pulse the main diamond
-                StartBaseIconPulse(project, baseIcon);
+                StartDiamondPulse(project, diamondIcon);
                 break;
 
             case ClaudeSessionState.WaitingForPermission:
-                baseIcon.Text = "\u25C6"; // ◆
-                baseIcon.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xB3, 0x47)); // orange
+                diamondIcon.Text = "\u25C6"; // ◆
+                diamondIcon.Foreground = ThemeManager.GetBrush("TabIconWaitingForeground");
                 if (isDangerous)
                     skullBadge.Visibility = Visibility.Visible;
                 break;
 
             case ClaudeSessionState.Error:
-                baseIcon.Text = "\u25C6"; // ◆
-                baseIcon.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x6B, 0x6B)); // red
+                diamondIcon.Text = "\u25C6"; // ◆
+                diamondIcon.Foreground = ThemeManager.GetBrush("TabIconErrorForeground");
                 statusBadge.Text = "!";
                 statusBadge.FontWeight = FontWeights.Bold;
-                statusBadge.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x6B, 0x6B)); // red
+                statusBadge.Foreground = ThemeManager.GetBrush("TabIconErrorForeground");
                 statusBadge.Visibility = Visibility.Visible;
                 break;
         }
     }
 
-    private void StartBaseIconPulse(ProjectInfo project, TextBlock baseIcon)
+    private void StartDiamondPulse(ProjectInfo project, TextBlock diamondIcon)
     {
         var bright = true;
         var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
         timer.Tick += (_, _) =>
         {
             bright = !bright;
-            baseIcon.Opacity = bright ? 1.0 : 0.3;
+            diamondIcon.Opacity = bright ? 1.0 : 0.3;
         };
         timer.Start();
         _tabIconTimers[project] = timer;
@@ -926,11 +1377,10 @@ public partial class MainWindow : Window
 
     private void SetWorkspaceDirty()
     {
-        if (!_workspaceDirty)
-        {
-            _workspaceDirty = true;
-            UpdateTitleBar();
-        }
+        if (_suppressDirty || _workspaceDirty)
+            return;
+        _workspaceDirty = true;
+        UpdateTitleBar();
     }
 
     private void SaveWorkspace()
@@ -997,7 +1447,8 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             Log.Error($"SaveWorkspace: failed — {ex.Message}");
-            MessageBox.Show(
+            ThemedMessageBox.Show(
+                this,
                 $"Failed to save workspace:\n\n{ex.Message}",
                 "Save Error",
                 MessageBoxButton.OK,
@@ -1017,7 +1468,8 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             Log.Error($"OpenWorkspaceFile: failed to load — {ex.Message}");
-            MessageBox.Show(
+            ThemedMessageBox.Show(
+                this,
                 $"Failed to open workspace:\n\n{ex.Message}",
                 "Open Error",
                 MessageBoxButton.OK,
@@ -1027,7 +1479,8 @@ public partial class MainWindow : Window
 
         if (workspace == null)
         {
-            MessageBox.Show(
+            ThemedMessageBox.Show(
+                this,
                 $"Could not read workspace file:\n{filePath}",
                 "Open Error",
                 MessageBoxButton.OK,
@@ -1037,6 +1490,9 @@ public partial class MainWindow : Window
 
         // Close all current projects
         CloseAllProjects();
+
+        // Suppress dirty tracking while restoring
+        _suppressDirty = true;
 
         // Apply theme
         if (Enum.TryParse<AppTheme>(workspace.Theme, out var theme))
@@ -1062,6 +1518,7 @@ public partial class MainWindow : Window
         if (activeProject != null)
             SwitchToProject(activeProject);
 
+        _suppressDirty = false;
         _currentWorkspacePath = filePath;
         _workspaceDirty = false;
         UpdateTitleBar();
@@ -1078,7 +1535,8 @@ public partial class MainWindow : Window
         if (!_workspaceDirty || _projects.Count == 0)
             return true;
 
-        var result = MessageBox.Show(
+        var result = ThemedMessageBox.Show(
+            this,
             "Save workspace changes before continuing?",
             "Agent Dock",
             MessageBoxButton.YesNoCancel,
@@ -1197,7 +1655,8 @@ public partial class MainWindow : Window
         // Prompt to save if dirty
         if (_workspaceDirty && _projects.Count > 0)
         {
-            var result = MessageBox.Show(
+            var result = ThemedMessageBox.Show(
+                this,
                 "Save workspace changes before closing?",
                 "Agent Dock",
                 MessageBoxButton.YesNoCancel,
@@ -1221,6 +1680,11 @@ public partial class MainWindow : Window
         foreach (var timer in _tabIconTimers.Values)
             timer.Stop();
         _tabIconTimers.Clear();
+
+        // Stop all file system watchers
+        foreach (var gitControl in _projectGitControls.Values)
+            gitControl.StopWatching();
+        _projectGitControls.Clear();
 
         // Kill all Claude sessions gracefully
         foreach (var chatControl in _projectChatControls.Values)
@@ -1249,9 +1713,22 @@ public partial class MainWindow : Window
             var isActive = project == _activeProject;
             SetTabButtonActive(button, isActive);
 
-            // Update tab text foreground
-            if (button.Content is StackPanel sp && sp.Children.Count > 1 && sp.Children[1] is TextBlock tb)
-                tb.Foreground = ThemeManager.GetBrush("TabButtonForeground");
+            if (button.Content is StackPanel sp)
+            {
+                // Re-create icon element from settings (handles custom colours + theme default)
+                if (sp.Children.Count > 0)
+                {
+                    var settings = ProjectSettingsManager.Load(project.FolderPath);
+                    sp.Children.RemoveAt(0);
+                    sp.Children.Insert(0, CreateIconElement(
+                        settings.Icon ?? "folder", project.FolderPath,
+                        settings.IconColor));
+                }
+
+                // Update tab text foreground (child 1)
+                if (sp.Children.Count > 1 && sp.Children[1] is TextBlock tb)
+                    tb.Foreground = ThemeManager.GetBrush("TabButtonForeground");
+            }
         }
 
         // Re-apply tab icon foregrounds for no-session state
