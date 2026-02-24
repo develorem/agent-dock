@@ -4,7 +4,8 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:avalonedit="http://icsharpcode.net/sharpdevelop/avalonedit"
-             mc:Ignorable="d">
+             mc:Ignorable="d"
+             Background="{DynamicResource PreviewBackground}">
     <Grid>
         <!-- Empty state -->
         <TextBlock x:Name="EmptyMessage"
@@ -24,6 +25,7 @@
                                BorderThickness="0"
                                Background="{DynamicResource PreviewBackground}"
                                Foreground="{DynamicResource PreviewForeground}"
+                               LineNumbersForeground="{DynamicResource PreviewLineNumberForeground}"
                                HorizontalScrollBarVisibility="Auto"
                                VerticalScrollBarVisibility="Auto" />
 

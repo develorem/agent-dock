@@ -35,6 +35,7 @@
     <SolidColorBrush x:Key="PreviewBackground" Color="#0D1117" />
     <SolidColorBrush x:Key="PreviewForeground" Color="#C9D1D9" />
     <SolidColorBrush x:Key="PreviewLinkForeground" Color="#79C0FF" />
+    <SolidColorBrush x:Key="PreviewLineNumberForeground" Color="#484F58" />
 
     <!-- Git status -->
     <SolidColorBrush x:Key="GitPlaceholderForeground" Color="#8B949E" />

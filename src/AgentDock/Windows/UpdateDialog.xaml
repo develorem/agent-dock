@@ -83,7 +83,7 @@
                     <TextBlock Text="&#xE946;"
                                FontFamily="Segoe MDL2 Assets"
                                FontSize="28"
-                               Foreground="#2060B0"
+                               Foreground="{DynamicResource HelpHeadingForeground}"
                                VerticalAlignment="Top"
                                Margin="0,0,16,0" />
                     <TextBlock Text="A new version of Agent Dock is available."
