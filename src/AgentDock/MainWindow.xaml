@@ -104,25 +104,12 @@
                         </MenuItem>
                     </MenuItem>
                     <MenuItem Header="S_ettings">
-                        <MenuItem Header="_Theme">
+                        <MenuItem Header="_Theme" x:Name="ThemeMenu">
                             <MenuItem.Icon>
                                 <TextBlock Text="&#xE790;" FontFamily="Segoe MDL2 Assets" FontSize="12"
                                            Foreground="{DynamicResource MenuIconForeground}" />
                             </MenuItem.Icon>
-                            <MenuItem Header="_Light" x:Name="ThemeLightMenu" IsCheckable="True" IsChecked="True"
-                                      Click="ThemeLight_Click">
-                                <MenuItem.Icon>
-                                    <TextBlock Text="&#xE706;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                                               Foreground="{DynamicResource MenuIconForeground}" />
-                                </MenuItem.Icon>
-                            </MenuItem>
-                            <MenuItem Header="_Dark" x:Name="ThemeDarkMenu" IsCheckable="True"
-                                      Click="ThemeDark_Click">
-                                <MenuItem.Icon>
-                                    <TextBlock Text="&#xE708;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                                               Foreground="{DynamicResource MenuIconForeground}" />
-                                </MenuItem.Icon>
-                            </MenuItem>
+                            <!-- Items populated dynamically in code-behind -->
                         </MenuItem>
                         <MenuItem Header="Toolbar _Position">
                             <MenuItem.Icon>

@@ -1,25 +1,25 @@
 using System.Windows;
 using System.Windows.Media;
+using AgentDock.Models;
 using HL.Interfaces;
 using ICSharpCode.AvalonEdit.Highlighting;
 
 namespace AgentDock.Services;
 
-public enum AppTheme
-{
-    Light,
-    Dark
-}
-
 public static class ThemeManager
 {
-
     private static ResourceDictionary? _currentThemeDictionary;
     private static bool _sharedStylesLoaded;
 
-    public static AppTheme CurrentTheme { get; private set; } = AppTheme.Light;
+    public static ThemeDescriptor CurrentTheme { get; private set; } = ThemeRegistry.Default;
 
-    public static event Action<AppTheme>? ThemeChanged;
+    /// <summary>
+    /// Convenience: returns the base variant (Dark/Light) of the current theme.
+    /// Used by AvalonDock, syntax highlighting, and any code that only cares about dark vs light.
+    /// </summary>
+    public static ThemeBaseVariant BaseVariant => CurrentTheme.BaseVariant;
+
+    public static event Action<ThemeDescriptor>? ThemeChanged;
 
     /// <summary>
     /// Themed highlighting manager from Dirkster.HL — provides dark-mode-aware syntax colors.
@@ -33,7 +33,7 @@ public static class ThemeManager
         ApplyTheme(saved, raiseEvent: false);
     }
 
-    public static void ApplyTheme(AppTheme theme, bool raiseEvent = true)
+    public static void ApplyTheme(ThemeDescriptor theme, bool raiseEvent = true)
     {
         CurrentTheme = theme;
 
@@ -52,21 +52,28 @@ public static class ThemeManager
         if (_currentThemeDictionary != null)
             app.Resources.MergedDictionaries.Remove(_currentThemeDictionary);
 
-        // Load the new theme dictionary
-        var uri = theme == AppTheme.Dark
-            ? new Uri("Themes/DarkTheme.xaml", UriKind.Relative)
-            : new Uri("Themes/LightTheme.xaml", UriKind.Relative);
-
+        // Load the new theme dictionary by its ResourcePath
+        var uri = new Uri(theme.ResourcePath, UriKind.Relative);
         _currentThemeDictionary = new ResourceDictionary { Source = uri };
         app.Resources.MergedDictionaries.Add(_currentThemeDictionary);
 
-        // Switch syntax highlighting theme
-        HighlightingManager.SetCurrentTheme(theme == AppTheme.Dark ? "VS2019_Dark" : "Light");
+        // Switch syntax highlighting based on base variant
+        HighlightingManager.SetCurrentTheme(
+            theme.BaseVariant == ThemeBaseVariant.Dark ? "VS2019_Dark" : "Light");
 
         SaveThemePreference(theme);
 
         if (raiseEvent)
             ThemeChanged?.Invoke(theme);
+    }
+
+    /// <summary>
+    /// Convenience overload: apply by theme Id string.
+    /// </summary>
+    public static void ApplyTheme(string themeId)
+    {
+        var theme = ThemeRegistry.Resolve(themeId);
+        ApplyTheme(theme);
     }
 
     public static SolidColorBrush GetBrush(string key)
@@ -88,7 +95,7 @@ public static class ThemeManager
             return themed;
 
         // Only fall back to non-themed AvalonEdit in light mode
-        if (CurrentTheme == AppTheme.Light)
+        if (CurrentTheme.BaseVariant == ThemeBaseVariant.Light)
         {
             return ICSharpCode.AvalonEdit.Highlighting.HighlightingManager.Instance
                 .GetDefinitionByExtension(extension);
@@ -97,14 +104,14 @@ public static class ThemeManager
         return null;
     }
 
-    private static AppTheme LoadThemePreference()
+    private static ThemeDescriptor LoadThemePreference()
     {
-        var value = AppSettings.GetString("Theme", "Light");
-        return value == "Dark" ? AppTheme.Dark : AppTheme.Light;
+        var value = AppSettings.GetString("Theme", "Obsidian");
+        return ThemeRegistry.Resolve(value);
     }
 
-    private static void SaveThemePreference(AppTheme theme)
+    private static void SaveThemePreference(ThemeDescriptor theme)
     {
-        AppSettings.SetString("Theme", theme.ToString());
+        AppSettings.SetString("Theme", theme.Id);
     }
 }

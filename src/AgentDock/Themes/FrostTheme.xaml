@@ -102,4 +102,73 @@
     <SolidColorBrush x:Key="DiffRemovedBackground" Color="{StaticResource DiffRemovedColor}" />
     <SolidColorBrush x:Key="DiffHunkHeaderBackground" Color="{StaticResource DiffHunkHeaderColor}" />
 
+    <!-- AI Chat panel -->
+    <SolidColorBrush x:Key="ChatBackground" Color="#FFFFFF" />
+    <SolidColorBrush x:Key="ChatTextForeground" Color="#1E1E1E" />
+    <SolidColorBrush x:Key="ChatMutedForeground" Color="#888888" />
+    <SolidColorBrush x:Key="ChatSubtleForeground" Color="#999999" />
+
+    <!-- Chat status bar -->
+    <SolidColorBrush x:Key="ChatStatusBarBackground" Color="#F0F0F0" />
+    <SolidColorBrush x:Key="ChatStatusWorkingForeground" Color="#2060B0" />
+    <SolidColorBrush x:Key="ChatStatusWarningForeground" Color="#D08B20" />
+    <SolidColorBrush x:Key="ChatStatusErrorForeground" Color="#D03030" />
+
+    <!-- Chat input -->
+    <SolidColorBrush x:Key="ChatInputBackground" Color="#FFFFFF" />
+    <SolidColorBrush x:Key="ChatInputForeground" Color="#1E1E1E" />
+    <SolidColorBrush x:Key="ChatInputBorderBrush" Color="#CCCCCC" />
+    <SolidColorBrush x:Key="ChatInputPromptForeground" Color="#2060B0" />
+
+    <!-- Chat buttons -->
+    <SolidColorBrush x:Key="ChatButtonBackground" Color="#0E639C" />
+    <SolidColorBrush x:Key="ChatButtonForeground" Color="#FFFFFF" />
+    <SolidColorBrush x:Key="ChatButtonBorderBrush" Color="#1177BB" />
+
+    <!-- Chat agent selection cards -->
+    <SolidColorBrush x:Key="ChatAgentCardBackground" Color="#F6F6F6" />
+    <SolidColorBrush x:Key="ChatAgentCardBorderBrush" Color="#CCCCCC" />
+
+    <!-- Chat user messages -->
+    <SolidColorBrush x:Key="ChatUserBubbleBackground" Color="#D0E0F0" />
+    <SolidColorBrush x:Key="ChatUserLabelForeground" Color="#2060B0" />
+
+    <!-- Chat assistant messages -->
+    <SolidColorBrush x:Key="ChatAssistantBubbleBackground" Color="#F0F0F0" />
+    <SolidColorBrush x:Key="ChatAssistantLabelForeground" Color="#1A8A5C" />
+
+    <!-- Chat thinking -->
+    <SolidColorBrush x:Key="ChatThinkingBackground" Color="#F6F6F6" />
+    <SolidColorBrush x:Key="ChatThinkingBorderBrush" Color="#E0E0E0" />
+
+    <!-- Chat execution -->
+    <SolidColorBrush x:Key="ChatExecutionBackground" Color="#F0F8F0" />
+    <SolidColorBrush x:Key="ChatExecutionBorderBrush" Color="#C8E0C8" />
+    <SolidColorBrush x:Key="ChatExecutionForeground" Color="#2E7D32" />
+
+    <!-- Chat permission prompt -->
+    <SolidColorBrush x:Key="ChatPermissionBackground" Color="#FFF8E1" />
+    <SolidColorBrush x:Key="ChatPermissionBorderBrush" Color="#F9A825" />
+    <SolidColorBrush x:Key="ChatPermissionTitleForeground" Color="#E65100" />
+
+    <!-- Chat question prompt -->
+    <SolidColorBrush x:Key="ChatQuestionBackground" Color="#E8EAF6" />
+    <SolidColorBrush x:Key="ChatQuestionBorderBrush" Color="#5C6BC0" />
+    <SolidColorBrush x:Key="ChatQuestionTitleForeground" Color="#283593" />
+    <SolidColorBrush x:Key="ChatOptionButtonBackground" Color="#E8EAF6" />
+    <SolidColorBrush x:Key="ChatOptionButtonBorderBrush" Color="#9FA8DA" />
+
+    <!-- Chat warning -->
+    <SolidColorBrush x:Key="ChatWarningBackground" Color="#FFF3E0" />
+    <SolidColorBrush x:Key="ChatWarningBorderBrush" Color="#FFB74D" />
+
+    <!-- Chat danger / stop -->
+    <SolidColorBrush x:Key="ChatDangerBackground" Color="#FFEBEE" />
+    <SolidColorBrush x:Key="ChatDangerBorderBrush" Color="#EF5350" />
+    <SolidColorBrush x:Key="ChatDangerForeground" Color="#C62828" />
+    <SolidColorBrush x:Key="ChatDangerMutedForeground" Color="#E57373" />
+    <SolidColorBrush x:Key="ChatStopButtonBorderBrush" Color="#EF5350" />
+    <SolidColorBrush x:Key="ChatKillButtonBackground" Color="#FFCDD2" />
+    <SolidColorBrush x:Key="ChatKillButtonBorderBrush" Color="#EF5350" />
+
 </ResourceDictionary>
