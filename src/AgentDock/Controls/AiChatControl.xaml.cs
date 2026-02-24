@@ -16,11 +16,11 @@ public partial class AiChatControl : UserControl
     private string _projectPath = "";
 
     // Tracks the currently streaming message block so we can append deltas
-    private TextBlock? _streamingBlock;
+    private TextBox? _streamingBlock;
     private string _streamingText = "";
 
     // Thinking bubble tracking
-    private TextBlock? _thinkingBlock;
+    private TextBox? _thinkingBlock;
     private string _thinkingText = "";
     private Border? _thinkingBubble;
     private bool _thinkingExpanded = true; // expanded while streaming, collapsed when done
@@ -34,7 +34,7 @@ public partial class AiChatControl : UserControl
     private Border? _waitingBubble;
 
     // Finalized thinking bubble — kept so tool-use blocks can be appended
-    private TextBlock? _finalizedThinkingContentBlock;
+    private TextBox? _finalizedThinkingContentBlock;
     private string _finalizedThinkingFullText = "";
 
     /// <summary>
@@ -288,14 +288,9 @@ public partial class AiChatControl : UserControl
         {
             // Start a new thinking bubble
             _thinkingText = "";
-            _thinkingBlock = new TextBlock
-            {
-                FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
-                FontSize = 11,
-                Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)),
-                FontStyle = FontStyles.Italic,
-                TextWrapping = TextWrapping.Wrap
-            };
+            _thinkingBlock = CreateSelectableText(11,
+                new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)),
+                FontStyles.Italic);
             _thinkingBubble = CreateThinkingBubble(_thinkingBlock);
             _thinkingExpanded = true;
             MessageList.Children.Add(_thinkingBubble);
@@ -349,14 +344,9 @@ public partial class AiChatControl : UserControl
         {
             // No content_block_start arrived — create thinking bubble on first delta
             _thinkingText = "";
-            _thinkingBlock = new TextBlock
-            {
-                FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
-                FontSize = 11,
-                Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)),
-                FontStyle = FontStyles.Italic,
-                TextWrapping = TextWrapping.Wrap
-            };
+            _thinkingBlock = CreateSelectableText(11,
+                new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)),
+                FontStyles.Italic);
             _thinkingBubble = CreateThinkingBubble(_thinkingBlock);
             _thinkingExpanded = true;
             MessageList.Children.Add(_thinkingBubble);
@@ -445,21 +435,37 @@ public partial class AiChatControl : UserControl
         _finalizedThinkingContentBlock = _thinkingBlock;
 
         var contentBlock = _thinkingBlock;
-        var bubble = _thinkingBubble;
         var expanded = false;
 
-        // Collapse to a clickable label
+        // Collapse content, add chevron to header
         _thinkingExpanded = false;
-        contentBlock.Text = "Thinking  [click to expand]";
+        contentBlock.Visibility = Visibility.Collapsed;
 
-        bubble.Cursor = Cursors.Hand;
-        bubble.MouseLeftButtonUp += (_, _) =>
+        var panel = (StackPanel)_thinkingBubble.Child;
+        var label = (UIElement)panel.Children[0];
+        panel.Children.RemoveAt(0);
+
+        var chevron = CreateCollapseChevron(false);
+        var headerRow = new StackPanel { Orientation = Orientation.Horizontal, Cursor = Cursors.Hand };
+        headerRow.Children.Add(chevron);
+        headerRow.Children.Add(label);
+        panel.Children.Insert(0, headerRow);
+
+        headerRow.MouseLeftButtonUp += (_, e) =>
         {
             expanded = !expanded;
-            // Read from field so appended tool info is included
-            contentBlock.Text = expanded
-                ? _finalizedThinkingFullText
-                : "Thinking  [click to expand]";
+            chevron.Text = expanded ? "▼" : "▶";
+            if (expanded)
+            {
+                // Read from field so appended tool info is included
+                contentBlock.Text = _finalizedThinkingFullText;
+                contentBlock.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                contentBlock.Visibility = Visibility.Collapsed;
+            }
+            e.Handled = true;
         };
 
         _thinkingBlock = null;
@@ -558,14 +564,9 @@ public partial class AiChatControl : UserControl
             Foreground = new SolidColorBrush(Color.FromRgb(0x56, 0x9C, 0xD6)),
             Margin = new Thickness(0, 0, 0, 2)
         };
-        var content = new TextBlock
-        {
-            Text = text,
-            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
-            FontSize = 12,
-            Foreground = new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0)),
-            TextWrapping = TextWrapping.Wrap
-        };
+        var content = CreateSelectableText(12,
+            new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0)));
+        content.Text = text;
         panel.Children.Add(label);
         panel.Children.Add(content);
         bubble.Child = panel;
@@ -574,7 +575,7 @@ public partial class AiChatControl : UserControl
         ScrollToBottom();
     }
 
-    private Border CreateAssistantBubble(TextBlock contentBlock)
+    private Border CreateAssistantBubble(TextBox contentBlock)
     {
         var bubble = new Border
         {
@@ -601,18 +602,13 @@ public partial class AiChatControl : UserControl
         return bubble;
     }
 
-    private static TextBlock CreateStreamingBlock()
+    private static TextBox CreateStreamingBlock()
     {
-        return new TextBlock
-        {
-            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
-            FontSize = 12,
-            Foreground = new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0)),
-            TextWrapping = TextWrapping.Wrap
-        };
+        return CreateSelectableText(12,
+            new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0)));
     }
 
-    private static Border CreateThinkingBubble(TextBlock contentBlock)
+    private static Border CreateThinkingBubble(TextBox contentBlock)
     {
         var bubble = new Border
         {
@@ -688,26 +684,71 @@ public partial class AiChatControl : UserControl
 
     // --- Collapsible Messages ---
 
-    private void MakeCollapsible(Border bubble, StackPanel panel, TextBlock contentBlock, string fullText)
+    private void MakeCollapsible(Border bubble, StackPanel panel, TextBox contentBlock, string fullText)
     {
         var lines = fullText.Split('\n');
         if (lines.Length <= 3)
             return; // Not worth collapsing
 
         var firstLine = lines[0].Length > 80 ? lines[0][..80] + "..." : lines[0];
-        var collapsed = $"{firstLine}\n  [{lines.Length} lines — click to collapse]";
+        var collapsed = $"{firstLine}\n  [{lines.Length} lines]";
 
-        // Start expanded — full text is already displayed from streaming
+        // Add chevron to the header row next to the label
         var isExpanded = true;
-        bubble.Cursor = Cursors.Hand;
-        bubble.MouseLeftButtonUp += (_, _) =>
+        var label = (UIElement)panel.Children[0];
+        panel.Children.RemoveAt(0);
+
+        var chevron = CreateCollapseChevron(true);
+        var headerRow = new StackPanel { Orientation = Orientation.Horizontal, Cursor = Cursors.Hand };
+        headerRow.Children.Add(chevron);
+        headerRow.Children.Add(label);
+        panel.Children.Insert(0, headerRow);
+
+        headerRow.MouseLeftButtonUp += (_, e) =>
         {
             isExpanded = !isExpanded;
+            chevron.Text = isExpanded ? "▼" : "▶";
             contentBlock.Text = isExpanded ? fullText : collapsed;
+            e.Handled = true;
         };
     }
 
     // --- Helpers ---
+
+    private static TextBlock CreateCollapseChevron(bool expanded)
+    {
+        return new TextBlock
+        {
+            Text = expanded ? "▼" : "▶",
+            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
+            FontSize = 10,
+            Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)),
+            Cursor = Cursors.Hand,
+            Margin = new Thickness(0, 0, 4, 0),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+    }
+
+    private static TextBox CreateSelectableText(double fontSize, Brush foreground,
+        FontStyle? fontStyle = null)
+    {
+        var tb = new TextBox
+        {
+            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
+            FontSize = fontSize,
+            Foreground = foreground,
+            TextWrapping = TextWrapping.Wrap,
+            IsReadOnly = true,
+            BorderThickness = new Thickness(0),
+            Background = Brushes.Transparent,
+            Padding = new Thickness(0),
+            FocusVisualStyle = null,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled
+        };
+        if (fontStyle.HasValue)
+            tb.FontStyle = fontStyle.Value;
+        return tb;
+    }
 
     private static string FormatToolInput(JsonElement input)
     {
