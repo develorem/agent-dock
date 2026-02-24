@@ -34,6 +34,7 @@ public partial class GitStatusControl : UserControl
             NotGitMessage.Visibility = Visibility.Visible;
             StatusPanel.Visibility = Visibility.Collapsed;
             NoChangesMessage.Visibility = Visibility.Collapsed;
+            BranchPanel.Visibility = Visibility.Collapsed;
             return;
         }
 
@@ -132,10 +133,33 @@ public partial class GitStatusControl : UserControl
         }
     }
 
+    private void RefreshBranch()
+    {
+        var branch = _gitService?.GetCurrentBranch();
+        if (!string.IsNullOrEmpty(branch))
+        {
+            BranchName.Text = branch;
+            BranchPanel.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            BranchPanel.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void CopyBranch_Click(object sender, RoutedEventArgs e)
+    {
+        var branch = BranchName.Text;
+        if (!string.IsNullOrEmpty(branch))
+            Clipboard.SetText(branch);
+    }
+
     public void RefreshStatus()
     {
         if (_gitService == null)
             return;
+
+        RefreshBranch();
 
         var entries = _gitService.GetStatus();
 

@@ -29,6 +29,11 @@ public class GitService
         return Directory.Exists(gitDir) || File.Exists(gitDir); // file for worktrees
     }
 
+    public string? GetCurrentBranch()
+    {
+        return RunGit("rev-parse --abbrev-ref HEAD")?.Trim();
+    }
+
     public List<GitFileEntry> GetStatus()
     {
         var entries = new List<GitFileEntry>();

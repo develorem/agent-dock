@@ -5,6 +5,31 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              mc:Ignorable="d">
     <Grid>
+        <!-- Branch name header -->
+        <StackPanel x:Name="BranchPanel" Orientation="Horizontal"
+                    Visibility="Collapsed"
+                    VerticalAlignment="Top" Margin="8,6,8,0">
+            <TextBlock Text="Branch:" FontSize="12"
+                       FontFamily="Cascadia Code, Consolas, Courier New"
+                       Foreground="{DynamicResource GitPlaceholderForeground}"
+                       VerticalAlignment="Center" Margin="0,0,6,0" />
+            <TextBox x:Name="BranchName" FontSize="12"
+                     FontFamily="Cascadia Code, Consolas, Courier New"
+                     Foreground="{DynamicResource GitStagedForeground}"
+                     Background="Transparent" BorderThickness="0"
+                     IsReadOnly="True" Padding="0"
+                     VerticalAlignment="Center"
+                     VerticalScrollBarVisibility="Disabled" />
+            <Button x:Name="CopyBranchButton" Click="CopyBranch_Click"
+                    ToolTip="Copy branch name"
+                    Background="Transparent" BorderThickness="0"
+                    Padding="2" Margin="6,0,0,0" Cursor="Hand"
+                    VerticalAlignment="Center">
+                <TextBlock Text="&#xE8C8;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                           Foreground="{DynamicResource GitPlaceholderForeground}" />
+            </Button>
+        </StackPanel>
+
         <!-- Not a git repo message -->
         <TextBlock x:Name="NotGitMessage"
                    Text="Not a git repository"
@@ -24,7 +49,7 @@
                    Foreground="{DynamicResource GitPlaceholderForeground}" />
 
         <!-- File list -->
-        <DockPanel x:Name="StatusPanel" Visibility="Collapsed">
+        <DockPanel x:Name="StatusPanel" Visibility="Collapsed" Margin="0,28,0,0">
             <ListView x:Name="FileList" BorderThickness="0" Background="Transparent"
                       SelectionMode="Single"
                       SelectionChanged="FileList_SelectionChanged">
