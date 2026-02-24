@@ -15,6 +15,11 @@ public partial class GitStatusControl : UserControl
     /// </summary>
     public event Action<string, string>? DiffRequested;
 
+    /// <summary>
+    /// Raised when the file system watcher detects changes (debounced).
+    /// </summary>
+    public event Action? FileSystemChanged;
+
     private GitService? _gitService;
     private FileSystemWatcher? _watcher;
     private DispatcherTimer? _debounceTimer;
@@ -34,6 +39,7 @@ public partial class GitStatusControl : UserControl
             NotGitMessage.Visibility = Visibility.Visible;
             StatusPanel.Visibility = Visibility.Collapsed;
             NoChangesMessage.Visibility = Visibility.Collapsed;
+            BranchPanel.Visibility = Visibility.Collapsed;
             return;
         }
 
@@ -132,10 +138,33 @@ public partial class GitStatusControl : UserControl
         }
     }
 
+    private void RefreshBranch()
+    {
+        var branch = _gitService?.GetCurrentBranch();
+        if (!string.IsNullOrEmpty(branch))
+        {
+            BranchName.Text = branch;
+            BranchPanel.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            BranchPanel.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void CopyBranch_Click(object sender, RoutedEventArgs e)
+    {
+        var branch = BranchName.Text;
+        if (!string.IsNullOrEmpty(branch))
+            Clipboard.SetText(branch);
+    }
+
     public void RefreshStatus()
     {
         if (_gitService == null)
             return;
+
+        RefreshBranch();
 
         var entries = _gitService.GetStatus();
 
@@ -159,6 +188,8 @@ public partial class GitStatusControl : UserControl
             .ToList();
 
         FileList.ItemsSource = viewItems;
+
+        FileSystemChanged?.Invoke();
     }
 
     private void FileList_SelectionChanged(object sender, SelectionChangedEventArgs e)

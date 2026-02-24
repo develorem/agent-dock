@@ -16,11 +16,11 @@ public partial class AiChatControl : UserControl
     private string _projectPath = "";
 
     // Tracks the currently streaming message block so we can append deltas
-    private TextBlock? _streamingBlock;
+    private TextBox? _streamingBlock;
     private string _streamingText = "";
 
     // Thinking bubble tracking
-    private TextBlock? _thinkingBlock;
+    private TextBox? _thinkingBlock;
     private string _thinkingText = "";
     private Border? _thinkingBubble;
     private bool _thinkingExpanded = true; // expanded while streaming, collapsed when done
@@ -33,9 +33,13 @@ public partial class AiChatControl : UserControl
     // In-chat thinking placeholder (shown when Working, no deltas yet)
     private Border? _waitingBubble;
 
-    // Finalized thinking bubble — kept so tool-use blocks can be appended
-    private TextBlock? _finalizedThinkingContentBlock;
-    private string _finalizedThinkingFullText = "";
+    // Execution bubble — groups tool-use blocks under a collapsible heading
+    private TextBox? _executionContentBlock;
+    private string _executionFullText = "";
+    private Border? _executionBubble;
+
+    // Pending AskUserQuestion — tracks question text for response
+    private string? _pendingQuestionText;
 
     /// <summary>
     /// Raised when session state changes (for toolbar icon updates).
@@ -63,6 +67,12 @@ public partial class AiChatControl : UserControl
     {
         Log.Info($"AiChatControl: Initialize for '{projectPath}'");
         _projectPath = projectPath;
+    }
+
+    public void FocusInput()
+    {
+        if (InputBox.IsEnabled)
+            Dispatcher.BeginInvoke(() => InputBox.Focus(), System.Windows.Threading.DispatcherPriority.Input);
     }
 
     public void Shutdown()
@@ -150,6 +160,9 @@ public partial class AiChatControl : UserControl
         InputBox.IsEnabled = canSend;
         SendButton.IsEnabled = canSend;
 
+        if (canSend)
+            FocusInput();
+
         SessionStateChanged?.Invoke(state);
     }
 
@@ -231,8 +244,9 @@ public partial class AiChatControl : UserControl
 
         // Collapse previous streaming block if still open
         FinalizeStreamingBlock();
-        _finalizedThinkingContentBlock = null;
-        _finalizedThinkingFullText = "";
+        _executionContentBlock = null;
+        _executionFullText = "";
+        _executionBubble = null;
 
         AddUserMessage(text);
         ShowWaitingBubble();
@@ -288,14 +302,9 @@ public partial class AiChatControl : UserControl
         {
             // Start a new thinking bubble
             _thinkingText = "";
-            _thinkingBlock = new TextBlock
-            {
-                FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
-                FontSize = 11,
-                Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)),
-                FontStyle = FontStyles.Italic,
-                TextWrapping = TextWrapping.Wrap
-            };
+            _thinkingBlock = CreateSelectableText(11,
+                new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)),
+                FontStyles.Italic);
             _thinkingBubble = CreateThinkingBubble(_thinkingBlock);
             _thinkingExpanded = true;
             MessageList.Children.Add(_thinkingBubble);
@@ -349,14 +358,9 @@ public partial class AiChatControl : UserControl
         {
             // No content_block_start arrived — create thinking bubble on first delta
             _thinkingText = "";
-            _thinkingBlock = new TextBlock
-            {
-                FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
-                FontSize = 11,
-                Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)),
-                FontStyle = FontStyles.Italic,
-                TextWrapping = TextWrapping.Wrap
-            };
+            _thinkingBlock = CreateSelectableText(11,
+                new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)),
+                FontStyles.Italic);
             _thinkingBubble = CreateThinkingBubble(_thinkingBlock);
             _thinkingExpanded = true;
             MessageList.Children.Add(_thinkingBubble);
@@ -385,13 +389,13 @@ public partial class AiChatControl : UserControl
             _streamingText = fullText;
         }
 
-        // Roll tool-use blocks into the thinking bubble (collapsible together)
+        // Group tool-use blocks into collapsible "Execution" bubble
         var toolBlocks = msg.Content.Where(c => c.Type == "tool_use").ToList();
         if (toolBlocks.Count > 0)
         {
             foreach (var block in toolBlocks)
             {
-                var toolText = $"\n\n[Tool: {block.Name}]";
+                var toolText = $"[Tool: {block.Name}]";
                 if (block.Input is JsonElement input)
                 {
                     var inputStr = input.ValueKind == JsonValueKind.Object
@@ -400,15 +404,7 @@ public partial class AiChatControl : UserControl
                     toolText += $"\n{inputStr}";
                 }
 
-                if (_finalizedThinkingContentBlock != null)
-                {
-                    _finalizedThinkingFullText += toolText;
-                }
-                else
-                {
-                    // No thinking bubble — show tool as separate message
-                    AddToolMessage(toolText.TrimStart('\n'));
-                }
+                AppendToExecutionBubble(toolText);
             }
         }
 
@@ -440,26 +436,30 @@ public partial class AiChatControl : UserControl
         if (_thinkingBlock == null || _thinkingBubble == null)
             return;
 
-        // Save references so tool-use blocks can be appended later
-        _finalizedThinkingFullText = _thinkingText;
-        _finalizedThinkingContentBlock = _thinkingBlock;
-
         var contentBlock = _thinkingBlock;
-        var bubble = _thinkingBubble;
+        var fullText = _thinkingText;
         var expanded = false;
 
-        // Collapse to a clickable label
+        // Collapse content, add chevron to header
         _thinkingExpanded = false;
-        contentBlock.Text = "Thinking  [click to expand]";
+        contentBlock.Visibility = Visibility.Collapsed;
 
-        bubble.Cursor = Cursors.Hand;
-        bubble.MouseLeftButtonUp += (_, _) =>
+        var panel = (StackPanel)_thinkingBubble.Child;
+        var label = (UIElement)panel.Children[0];
+        panel.Children.RemoveAt(0);
+
+        var chevron = CreateCollapseChevron(false);
+        var headerRow = new StackPanel { Orientation = Orientation.Horizontal, Cursor = Cursors.Hand };
+        headerRow.Children.Add(chevron);
+        headerRow.Children.Add(label);
+        panel.Children.Insert(0, headerRow);
+
+        headerRow.MouseLeftButtonUp += (_, e) =>
         {
             expanded = !expanded;
-            // Read from field so appended tool info is included
-            contentBlock.Text = expanded
-                ? _finalizedThinkingFullText
-                : "Thinking  [click to expand]";
+            chevron.Text = expanded ? "▼" : "▶";
+            contentBlock.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed;
+            e.Handled = true;
         };
 
         _thinkingBlock = null;
@@ -487,6 +487,13 @@ public partial class AiChatControl : UserControl
 
     private void OnPermissionRequested(ClaudePermissionRequest req)
     {
+        // AskUserQuestion gets a specialized question panel instead of generic Allow/Deny
+        if (req.ToolName == "AskUserQuestion" && req.Input.ValueKind == JsonValueKind.Object)
+        {
+            ShowQuestionPanel(req);
+            return;
+        }
+
         PermissionToolName.Text = $"Tool: {req.ToolName}";
 
         var detail = req.Input.ValueKind == JsonValueKind.Object
@@ -496,6 +503,122 @@ public partial class AiChatControl : UserControl
 
         InputPanel.Visibility = Visibility.Collapsed;
         PermissionPanel.Visibility = Visibility.Visible;
+    }
+
+    private void ShowQuestionPanel(ClaudePermissionRequest req)
+    {
+        QuestionOptionsPanel.Children.Clear();
+        _pendingQuestionText = null;
+
+        try
+        {
+            if (!req.Input.TryGetProperty("questions", out var questions) || questions.GetArrayLength() == 0)
+            {
+                // Fallback to regular permission panel
+                OnPermissionRequested(new ClaudePermissionRequest
+                {
+                    RequestId = req.RequestId,
+                    ToolName = "AskUserQuestion (parse failed)",
+                    Input = req.Input
+                });
+                return;
+            }
+
+            var firstQuestion = questions[0];
+            var questionText = firstQuestion.TryGetProperty("question", out var q) ? q.GetString() ?? "" : "";
+            _pendingQuestionText = questionText;
+
+            QuestionText.Text = questionText;
+
+            if (firstQuestion.TryGetProperty("options", out var options))
+            {
+                foreach (var option in options.EnumerateArray())
+                {
+                    var label = option.TryGetProperty("label", out var l) ? l.GetString() ?? "" : "";
+                    var desc = option.TryGetProperty("description", out var d) ? d.GetString() ?? "" : "";
+
+                    var btn = new Button
+                    {
+                        Cursor = Cursors.Hand,
+                        Background = new SolidColorBrush(Color.FromRgb(0x2D, 0x2D, 0x40)),
+                        BorderBrush = new SolidColorBrush(Color.FromRgb(0x4A, 0x4A, 0x6A)),
+                        BorderThickness = new Thickness(1),
+                        Padding = new Thickness(10, 6, 10, 6),
+                        Margin = new Thickness(0, 0, 0, 4),
+                        HorizontalContentAlignment = HorizontalAlignment.Left
+                    };
+
+                    var panel = new StackPanel();
+                    panel.Children.Add(new TextBlock
+                    {
+                        Text = label,
+                        FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
+                        FontSize = 12,
+                        Foreground = new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0))
+                    });
+                    if (!string.IsNullOrEmpty(desc))
+                    {
+                        panel.Children.Add(new TextBlock
+                        {
+                            Text = desc,
+                            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
+                            FontSize = 10,
+                            Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)),
+                            TextWrapping = TextWrapping.Wrap,
+                            Margin = new Thickness(0, 2, 0, 0)
+                        });
+                    }
+                    btn.Content = panel;
+
+                    var capturedLabel = label;
+                    btn.Click += (_, _) => SubmitQuestionAnswer(capturedLabel);
+
+                    QuestionOptionsPanel.Children.Add(btn);
+                }
+            }
+
+            QuestionCustomInput.Text = "";
+            InputPanel.Visibility = Visibility.Collapsed;
+            QuestionPanel.Visibility = Visibility.Visible;
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Failed to parse AskUserQuestion input", ex);
+            // Fallback: show as regular permission
+            PermissionToolName.Text = $"Tool: {req.ToolName}";
+            PermissionDetail.Text = FormatToolInput(req.Input);
+            InputPanel.Visibility = Visibility.Collapsed;
+            PermissionPanel.Visibility = Visibility.Visible;
+        }
+    }
+
+    private void SubmitQuestionAnswer(string answer)
+    {
+        if (_session == null || _pendingQuestionText == null)
+            return;
+
+        _session.AnswerQuestion(_pendingQuestionText, answer);
+        _pendingQuestionText = null;
+
+        QuestionPanel.Visibility = Visibility.Collapsed;
+        InputPanel.Visibility = Visibility.Visible;
+    }
+
+    private void QuestionCustomSend_Click(object sender, RoutedEventArgs e)
+    {
+        var text = QuestionCustomInput.Text.Trim();
+        if (!string.IsNullOrEmpty(text))
+            SubmitQuestionAnswer(text);
+    }
+
+    private void QuestionCustomInput_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            var text = QuestionCustomInput.Text.Trim();
+            if (!string.IsNullOrEmpty(text))
+                SubmitQuestionAnswer(text);
+        }
     }
 
     private void PermissionAllow_Click(object sender, RoutedEventArgs e)
@@ -558,14 +681,9 @@ public partial class AiChatControl : UserControl
             Foreground = new SolidColorBrush(Color.FromRgb(0x56, 0x9C, 0xD6)),
             Margin = new Thickness(0, 0, 0, 2)
         };
-        var content = new TextBlock
-        {
-            Text = text,
-            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
-            FontSize = 12,
-            Foreground = new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0)),
-            TextWrapping = TextWrapping.Wrap
-        };
+        var content = CreateSelectableText(12,
+            new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0)));
+        content.Text = text;
         panel.Children.Add(label);
         panel.Children.Add(content);
         bubble.Child = panel;
@@ -574,7 +692,7 @@ public partial class AiChatControl : UserControl
         ScrollToBottom();
     }
 
-    private Border CreateAssistantBubble(TextBlock contentBlock)
+    private Border CreateAssistantBubble(TextBox contentBlock)
     {
         var bubble = new Border
         {
@@ -601,18 +719,13 @@ public partial class AiChatControl : UserControl
         return bubble;
     }
 
-    private static TextBlock CreateStreamingBlock()
+    private static TextBox CreateStreamingBlock()
     {
-        return new TextBlock
-        {
-            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
-            FontSize = 12,
-            Foreground = new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0)),
-            TextWrapping = TextWrapping.Wrap
-        };
+        return CreateSelectableText(12,
+            new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0)));
     }
 
-    private static Border CreateThinkingBubble(TextBlock contentBlock)
+    private static Border CreateThinkingBubble(TextBox contentBlock)
     {
         var bubble = new Border
         {
@@ -642,29 +755,69 @@ public partial class AiChatControl : UserControl
         return bubble;
     }
 
-    private void AddToolMessage(string text)
+    private void AppendToExecutionBubble(string toolText)
     {
-        var border = new Border
+        if (_executionBubble == null)
+        {
+            _executionContentBlock = CreateSelectableText(10,
+                new SolidColorBrush(Color.FromRgb(0x6A, 0x99, 0x55)),
+                FontStyles.Normal);
+            _executionBubble = CreateExecutionBubble(_executionContentBlock);
+            MessageList.Children.Add(_executionBubble);
+            _executionFullText = "";
+        }
+
+        _executionFullText += (string.IsNullOrEmpty(_executionFullText) ? "" : "\n\n") + toolText;
+        _executionContentBlock!.Text = _executionFullText;
+        ScrollToBottom();
+    }
+
+    private static Border CreateExecutionBubble(TextBox contentBlock)
+    {
+        var bubble = new Border
         {
             Background = new SolidColorBrush(Color.FromRgb(0x1A, 0x2A, 0x1A)),
-            CornerRadius = new CornerRadius(4),
+            CornerRadius = new CornerRadius(6),
             Padding = new Thickness(8, 4, 8, 4),
             Margin = new Thickness(8, 2, 40, 2),
-            HorizontalAlignment = HorizontalAlignment.Left
+            HorizontalAlignment = HorizontalAlignment.Left,
+            BorderBrush = new SolidColorBrush(Color.FromRgb(0x2A, 0x3A, 0x2A)),
+            BorderThickness = new Thickness(1)
         };
 
-        var tb = new TextBlock
+        var panel = new StackPanel();
+
+        var label = new TextBlock
         {
-            Text = text,
+            Text = "Execution",
             FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
             FontSize = 10,
             Foreground = new SolidColorBrush(Color.FromRgb(0x6A, 0x99, 0x55)),
-            TextWrapping = TextWrapping.Wrap
+            FontStyle = FontStyles.Italic,
+            Margin = new Thickness(0, 0, 0, 2)
         };
 
-        border.Child = tb;
-        MessageList.Children.Add(border);
-        ScrollToBottom();
+        var chevron = CreateCollapseChevron(false);
+        var headerRow = new StackPanel { Orientation = Orientation.Horizontal, Cursor = Cursors.Hand };
+        headerRow.Children.Add(chevron);
+        headerRow.Children.Add(label);
+
+        contentBlock.Visibility = Visibility.Collapsed;
+        var expanded = false;
+
+        headerRow.MouseLeftButtonUp += (_, e) =>
+        {
+            expanded = !expanded;
+            chevron.Text = expanded ? "▼" : "▶";
+            contentBlock.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed;
+            e.Handled = true;
+        };
+
+        panel.Children.Add(headerRow);
+        panel.Children.Add(contentBlock);
+        bubble.Child = panel;
+
+        return bubble;
     }
 
     private void AddSystemMessage(string text, bool isWarning = false)
@@ -688,26 +841,71 @@ public partial class AiChatControl : UserControl
 
     // --- Collapsible Messages ---
 
-    private void MakeCollapsible(Border bubble, StackPanel panel, TextBlock contentBlock, string fullText)
+    private void MakeCollapsible(Border bubble, StackPanel panel, TextBox contentBlock, string fullText)
     {
         var lines = fullText.Split('\n');
         if (lines.Length <= 3)
             return; // Not worth collapsing
 
         var firstLine = lines[0].Length > 80 ? lines[0][..80] + "..." : lines[0];
-        var collapsed = $"{firstLine}\n  [{lines.Length} lines — click to collapse]";
+        var collapsed = $"{firstLine}\n  [{lines.Length} lines]";
 
-        // Start expanded — full text is already displayed from streaming
+        // Add chevron to the header row next to the label
         var isExpanded = true;
-        bubble.Cursor = Cursors.Hand;
-        bubble.MouseLeftButtonUp += (_, _) =>
+        var label = (UIElement)panel.Children[0];
+        panel.Children.RemoveAt(0);
+
+        var chevron = CreateCollapseChevron(true);
+        var headerRow = new StackPanel { Orientation = Orientation.Horizontal, Cursor = Cursors.Hand };
+        headerRow.Children.Add(chevron);
+        headerRow.Children.Add(label);
+        panel.Children.Insert(0, headerRow);
+
+        headerRow.MouseLeftButtonUp += (_, e) =>
         {
             isExpanded = !isExpanded;
+            chevron.Text = isExpanded ? "▼" : "▶";
             contentBlock.Text = isExpanded ? fullText : collapsed;
+            e.Handled = true;
         };
     }
 
     // --- Helpers ---
+
+    private static TextBlock CreateCollapseChevron(bool expanded)
+    {
+        return new TextBlock
+        {
+            Text = expanded ? "▼" : "▶",
+            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
+            FontSize = 10,
+            Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)),
+            Cursor = Cursors.Hand,
+            Margin = new Thickness(0, 0, 4, 0),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+    }
+
+    private static TextBox CreateSelectableText(double fontSize, Brush foreground,
+        FontStyle? fontStyle = null)
+    {
+        var tb = new TextBox
+        {
+            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
+            FontSize = fontSize,
+            Foreground = foreground,
+            TextWrapping = TextWrapping.Wrap,
+            IsReadOnly = true,
+            BorderThickness = new Thickness(0),
+            Background = Brushes.Transparent,
+            Padding = new Thickness(0),
+            FocusVisualStyle = null,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled
+        };
+        if (fontStyle.HasValue)
+            tb.FontStyle = fontStyle.Value;
+        return tb;
+    }
 
     private static string FormatToolInput(JsonElement input)
     {

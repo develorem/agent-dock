@@ -173,6 +173,51 @@
                 </StackPanel>
             </Border>
 
+            <!-- Question prompt (replaces input when AskUserQuestion needed) -->
+            <Border x:Name="QuestionPanel"
+                    DockPanel.Dock="Bottom"
+                    Visibility="Collapsed"
+                    Background="#1A1A2A"
+                    BorderBrush="#5B7BB5"
+                    BorderThickness="0,1,0,0"
+                    Padding="8,6">
+                <StackPanel>
+                    <TextBlock x:Name="QuestionText"
+                               FontFamily="Cascadia Code, Consolas, Courier New"
+                               FontSize="12" FontWeight="SemiBold"
+                               Foreground="#7BA7D9"
+                               TextWrapping="Wrap"
+                               Margin="0,0,0,6" />
+                    <StackPanel x:Name="QuestionOptionsPanel" Margin="0,0,0,6" />
+                    <DockPanel Margin="0,2,0,0">
+                        <Button Content="Send"
+                                Click="QuestionCustomSend_Click"
+                                DockPanel.Dock="Right"
+                                FontFamily="Cascadia Code, Consolas, Courier New"
+                                FontSize="10"
+                                Foreground="#E0E0E0"
+                                Background="#2D2D40"
+                                BorderBrush="#5B7BB5"
+                                BorderThickness="1"
+                                Cursor="Hand"
+                                Padding="8,4"
+                                Height="26"
+                                Margin="6,0,0,0" />
+                        <TextBox x:Name="QuestionCustomInput"
+                                 FontFamily="Cascadia Code, Consolas, Courier New"
+                                 FontSize="11"
+                                 Foreground="#E0E0E0"
+                                 Background="#1E1E1E"
+                                 CaretBrush="#E0E0E0"
+                                 BorderBrush="#3C3C3C"
+                                 BorderThickness="1"
+                                 Padding="4,3"
+                                 ToolTip="Type a custom response"
+                                 KeyDown="QuestionCustomInput_KeyDown" />
+                    </DockPanel>
+                </StackPanel>
+            </Border>
+
             <!-- Input area -->
             <Border x:Name="InputPanel"
                     DockPanel.Dock="Bottom"

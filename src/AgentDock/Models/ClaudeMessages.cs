@@ -36,25 +36,32 @@ public class ClaudeMessagePayload
     public string Content { get; init; } = "";
 }
 
+/// <summary>
+/// Outer control_response envelope sent to Claude CLI via stdin.
+/// Format: { "type": "control_response", "response": { "subtype": "success", "request_id": "...", "response": {...} } }
+/// </summary>
 public class ClaudeControlResponse
 {
     [JsonPropertyName("type")]
     public string Type => "control_response";
 
-    [JsonPropertyName("request_id")]
-    public string RequestId { get; init; } = "";
-
     [JsonPropertyName("response")]
     public ClaudeControlResponseBody Response { get; init; } = null!;
 }
 
+/// <summary>
+/// Inner response body containing subtype, request_id, and the actual response data.
+/// </summary>
 public class ClaudeControlResponseBody
 {
     [JsonPropertyName("subtype")]
     public string Subtype => "success";
 
+    [JsonPropertyName("request_id")]
+    public string RequestId { get; init; } = "";
+
     [JsonPropertyName("response")]
-    public object ResponseData { get; init; } = null!;
+    public object? ResponseData { get; init; }
 }
 
 public class ClaudePermissionAllow
@@ -64,6 +71,9 @@ public class ClaudePermissionAllow
 
     [JsonPropertyName("updatedInput")]
     public JsonElement? UpdatedInput { get; init; }
+
+    [JsonPropertyName("toolUseID")]
+    public string? ToolUseId { get; init; }
 }
 
 public class ClaudePermissionDeny
@@ -73,6 +83,9 @@ public class ClaudePermissionDeny
 
     [JsonPropertyName("message")]
     public string Message { get; init; } = "User denied this action";
+
+    [JsonPropertyName("toolUseID")]
+    public string? ToolUseId { get; init; }
 }
 
 // --- Incoming messages (read from stdout) ---
@@ -154,6 +167,7 @@ public class ClaudePermissionRequest
     public string RequestId { get; init; } = "";
     public string ToolName { get; init; } = "";
     public JsonElement Input { get; init; }
+    public string ToolUseId { get; init; } = "";
 }
 
 /// <summary>

@@ -111,10 +111,11 @@ public class ClaudeSession : IDisposable
 
         SetState(ClaudeSessionState.Working);
 
-        // Build arguments — use --input-format stream-json so we can send
-        // the prompt (and permission responses) as JSON on stdin.
-        // With stream-json input, -p is ignored by the CLI, so we omit it.
-        var args = "--output-format stream-json --input-format stream-json --verbose --include-partial-messages";
+        // Build arguments — matches the Claude Agent SDK's spawn args:
+        // stream-json I/O for the full JSON protocol, --permission-prompt-tool stdio
+        // routes permission prompts through stdin/stdout as control_request/control_response.
+        // Note: -p is NOT used (the SDK doesn't use it; stream-json implies non-interactive).
+        var args = "--output-format stream-json --input-format stream-json --permission-prompt-tool stdio --verbose --include-partial-messages";
 
         if (SessionId != null)
             args += $" --resume \"{SessionId}\"";
@@ -126,7 +127,7 @@ public class ClaudeSession : IDisposable
 
         var psi = new ProcessStartInfo
         {
-            FileName = "claude",
+            FileName = ClaudeBinaryPath,
             Arguments = args,
             WorkingDirectory = _workingDirectory,
             RedirectStandardInput = true,
@@ -204,10 +205,15 @@ public class ClaudeSession : IDisposable
         Log.Info($"ClaudeSession.AllowPermission: {PendingPermission.ToolName}");
         WriteStdin(JsonSerializer.Serialize(new ClaudeControlResponse
         {
-            RequestId = PendingPermission.RequestId,
             Response = new ClaudeControlResponseBody
             {
-                ResponseData = new ClaudePermissionAllow()
+                RequestId = PendingPermission.RequestId,
+                ResponseData = new ClaudePermissionAllow
+                {
+                    UpdatedInput = PendingPermission.Input.ValueKind != JsonValueKind.Undefined
+                        ? PendingPermission.Input : null,
+                    ToolUseId = PendingPermission.ToolUseId
+                }
             }
         }, JsonOptions));
 
@@ -226,12 +232,55 @@ public class ClaudeSession : IDisposable
         Log.Info($"ClaudeSession.DenyPermission: {PendingPermission.ToolName}");
         WriteStdin(JsonSerializer.Serialize(new ClaudeControlResponse
         {
-            RequestId = PendingPermission.RequestId,
             Response = new ClaudeControlResponseBody
             {
+                RequestId = PendingPermission.RequestId,
                 ResponseData = new ClaudePermissionDeny
                 {
-                    Message = reason ?? "User denied this action"
+                    Message = reason ?? "User denied this action",
+                    ToolUseId = PendingPermission.ToolUseId
+                }
+            }
+        }, JsonOptions));
+
+        PendingPermission = null;
+        SetState(ClaudeSessionState.Working);
+    }
+
+    /// <summary>
+    /// Responds to a pending AskUserQuestion permission request with the user's selected answer.
+    /// Sends allow with updatedInput containing the answers dictionary.
+    /// </summary>
+    public void AnswerQuestion(string questionText, string answer)
+    {
+        if (PendingPermission == null || _process == null)
+            return;
+
+        Log.Info($"ClaudeSession.AnswerQuestion: '{answer}' for '{questionText}'");
+
+        // Build updatedInput with the user's answer merged into the original input
+        var answersDict = new Dictionary<string, string> { { questionText, answer } };
+        var updatedInput = new Dictionary<string, object>();
+
+        // Copy original input properties
+        if (PendingPermission.Input.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var prop in PendingPermission.Input.EnumerateObject())
+                updatedInput[prop.Name] = prop.Value;
+        }
+        updatedInput["answers"] = answersDict;
+
+        var updatedJson = JsonSerializer.SerializeToElement(updatedInput, JsonOptions);
+
+        WriteStdin(JsonSerializer.Serialize(new ClaudeControlResponse
+        {
+            Response = new ClaudeControlResponseBody
+            {
+                RequestId = PendingPermission.RequestId,
+                ResponseData = new ClaudePermissionAllow
+                {
+                    UpdatedInput = updatedJson,
+                    ToolUseId = PendingPermission.ToolUseId
                 }
             }
         }, JsonOptions));
@@ -530,19 +579,25 @@ public class ClaudeSession : IDisposable
         {
             var toolName = GetString(request, "tool_name") ?? "";
             var input = request.TryGetProperty("input", out var inp) ? inp.Clone() : default;
+            var toolUseId = GetString(request, "tool_use_id") ?? "";
 
-            Log.Info($"ClaudeSession: permission request — tool={toolName}, requestId={requestId}");
+            Log.Info($"ClaudeSession: permission request — tool={toolName}, requestId={requestId}, toolUseId={toolUseId}");
 
             var permReq = new ClaudePermissionRequest
             {
                 RequestId = requestId,
                 ToolName = toolName,
-                Input = input
+                Input = input,
+                ToolUseId = toolUseId
             };
 
             PendingPermission = permReq;
             SetState(ClaudeSessionState.WaitingForPermission);
             PermissionRequested?.Invoke(permReq);
+        }
+        else
+        {
+            Log.Warn($"ClaudeSession: unhandled control_request subtype '{subtype}', requestId={requestId}");
         }
     }
 

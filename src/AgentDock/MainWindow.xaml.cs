@@ -103,8 +103,12 @@ public partial class MainWindow : Window
             };
         }
 
-        // Run prerequisite checks in background on startup
-        Loaded += async (_, _) => await RunStartupPrerequisiteChecks();
+        // Run prerequisite checks and update check on startup
+        Loaded += async (_, _) =>
+        {
+            await RunStartupPrerequisiteChecks();
+            await CheckForAppUpdateAsync();
+        };
 
         Log.Info("MainWindow constructor complete");
     }
@@ -486,6 +490,17 @@ public partial class MainWindow : Window
 
         UpdateTitleBar(); // restore normal title
         Log.Info("Startup prerequisite check: complete");
+    }
+
+    private async System.Threading.Tasks.Task CheckForAppUpdateAsync()
+    {
+        var updateInfo = await System.Threading.Tasks.Task.Run(UpdateCheckService.CheckForUpdateAsync);
+        if (updateInfo == null)
+            return;
+
+        Log.Info($"Update available: v{updateInfo.Version}");
+        var dialog = new UpdateDialog(this, updateInfo);
+        dialog.ShowDialog();
     }
 
     // --- Project Management ---
@@ -886,6 +901,9 @@ public partial class MainWindow : Window
             filePreviewControl.ShowDiff(diffContent);
         };
 
+        // Refresh file explorer when file system changes (reuses git status watcher)
+        gitStatusControl.FileSystemChanged += () => fileExplorerControl.Refresh();
+
         var aiChatControl = new AiChatControl();
         aiChatControl.Initialize(project.FolderPath);
 
@@ -1123,6 +1141,10 @@ public partial class MainWindow : Window
 
         // Update title bar
         UpdateTitleBar();
+
+        // Focus the AI chat input if the session is idle
+        if (_projectChatControls.TryGetValue(project, out var chatControl))
+            chatControl.FocusInput();
     }
 
     private void UpdateTitleBar()
