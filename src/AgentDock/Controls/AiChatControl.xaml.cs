@@ -38,6 +38,9 @@ public partial class AiChatControl : UserControl
     private string _executionFullText = "";
     private Border? _executionBubble;
 
+    // Pending AskUserQuestion — tracks question text for response
+    private string? _pendingQuestionText;
+
     /// <summary>
     /// Raised when session state changes (for toolbar icon updates).
     /// </summary>
@@ -475,6 +478,13 @@ public partial class AiChatControl : UserControl
 
     private void OnPermissionRequested(ClaudePermissionRequest req)
     {
+        // AskUserQuestion gets a specialized question panel instead of generic Allow/Deny
+        if (req.ToolName == "AskUserQuestion" && req.Input.ValueKind == JsonValueKind.Object)
+        {
+            ShowQuestionPanel(req);
+            return;
+        }
+
         PermissionToolName.Text = $"Tool: {req.ToolName}";
 
         var detail = req.Input.ValueKind == JsonValueKind.Object
@@ -484,6 +494,122 @@ public partial class AiChatControl : UserControl
 
         InputPanel.Visibility = Visibility.Collapsed;
         PermissionPanel.Visibility = Visibility.Visible;
+    }
+
+    private void ShowQuestionPanel(ClaudePermissionRequest req)
+    {
+        QuestionOptionsPanel.Children.Clear();
+        _pendingQuestionText = null;
+
+        try
+        {
+            if (!req.Input.TryGetProperty("questions", out var questions) || questions.GetArrayLength() == 0)
+            {
+                // Fallback to regular permission panel
+                OnPermissionRequested(new ClaudePermissionRequest
+                {
+                    RequestId = req.RequestId,
+                    ToolName = "AskUserQuestion (parse failed)",
+                    Input = req.Input
+                });
+                return;
+            }
+
+            var firstQuestion = questions[0];
+            var questionText = firstQuestion.TryGetProperty("question", out var q) ? q.GetString() ?? "" : "";
+            _pendingQuestionText = questionText;
+
+            QuestionText.Text = questionText;
+
+            if (firstQuestion.TryGetProperty("options", out var options))
+            {
+                foreach (var option in options.EnumerateArray())
+                {
+                    var label = option.TryGetProperty("label", out var l) ? l.GetString() ?? "" : "";
+                    var desc = option.TryGetProperty("description", out var d) ? d.GetString() ?? "" : "";
+
+                    var btn = new Button
+                    {
+                        Cursor = Cursors.Hand,
+                        Background = new SolidColorBrush(Color.FromRgb(0x2D, 0x2D, 0x40)),
+                        BorderBrush = new SolidColorBrush(Color.FromRgb(0x4A, 0x4A, 0x6A)),
+                        BorderThickness = new Thickness(1),
+                        Padding = new Thickness(10, 6, 10, 6),
+                        Margin = new Thickness(0, 0, 0, 4),
+                        HorizontalContentAlignment = HorizontalAlignment.Left
+                    };
+
+                    var panel = new StackPanel();
+                    panel.Children.Add(new TextBlock
+                    {
+                        Text = label,
+                        FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
+                        FontSize = 12,
+                        Foreground = new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0))
+                    });
+                    if (!string.IsNullOrEmpty(desc))
+                    {
+                        panel.Children.Add(new TextBlock
+                        {
+                            Text = desc,
+                            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
+                            FontSize = 10,
+                            Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)),
+                            TextWrapping = TextWrapping.Wrap,
+                            Margin = new Thickness(0, 2, 0, 0)
+                        });
+                    }
+                    btn.Content = panel;
+
+                    var capturedLabel = label;
+                    btn.Click += (_, _) => SubmitQuestionAnswer(capturedLabel);
+
+                    QuestionOptionsPanel.Children.Add(btn);
+                }
+            }
+
+            QuestionCustomInput.Text = "";
+            InputPanel.Visibility = Visibility.Collapsed;
+            QuestionPanel.Visibility = Visibility.Visible;
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Failed to parse AskUserQuestion input", ex);
+            // Fallback: show as regular permission
+            PermissionToolName.Text = $"Tool: {req.ToolName}";
+            PermissionDetail.Text = FormatToolInput(req.Input);
+            InputPanel.Visibility = Visibility.Collapsed;
+            PermissionPanel.Visibility = Visibility.Visible;
+        }
+    }
+
+    private void SubmitQuestionAnswer(string answer)
+    {
+        if (_session == null || _pendingQuestionText == null)
+            return;
+
+        _session.AnswerQuestion(_pendingQuestionText, answer);
+        _pendingQuestionText = null;
+
+        QuestionPanel.Visibility = Visibility.Collapsed;
+        InputPanel.Visibility = Visibility.Visible;
+    }
+
+    private void QuestionCustomSend_Click(object sender, RoutedEventArgs e)
+    {
+        var text = QuestionCustomInput.Text.Trim();
+        if (!string.IsNullOrEmpty(text))
+            SubmitQuestionAnswer(text);
+    }
+
+    private void QuestionCustomInput_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            var text = QuestionCustomInput.Text.Trim();
+            if (!string.IsNullOrEmpty(text))
+                SubmitQuestionAnswer(text);
+        }
     }
 
     private void PermissionAllow_Click(object sender, RoutedEventArgs e)
