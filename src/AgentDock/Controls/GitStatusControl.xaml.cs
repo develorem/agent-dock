@@ -187,9 +187,46 @@ public partial class GitStatusControl : UserControl
             .Select(e => new GitStatusItem(e))
             .ToList();
 
+        // Skip rebuild if the list hasn't actually changed — avoids killing
+        // the current selection and hover state on every debounce tick
+        if (FileList.ItemsSource is List<GitStatusItem> current && EntriesMatch(current, viewItems))
+        {
+            FileSystemChanged?.Invoke();
+            return;
+        }
+
+        // Preserve the selected file across the rebuild
+        var selectedPath = (FileList.SelectedItem as GitStatusItem)?.Entry;
+
         FileList.ItemsSource = viewItems;
 
+        if (selectedPath != null)
+        {
+            var match = viewItems.FirstOrDefault(v =>
+                v.Entry.FilePath == selectedPath.FilePath &&
+                v.Entry.IsStaged == selectedPath.IsStaged);
+            if (match != null)
+                FileList.SelectedItem = match;
+        }
+
         FileSystemChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// Returns true when both lists contain the same entries in the same order.
+    /// </summary>
+    private static bool EntriesMatch(List<GitStatusItem> a, List<GitStatusItem> b)
+    {
+        if (a.Count != b.Count)
+            return false;
+
+        for (int i = 0; i < a.Count; i++)
+        {
+            if (a[i].Entry != b[i].Entry)   // GitFileEntry is a record — value equality
+                return false;
+        }
+
+        return true;
     }
 
     private void FileList_SelectionChanged(object sender, SelectionChangedEventArgs e)
