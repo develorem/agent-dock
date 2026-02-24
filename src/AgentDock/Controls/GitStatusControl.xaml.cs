@@ -15,6 +15,11 @@ public partial class GitStatusControl : UserControl
     /// </summary>
     public event Action<string, string>? DiffRequested;
 
+    /// <summary>
+    /// Raised when the file system watcher detects changes (debounced).
+    /// </summary>
+    public event Action? FileSystemChanged;
+
     private GitService? _gitService;
     private FileSystemWatcher? _watcher;
     private DispatcherTimer? _debounceTimer;
@@ -183,6 +188,8 @@ public partial class GitStatusControl : UserControl
             .ToList();
 
         FileList.ItemsSource = viewItems;
+
+        FileSystemChanged?.Invoke();
     }
 
     private void FileList_SelectionChanged(object sender, SelectionChangedEventArgs e)

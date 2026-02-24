@@ -886,6 +886,9 @@ public partial class MainWindow : Window
             filePreviewControl.ShowDiff(diffContent);
         };
 
+        // Refresh file explorer when file system changes (reuses git status watcher)
+        gitStatusControl.FileSystemChanged += () => fileExplorerControl.Refresh();
+
         var aiChatControl = new AiChatControl();
         aiChatControl.Initialize(project.FolderPath);
 

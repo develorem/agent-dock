@@ -72,6 +72,64 @@ public partial class FileExplorerControl : UserControl
     /// </summary>
     public string FolderName => Path.GetFileName(_rootPath) ?? _rootPath;
 
+    /// <summary>
+    /// Refreshes the file tree while preserving expanded folder state.
+    /// </summary>
+    public void Refresh()
+    {
+        if (string.IsNullOrEmpty(_rootPath))
+            return;
+
+        var expandedPaths = CollectExpandedPaths();
+        LoadDirectory(_rootPath);
+        RestoreExpandedState(expandedPaths);
+    }
+
+    private HashSet<string> CollectExpandedPaths()
+    {
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (FileNode node in FileTree.Items)
+            CollectExpandedRecursive(node, paths);
+        return paths;
+    }
+
+    private void CollectExpandedRecursive(FileNode node, HashSet<string> paths)
+    {
+        if (!node.IsDirectory || node.FullPath == null || !node.IsExpanded)
+            return;
+
+        paths.Add(node.FullPath);
+        foreach (var child in node.Children)
+            CollectExpandedRecursive(child, paths);
+    }
+
+    private void RestoreExpandedState(HashSet<string> expandedPaths)
+    {
+        if (expandedPaths.Count == 0)
+            return;
+
+        foreach (FileNode node in FileTree.Items)
+            RestoreExpandedRecursive(node, expandedPaths);
+    }
+
+    private void RestoreExpandedRecursive(FileNode node, HashSet<string> expandedPaths)
+    {
+        if (!node.IsDirectory || node.FullPath == null)
+            return;
+        if (!expandedPaths.Contains(node.FullPath))
+            return;
+
+        // Load real children (replacing dummy "Loading..." node)
+        if (node.Children.Count == 1 && node.Children[0].FullPath == null)
+            LoadChildren(node);
+
+        node.IsExpanded = true;
+        node.Icon = "\uD83D\uDCC2"; // open folder
+
+        foreach (var child in node.Children)
+            RestoreExpandedRecursive(child, expandedPaths);
+    }
+
     private void LoadChildren(FileNode parentNode)
     {
         parentNode.Children.Clear();
@@ -348,6 +406,7 @@ public class FileNode : INotifyPropertyChanged
 {
     private string _icon = "";
     private string _name = "";
+    private bool _isExpanded;
 
     public string Name
     {
@@ -363,6 +422,12 @@ public class FileNode : INotifyPropertyChanged
     {
         get => _icon;
         set { _icon = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Icon))); }
+    }
+
+    public bool IsExpanded
+    {
+        get => _isExpanded;
+        set { _isExpanded = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsExpanded))); }
     }
 
     public ObservableCollection<FileNode> Children { get; } = [];
