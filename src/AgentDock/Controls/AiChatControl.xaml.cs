@@ -69,6 +69,12 @@ public partial class AiChatControl : UserControl
         _projectPath = projectPath;
     }
 
+    public void FocusInput()
+    {
+        if (InputBox.IsEnabled)
+            Dispatcher.BeginInvoke(() => InputBox.Focus(), System.Windows.Threading.DispatcherPriority.Input);
+    }
+
     public void Shutdown()
     {
         _session?.Dispose();
@@ -153,6 +159,9 @@ public partial class AiChatControl : UserControl
         var canSend = state == ClaudeSessionState.Idle;
         InputBox.IsEnabled = canSend;
         SendButton.IsEnabled = canSend;
+
+        if (canSend)
+            FocusInput();
 
         SessionStateChanged?.Invoke(state);
     }

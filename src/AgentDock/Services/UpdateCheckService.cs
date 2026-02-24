@@ -70,7 +70,7 @@ public static class UpdateCheckService
                 return null;
             }
 
-            var currentVersionStr = App.Version.Split('-')[0];
+            var currentVersionStr = App.Version.Split(['-', '+'])[0];
             if (!Version.TryParse(currentVersionStr, out var currentVersion))
             {
                 Log.Warn($"UpdateCheck: could not parse current version '{App.Version}'");

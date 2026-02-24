@@ -1141,6 +1141,10 @@ public partial class MainWindow : Window
 
         // Update title bar
         UpdateTitleBar();
+
+        // Focus the AI chat input if the session is idle
+        if (_projectChatControls.TryGetValue(project, out var chatControl))
+            chatControl.FocusInput();
     }
 
     private void UpdateTitleBar()
