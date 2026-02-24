@@ -494,6 +494,10 @@ public partial class MainWindow : Window
 
     private async System.Threading.Tasks.Task CheckForAppUpdateAsync()
     {
+#if DEBUG
+        Log.Info("UpdateCheck: skipping update check in Debug build");
+        return;
+#else
         var updateInfo = await System.Threading.Tasks.Task.Run(UpdateCheckService.CheckForUpdateAsync);
         if (updateInfo == null)
             return;
@@ -501,6 +505,7 @@ public partial class MainWindow : Window
         Log.Info($"Update available: v{updateInfo.Version}");
         var dialog = new UpdateDialog(this, updateInfo);
         dialog.ShowDialog();
+#endif
     }
 
     // --- Project Management ---

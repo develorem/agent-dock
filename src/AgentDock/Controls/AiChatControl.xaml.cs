@@ -41,6 +41,9 @@ public partial class AiChatControl : UserControl
     // Pending AskUserQuestion — tracks question text for response
     private string? _pendingQuestionText;
 
+    // Inactivity warning bubble (removable when activity resumes)
+    private Border? _inactivityWarning;
+
     /// <summary>
     /// Raised when session state changes (for toolbar icon updates).
     /// </summary>
@@ -122,6 +125,7 @@ public partial class AiChatControl : UserControl
         _session.ResultReceived += result => Dispatcher.BeginInvoke(() => OnResultReceived(result));
         _session.ErrorOutput += text => Dispatcher.BeginInvoke(() => OnErrorOutput(text));
         _session.ProcessExited += code => Dispatcher.BeginInvoke(() => OnProcessExited(code));
+        _session.InactivityTimeout += () => Dispatcher.BeginInvoke(OnInactivityTimeout);
     }
 
     // --- State Handling ---
@@ -206,6 +210,7 @@ public partial class AiChatControl : UserControl
         StatusText.Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88));
 
         RemoveWaitingBubble();
+        RemoveInactivityWarning();
         FinalizeThinkingBlock();
         FinalizeStreamingBlock();
 
@@ -325,6 +330,7 @@ public partial class AiChatControl : UserControl
     private void OnStreamDelta(ClaudeStreamDelta delta)
     {
         RemoveWaitingBubble();
+        RemoveInactivityWarning();
 
         if (delta.DeltaType == "thinking_delta")
         {
@@ -414,6 +420,7 @@ public partial class AiChatControl : UserControl
     private void OnResultReceived(ClaudeResultMessage result)
     {
         RemoveWaitingBubble();
+        RemoveInactivityWarning();
         FinalizeThinkingBlock();
         FinalizeStreamingBlock();
 
@@ -633,6 +640,70 @@ public partial class AiChatControl : UserControl
         _session?.DenyPermission();
         PermissionPanel.Visibility = Visibility.Collapsed;
         InputPanel.Visibility = Visibility.Visible;
+    }
+
+    // --- Inactivity Warning ---
+
+    private void OnInactivityTimeout()
+    {
+        if (_session == null || _inactivityWarning != null)
+            return; // Already showing a warning or no session
+
+        var warningText = new TextBlock
+        {
+            Text = "Claude hasn't responded for a while — it may be stuck.",
+            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
+            FontSize = 11,
+            Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xB3, 0x47)),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 4)
+        };
+
+        var killBtn = new Button
+        {
+            Content = "Kill process",
+            Cursor = Cursors.Hand,
+            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
+            FontSize = 11,
+            Background = new SolidColorBrush(Color.FromRgb(0x5A, 0x20, 0x20)),
+            Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x6B, 0x6B)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(0x8B, 0x30, 0x30)),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(10, 4, 10, 4),
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
+        killBtn.Click += (_, _) =>
+        {
+            RemoveInactivityWarning();
+            Stop_Click(this, new RoutedEventArgs());
+        };
+
+        var panel = new StackPanel { Margin = new Thickness(0) };
+        panel.Children.Add(warningText);
+        panel.Children.Add(killBtn);
+
+        _inactivityWarning = new Border
+        {
+            Background = new SolidColorBrush(Color.FromRgb(0x3A, 0x2A, 0x10)),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(10, 8, 10, 8),
+            Margin = new Thickness(8, 4, 8, 4),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(0x6B, 0x4B, 0x20)),
+            BorderThickness = new Thickness(1),
+            Child = panel
+        };
+
+        MessageList.Children.Add(_inactivityWarning);
+        ScrollToBottom();
+    }
+
+    private void RemoveInactivityWarning()
+    {
+        if (_inactivityWarning != null)
+        {
+            MessageList.Children.Remove(_inactivityWarning);
+            _inactivityWarning = null;
+        }
     }
 
     // --- Error / Exit ---

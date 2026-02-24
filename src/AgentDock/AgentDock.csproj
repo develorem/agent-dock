@@ -15,9 +15,9 @@
     <Authors>Develorem</Authors>
     <Description>Manage multiple Claude Code AI sessions across projects from a single window.</Description>
     <Copyright>Copyright (c) 2026 Develorem</Copyright>
-    <Version>0.1.0</Version>
-    <AssemblyVersion>0.1.0.0</AssemblyVersion>
-    <FileVersion>0.1.0.0</FileVersion>
+    <Version>0.3.0</Version>
+    <AssemblyVersion>0.3.0.0</AssemblyVersion>
+    <FileVersion>0.3.0.0</FileVersion>
     <RepositoryUrl>https://github.com/develorem/agent-dock</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <ApplicationIcon>..\..\assets\agentdock.ico</ApplicationIcon>

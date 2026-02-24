@@ -15,7 +15,15 @@ public class ClaudeSession : IDisposable
     private readonly string _workingDirectory;
     private Process? _process;
     private CancellationTokenSource? _readCts;
+    private Task? _readTask;
+    private System.Timers.Timer? _inactivityTimer;
     private bool _disposed;
+
+    /// <summary>
+    /// How long (in seconds) with no stdout output before firing InactivityTimeout.
+    /// Default 90 seconds. Set to 0 to disable.
+    /// </summary>
+    public int InactivityTimeoutSeconds { get; set; } = 90;
 
     /// <summary>
     /// Path to the claude binary. Defaults to "claude" (found via PATH).
@@ -41,6 +49,7 @@ public class ClaudeSession : IDisposable
     public event Action<ClaudeResultMessage>? ResultReceived;
     public event Action<string>? ErrorOutput;
     public event Action<int>? ProcessExited;
+    public event Action? InactivityTimeout;
 
     public ClaudeSession(string workingDirectory)
     {
@@ -182,7 +191,22 @@ public class ClaudeSession : IDisposable
         // Read stdout NDJSON
         _readCts = new CancellationTokenSource();
         var stdout = _process.StandardOutput;
-        Task.Run(() => ReadOutputLoop(stdout, _readCts.Token));
+        _readTask = Task.Run(() => ReadOutputLoop(stdout, _readCts.Token));
+
+        // Observe faults so they don't go unnoticed
+        _readTask.ContinueWith(t =>
+        {
+            if (t.IsFaulted)
+            {
+                Log.Error("ClaudeSession: ReadOutputLoop task faulted", t.Exception);
+                ErrorOutput?.Invoke($"Read loop crashed: {t.Exception?.InnerException?.Message}");
+                if (State == ClaudeSessionState.Working || State == ClaudeSessionState.WaitingForPermission)
+                    SetState(ClaudeSessionState.Error);
+            }
+        }, TaskContinuationOptions.OnlyOnFaulted);
+
+        // Start inactivity watchdog
+        StartInactivityTimer();
 
         // Send the user message as JSON on stdin — this is what actually
         // triggers Claude to start processing (with stream-json input,
@@ -218,6 +242,7 @@ public class ClaudeSession : IDisposable
         }, JsonOptions));
 
         PendingPermission = null;
+        StartInactivityTimer(); // Restart watchdog after permission granted
         SetState(ClaudeSessionState.Working);
     }
 
@@ -244,6 +269,7 @@ public class ClaudeSession : IDisposable
         }, JsonOptions));
 
         PendingPermission = null;
+        StartInactivityTimer(); // Restart watchdog after permission denied
         SetState(ClaudeSessionState.Working);
     }
 
@@ -286,12 +312,15 @@ public class ClaudeSession : IDisposable
         }, JsonOptions));
 
         PendingPermission = null;
+        StartInactivityTimer(); // Restart watchdog after question answered
         SetState(ClaudeSessionState.Working);
     }
 
     public async Task StopAsync()
     {
         Log.Info("ClaudeSession.Stop called");
+
+        StopInactivityTimer();
 
         // Cancel the read loop first so it stops posting Dispatcher calls
         _readCts?.Cancel();
@@ -326,6 +355,7 @@ public class ClaudeSession : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        StopInactivityTimer();
         _readCts?.Cancel();
         KillCurrentProcess();
         _readCts?.Dispose();
@@ -394,6 +424,9 @@ public class ClaudeSession : IDisposable
                 if (string.IsNullOrWhiteSpace(line))
                     continue;
 
+                // Reset inactivity watchdog on each line of output
+                ResetInactivityTimer();
+
                 Log.Info($"ClaudeSession STDOUT: {(line.Length > 500 ? line[..500] + "..." : line)}");
 
                 try
@@ -416,6 +449,18 @@ public class ClaudeSession : IDisposable
             Log.Error("ClaudeSession: ReadOutputLoop error", ex);
             ErrorOutput?.Invoke($"Read error: {ex.Message}");
         }
+
+        StopInactivityTimer();
+
+        // If the loop ended while we were still Working (EOF without a result message,
+        // or an exception killed the loop), recover by transitioning to Error.
+        if (State == ClaudeSessionState.Working || State == ClaudeSessionState.WaitingForPermission)
+        {
+            Log.Warn($"ClaudeSession: ReadOutputLoop ended while in {State} — setting Error");
+            ErrorOutput?.Invoke("Claude stopped responding (output stream ended unexpectedly)");
+            SetState(ClaudeSessionState.Error);
+        }
+
         Log.Info("ClaudeSession: ReadOutputLoop ended");
     }
 
@@ -559,8 +604,10 @@ public class ClaudeSession : IDisposable
             Errors = errorList
         };
 
-        // Process finished this turn — close stdin so the process exits cleanly,
-        // then transition back to idle. Next SendMessage will spawn a fresh process with --resume.
+        // Process finished this turn — stop the watchdog, close stdin so the process
+        // exits cleanly, then transition back to idle. Next SendMessage will spawn a
+        // fresh process with --resume.
+        StopInactivityTimer();
         try { _process?.StandardInput.Close(); } catch { }
         SetState(ClaudeSessionState.Idle);
         ResultReceived?.Invoke(result);
@@ -592,6 +639,7 @@ public class ClaudeSession : IDisposable
             };
 
             PendingPermission = permReq;
+            StopInactivityTimer(); // Don't timeout while waiting for user
             SetState(ClaudeSessionState.WaitingForPermission);
             PermissionRequested?.Invoke(permReq);
         }
@@ -632,6 +680,41 @@ public class ClaudeSession : IDisposable
         }
 
         ProcessExited?.Invoke(exitCode);
+    }
+
+    // --- Inactivity Watchdog ---
+
+    private void StartInactivityTimer()
+    {
+        StopInactivityTimer();
+        if (InactivityTimeoutSeconds <= 0) return;
+
+        _inactivityTimer = new System.Timers.Timer(InactivityTimeoutSeconds * 1000);
+        _inactivityTimer.AutoReset = false;
+        _inactivityTimer.Elapsed += (_, _) =>
+        {
+            if (State == ClaudeSessionState.Working)
+            {
+                Log.Warn($"ClaudeSession: no output for {InactivityTimeoutSeconds}s — firing InactivityTimeout");
+                InactivityTimeout?.Invoke();
+            }
+        };
+        _inactivityTimer.Start();
+    }
+
+    private void ResetInactivityTimer()
+    {
+        if (_inactivityTimer == null) return;
+        _inactivityTimer.Stop();
+        _inactivityTimer.Start();
+    }
+
+    private void StopInactivityTimer()
+    {
+        if (_inactivityTimer == null) return;
+        _inactivityTimer.Stop();
+        _inactivityTimer.Dispose();
+        _inactivityTimer = null;
     }
 
     private static string? GetString(JsonElement element, string property)
