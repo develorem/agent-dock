@@ -20,5 +20,15 @@ public class ProjectSettings
     /// </summary>
     public string? IconColor { get; set; }
 
+    /// <summary>
+    /// A brief description of the project (one or two sentences).
+    /// Null means no description has been set.
+    /// </summary>
+    public string? Description { get; set; }
 
+    /// <summary>
+    /// Font size for the project description panel.
+    /// Null means use the default (13).
+    /// </summary>
+    public double? DescriptionFontSize { get; set; }
 }

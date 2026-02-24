@@ -40,6 +40,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<ProjectInfo, Grid> _projectTabIcons = [];
     private readonly Dictionary<ProjectInfo, DispatcherTimer> _tabIconTimers = [];
     private readonly Dictionary<ProjectInfo, DockingManager> _projectDockingManagers = [];
+    private readonly Dictionary<ProjectInfo, ProjectDescriptionControl> _projectDescriptionControls = [];
     private ProjectInfo? _activeProject;
 
     // Workspace state
@@ -55,6 +56,7 @@ public partial class MainWindow : Window
     private const string GitStatusId = "gitStatus";
     private const string FilePreviewId = "filePreview";
     private const string AiChatId = "aiChat";
+    private const string ProjectDescriptionId = "projectDescription";
 
     public MainWindow()
     {
@@ -568,10 +570,11 @@ public partial class MainWindow : Window
         ToolbarBorder.Visibility = Visibility.Visible;
 
         // Create docking layout for this project
-        var (content, chatControl, gitControl) = CreateProjectDockingLayout(project, layoutXml);
+        var (content, chatControl, gitControl, descControl) = CreateProjectDockingLayout(project, layoutXml);
         _projectContents[project] = content;
         _projectChatControls[project] = chatControl;
         _projectGitControls[project] = gitControl;
+        _projectDescriptionControls[project] = descControl;
         chatControl.SessionStateChanged += state => UpdateTabIcon(project, state);
 
         // Switch to the new project
@@ -855,7 +858,7 @@ public partial class MainWindow : Window
         return item;
     }
 
-    private (DockingManager, AiChatControl, GitStatusControl) CreateProjectDockingLayout(ProjectInfo project, string? layoutXml = null)
+    private (DockingManager, AiChatControl, GitStatusControl, ProjectDescriptionControl) CreateProjectDockingLayout(ProjectInfo project, string? layoutXml = null)
     {
         Log.Info("CreateDockingLayout: starting");
         var dockingManager = new DockingManager
@@ -874,19 +877,39 @@ public partial class MainWindow : Window
 
         var filePreviewControl = new FilePreviewControl();
 
-        // Wire settings change from file explorer settings dialog
-        fileExplorerControl.ProjectSettingsChanged += () =>
+        var descriptionControl = new ProjectDescriptionControl();
+        descriptionControl.LoadProject(project.FolderPath);
+
+        // Shared handler for refreshing UI after project settings change
+        void OnProjectSettingsChanged()
         {
+            var settings = ProjectSettingsManager.Load(project.FolderPath);
+
             if (_projectTabButtons.TryGetValue(project, out var tabBtn) &&
                 tabBtn.Content is StackPanel sp && sp.Children.Count > 0)
             {
-                var settings = ProjectSettingsManager.Load(project.FolderPath);
                 sp.Children.RemoveAt(0);
                 sp.Children.Insert(0, CreateIconElement(
                     settings.Icon ?? "folder", project.FolderPath,
                     settings.IconColor));
             }
+
+            descriptionControl.SetDescription(settings.Description);
+        }
+
+        // Open settings dialog from description panel's settings icon
+        descriptionControl.OpenSettingsRequested += () =>
+        {
+            var result = ProjectSettingsDialog.Show(this, project.FolderPath);
+            if (result != null)
+            {
+                ProjectSettingsManager.Save(project.FolderPath, result);
+                OnProjectSettingsChanged();
+            }
         };
+
+        // Wire settings change from file explorer settings dialog
+        fileExplorerControl.ProjectSettingsChanged += OnProjectSettingsChanged;
 
         // Wire file explorer clicks to preview panel
         fileExplorerControl.FileSelected += filePath =>
@@ -921,7 +944,8 @@ public partial class MainWindow : Window
             [FileExplorerId] = fileExplorerControl,
             [GitStatusId] = gitStatusControl,
             [FilePreviewId] = filePreviewControl,
-            [AiChatId] = aiChatControl
+            [AiChatId] = aiChatControl,
+            [ProjectDescriptionId] = descriptionControl
         };
 
         // Title map for restored anchorables
@@ -930,7 +954,8 @@ public partial class MainWindow : Window
             [FileExplorerId] = $"{project.FolderName} — File Explorer",
             [GitStatusId] = "Git Status",
             [FilePreviewId] = "File Preview",
-            [AiChatId] = "AI Chat"
+            [AiChatId] = "AI Chat",
+            [ProjectDescriptionId] = "Project Description"
         };
 
         if (layoutXml != null)
@@ -968,18 +993,35 @@ public partial class MainWindow : Window
 
                 using var reader = new StringReader(layoutXml);
                 serializer.Deserialize(reader);
+
+                // Ensure description panel exists (handles old workspace files that pre-date this feature)
+                if (descriptionControl.Parent == null)
+                {
+                    var descAnchorable = new LayoutAnchorable
+                    {
+                        Title = "Project Description",
+                        ContentId = ProjectDescriptionId,
+                        CanClose = false,
+                        CanHide = false,
+                        CanAutoHide = true,
+                        Content = descriptionControl
+                    };
+                    var anchorGroup = new LayoutAnchorGroup();
+                    anchorGroup.Children.Add(descAnchorable);
+                    dockingManager.Layout.RightSide.Children.Add(anchorGroup);
+                }
             }
             catch (Exception ex)
             {
                 Log.Warn($"CreateDockingLayout: failed to restore layout, falling back to default — {ex.Message}");
                 // Fall through to build default layout
-                BuildDefaultLayout(dockingManager, project, fileExplorerControl, gitStatusControl, filePreviewControl, aiChatControl);
+                BuildDefaultLayout(dockingManager, project, fileExplorerControl, gitStatusControl, filePreviewControl, aiChatControl, descriptionControl);
             }
         }
         else
         {
             // Build default layout
-            BuildDefaultLayout(dockingManager, project, fileExplorerControl, gitStatusControl, filePreviewControl, aiChatControl);
+            BuildDefaultLayout(dockingManager, project, fileExplorerControl, gitStatusControl, filePreviewControl, aiChatControl, descriptionControl);
         }
 
         _projectDockingManagers[project] = dockingManager;
@@ -997,7 +1039,7 @@ public partial class MainWindow : Window
         };
 
         Log.Info("CreateDockingLayout: complete");
-        return (dockingManager, aiChatControl, gitStatusControl);
+        return (dockingManager, aiChatControl, gitStatusControl, descriptionControl);
     }
 
     private void BuildDefaultLayout(
@@ -1006,7 +1048,8 @@ public partial class MainWindow : Window
         FileExplorerControl fileExplorerControl,
         GitStatusControl gitStatusControl,
         FilePreviewControl filePreviewControl,
-        AiChatControl aiChatControl)
+        AiChatControl aiChatControl,
+        ProjectDescriptionControl descriptionControl)
     {
         // Calculate column widths as ~33% each based on actual window width
         var availableWidth = ActualWidth > 0 ? ActualWidth : SystemParameters.PrimaryScreenWidth;
@@ -1083,6 +1126,21 @@ public partial class MainWindow : Window
         var layoutRoot = new LayoutRoot();
         layoutRoot.RootPanel = rootPanel;
         dockingManager.Layout = layoutRoot;
+
+        // --- Auto-collapsed description panel on right side ---
+        var descriptionAnchorable = new LayoutAnchorable
+        {
+            Title = "Project Description",
+            ContentId = ProjectDescriptionId,
+            CanClose = false,
+            CanHide = false,
+            CanAutoHide = true,
+            Content = descriptionControl
+        };
+
+        var anchorGroup = new LayoutAnchorGroup();
+        anchorGroup.Children.Add(descriptionAnchorable);
+        layoutRoot.RightSide.Children.Add(anchorGroup);
     }
 
     private static UIElement CreatePanelPlaceholder(string title, string subtitle)
@@ -1227,6 +1285,7 @@ public partial class MainWindow : Window
 
         _projectTabIcons.Remove(project);
         _projectDockingManagers.Remove(project);
+        _projectDescriptionControls.Remove(project);
 
         // Remove content
         _projectContents.Remove(project);
@@ -1288,6 +1347,7 @@ public partial class MainWindow : Window
 
             _projectTabIcons.Remove(project);
             _projectDockingManagers.Remove(project);
+            _projectDescriptionControls.Remove(project);
             _projectContents.Remove(project);
         }
 
@@ -1713,6 +1773,7 @@ public partial class MainWindow : Window
             chatControl.Shutdown();
 
         _projectChatControls.Clear();
+        _projectDescriptionControls.Clear();
     }
 
     // --- Theme ---
