@@ -5,7 +5,7 @@
 <h1 align="center">Agent Dock</h1>
 
 <p align="center">
-  <strong>One window. Every project. All your Claude Code sessions.</strong>
+  <strong>One window. Every project. All your AI coding sessions.</strong>
 </p>
 
 <p align="center">
@@ -20,7 +20,7 @@
 
 <br />
 
-> **[Download the latest installer](https://github.com/develorem/agent-dock/releases/latest)** &mdash; requires [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) and [.NET 10 Runtime](https://dotnet.microsoft.com/download/dotnet/10.0)
+> **[Download the latest installer](https://github.com/develorem/agent-dock/releases/latest)** &mdash; requires [.NET 10 Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) and a supported AI agent (currently [Claude Code](https://docs.anthropic.com/en/docs/claude-code))
 
 <br />
 
@@ -32,9 +32,11 @@
 
 ## What is Agent Dock?
 
-Agent Dock is a free, open-source desktop app for developers who use [Claude Code](https://docs.anthropic.com/en/docs/claude-code) across multiple projects. Instead of juggling separate terminal windows, Agent Dock puts every session in one place — with a file explorer, git status, file preview, and AI chat panel for each project.
+Agent Dock is a free, open-source desktop app for developers who use AI coding agents across multiple projects. Instead of juggling separate terminal windows, Agent Dock puts every session in one place — with a file explorer, git status, file preview, and AI chat panel for each project.
 
 Switch between projects with a single click. See at a glance which sessions are working, which are waiting for input, and which are idle.
+
+> **Currently supported:** [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Support for additional agents and models is coming soon.
 
 ---
 
@@ -46,7 +48,7 @@ Open as many project folders as you need, each in its own tab. Every tab gets a 
 
 ### AI Chat Panel
 
-A terminal-style interface for interacting with Claude Code. Messages stream in real-time, past conversation history collapses to keep things tidy, and permission prompts appear inline — no disruptive pop-ups.
+A terminal-style interface for interacting with your AI agent. Messages stream in real-time, past conversation history collapses to keep things tidy, and permission prompts appear inline — no disruptive pop-ups.
 
 ### File Explorer
 
@@ -62,7 +64,7 @@ Syntax-highlighted code for dozens of languages, rendered markdown, image previe
 
 ### Toolbar Status Icons
 
-Each project tab in the toolbar shows Claude's current state: idle, working, or waiting for input. A red badge warns you when a session is running in dangerous mode.
+Each project tab in the toolbar shows the agent's current state: idle, working, or waiting for input. A red badge warns you when a session is running in dangerous mode.
 
 ### Themes
 
@@ -76,9 +78,9 @@ Save your entire session — open projects, panel layouts, toolbar position, the
 
 ## Getting Started
 
-1. Install [.NET 10 Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) and [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
+1. Install [.NET 10 Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) and a supported agent ([Claude Code](https://docs.anthropic.com/en/docs/claude-code))
 2. Download Agent Dock from the [Releases page](https://github.com/develorem/agent-dock/releases/latest)
-3. Launch the app, click **+** to add a project, and start a Claude session
+3. Launch the app, click **+** to add a project, and start an AI session
 
 **[Full installation & usage guide &rarr;](INSTALL.md)**
 

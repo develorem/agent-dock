@@ -22,13 +22,15 @@ dotnet --list-runtimes
 
 Look for a line starting with `Microsoft.WindowsDesktop.App 10.x`.
 
-### 3. Claude Code CLI
+### 3. A Supported AI Agent
 
-Agent Dock launches Claude Code as a background process for each project. The `claude` command must be installed and available in your system PATH.
+Agent Dock launches AI coding agents as background processes for each project. Currently supported:
 
-**[Install Claude Code](https://docs.anthropic.com/en/docs/claude-code)**
+- **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** — the `claude` command must be installed and available in your system PATH
 
-To verify it's installed correctly, open a terminal and run:
+Support for additional agents and models is coming soon.
+
+To verify Claude Code is installed correctly, open a terminal and run:
 
 ```
 claude --version
@@ -53,12 +55,12 @@ If this prints a version number, you're ready to go.
 
 Click the **+** button in the toolbar to open a folder picker. Select any project folder — it will appear as a new tab in the toolbar. You can add as many projects as you like.
 
-### Starting a Claude Session
+### Starting an AI Session
 
-Each project has an **AI panel** on the right side of the workspace. When you open a project for the first time, the panel will show two options:
+Each project has an **AI panel** on the right side of the workspace. When you open a project for the first time, the panel will show options to start a session:
 
-- **Start Claude** — launches Claude Code in normal mode, where it asks for permission before running commands or editing files
-- **Start Claude (Dangerous Mode)** — launches with `--dangerously-skip-permissions`, giving Claude full autonomy. Use with caution.
+- **Start** — launches the agent in normal mode, where it asks for permission before running commands or editing files
+- **Start (Dangerous Mode)** — launches with full autonomy (e.g. `--dangerously-skip-permissions` for Claude Code). Use with caution.
 
 Once started, type your prompt in the input area at the bottom of the AI panel and press Enter.
 
@@ -71,25 +73,25 @@ Each project tab has four panels that you can rearrange freely:
 | **File Explorer** | Tree view of your project folder (respects `.gitignore`) |
 | **Git Status** | Staged and unstaged changes with color-coded indicators |
 | **File Preview** | Syntax-highlighted code, images, markdown, and diffs |
-| **AI Chat** | Terminal-style interface for interacting with Claude Code |
+| **AI Chat** | Terminal-style interface for interacting with your AI agent |
 
 **Rearranging panels** — Drag any panel by its title bar to dock it to a different edge, tab it alongside another panel, or float it as a separate window. Each project's layout is independent.
 
 ### Understanding Toolbar Icons
 
-The toolbar shows one icon per project. The icon reflects Claude's current state:
+The toolbar shows one icon per project. The icon reflects the agent's current state:
 
 | Icon State | Meaning |
 |------------|---------|
-| Folder icon | No Claude session running |
-| Claude icon | Session active, Claude is idle |
-| Claude icon + spinner | Claude is working |
-| Claude icon + **?** badge | Claude is waiting for your input |
-| Claude icon + red badge | Session running in dangerous mode |
+| Folder icon | No AI session running |
+| Agent icon | Session active, agent is idle |
+| Agent icon + spinner | Agent is working |
+| Agent icon + **?** badge | Agent is waiting for your input |
+| Agent icon + red badge | Session running in dangerous mode |
 
 ### Handling Permission Prompts
 
-When Claude wants to run a command or edit a file (in normal mode), a permission prompt appears inline in the AI panel — right where the input area normally is. You'll see what Claude wants to do and can **Allow** or **Deny** the action. No pop-up dialogs.
+When the agent wants to run a command or edit a file (in normal mode), a permission prompt appears inline in the AI panel — right where the input area normally is. You'll see what the agent wants to do and can **Allow** or **Deny** the action. No pop-up dialogs.
 
 ### Viewing Files and Diffs
 
@@ -110,7 +112,7 @@ Workspaces let you save and restore your entire session.
 - Panel layouts for each project
 - Toolbar position
 - Active theme
-- Claude session modes
+- AI session modes
 
 ### Loading a Workspace
 
@@ -119,7 +121,7 @@ Workspaces let you save and restore your entire session.
 ### Behavior on Close
 
 When you close Agent Dock:
-- All running Claude sessions are stopped
+- All running AI sessions are stopped
 - If you have unsaved workspace changes, you'll be prompted to save
 
 ---
@@ -132,7 +134,7 @@ Access settings from the **Settings** menu:
 |---------|---------|-------|
 | **Theme** | 6 built-in themes (light & dark variants) | Applied globally |
 | **Toolbar Position** | Top, Left, Right, Bottom | Per-workspace setting |
-| **Claude Path Override** | Custom path to `claude` binary | Use if `claude` isn't in your PATH |
+| **Agent Path Override** | Custom path to the agent binary | Use if the agent CLI isn't in your PATH |
 
 ---
 
@@ -153,9 +155,9 @@ Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) (n
 
 ## Troubleshooting
 
-### "Claude not found" or session won't start
+### "Agent not found" or session won't start
 
-Make sure the `claude` command is available in your PATH. Open a terminal and run `claude --version`. If it's not found, [install Claude Code](https://docs.anthropic.com/en/docs/claude-code) or set a custom path in **Settings > Claude Path Override**.
+Make sure the agent CLI is available in your PATH. For Claude Code, open a terminal and run `claude --version`. If it's not found, [install Claude Code](https://docs.anthropic.com/en/docs/claude-code) or set a custom path in **Settings > Agent Path Override**.
 
 ### App won't launch
 
