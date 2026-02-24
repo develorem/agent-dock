@@ -36,6 +36,26 @@ public static class BuiltInIcons
         new("wrench",   "Wrench",      "\uE8A1", "Segoe MDL2 Assets"),    //  repair
         new("calendar", "Calendar",    "\uE787", "Segoe MDL2 Assets"),    //  calendar week
         new("search",   "Search",      "\uE721", "Segoe MDL2 Assets"),    //  zoom/search
+        new("edit",     "Edit",        "\uE70F", "Segoe MDL2 Assets"),    //  pencil
+        new("mail",     "Mail",        "\uE715", "Segoe MDL2 Assets"),    //  envelope
+        new("people",   "People",      "\uE716", "Segoe MDL2 Assets"),    //  people
+        new("flag",     "Flag",        "\uE7C1", "Segoe MDL2 Assets"),    //  flag
+        new("link",     "Link",        "\uE71E", "Segoe MDL2 Assets"),    //  chain link
+        new("save",     "Save",        "\uE74E", "Segoe MDL2 Assets"),    //  floppy disk
+        new("video",    "Video",       "\uE714", "Segoe MDL2 Assets"),    //  video camera
+        new("mic",      "Mic",         "\uE720", "Segoe MDL2 Assets"),    //  microphone
+        new("document", "Document",    "\uE8A5", "Segoe MDL2 Assets"),    //  page
+        new("leaf",     "Leaf",        "\uE8BE", "Segoe MDL2 Assets"),    //  leaf
+        new("calculator","Calculator", "\uE7EE", "Segoe MDL2 Assets"),    //  calculator
+        new("shop",     "Shop",        "\uE719", "Segoe MDL2 Assets"),    //  shopping bag
+        new("print",    "Print",       "\uE749", "Segoe MDL2 Assets"),    //  printer
+        new("mappin",   "Map Pin",     "\uE707", "Segoe MDL2 Assets"),    //  location pin
+        new("headphone","Headphone",   "\uE7F6", "Segoe MDL2 Assets"),    //  headphones
+        new("download", "Download",    "\uE896", "Segoe MDL2 Assets"),    //  download arrow
+        new("photo",    "Photo",       "\uEB9F", "Segoe MDL2 Assets"),    //  picture
+        new("bookmark", "Bookmark",    "\uE8A4", "Segoe MDL2 Assets"),    //  bookmark
+        new("warning",  "Warning",     "\uE7BA", "Segoe MDL2 Assets"),    //  warning triangle
+        new("bolt",     "Bolt",        "\uE945", "Segoe MDL2 Assets"),    //  lightning bolt
     ];
 
     /// <summary>
