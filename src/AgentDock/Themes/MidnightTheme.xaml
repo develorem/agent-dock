@@ -1,0 +1,175 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Toolbar -->
+    <SolidColorBrush x:Key="ToolbarBackground" Color="#161B22" />
+    <SolidColorBrush x:Key="ToolbarBorderBrush" Color="#30363D" />
+    <SolidColorBrush x:Key="ContentBackground" Color="#0D1117" />
+
+    <!-- Tab buttons -->
+    <SolidColorBrush x:Key="TabButtonBorderBrush" Color="#484F58" />
+    <SolidColorBrush x:Key="TabButtonHoverBorderBrush" Color="#6E7681" />
+    <SolidColorBrush x:Key="TabButtonForeground" Color="#C9D1D9" />
+    <SolidColorBrush x:Key="TabButtonActiveBackground" Color="#1F3A5F" />
+    <SolidColorBrush x:Key="TabButtonActiveBorderBrush" Color="#58A6FF" />
+    <SolidColorBrush x:Key="TabButtonInactiveBackground" Color="Transparent" />
+
+    <!-- Add button -->
+    <SolidColorBrush x:Key="AddButtonBorderBrush" Color="#484F58" />
+    <SolidColorBrush x:Key="AddButtonForeground" Color="#8B949E" />
+
+    <!-- Empty state -->
+    <SolidColorBrush x:Key="EmptyStateForeground" Color="#8B949E" />
+
+    <!-- Tab icon -->
+    <SolidColorBrush x:Key="TabIconNoSessionForeground" Color="#C9D1D9" />
+    <SolidColorBrush x:Key="TabIconInactiveDiamondForeground" Color="#BC8CFF" />
+    <SolidColorBrush x:Key="TabIconIdleForeground" Color="#56D4A0" />
+    <SolidColorBrush x:Key="TabIconWorkingForeground" Color="#58A6FF" />
+    <SolidColorBrush x:Key="TabIconWaitingForeground" Color="#E3B341" />
+    <SolidColorBrush x:Key="TabIconErrorForeground" Color="#F85149" />
+
+    <!-- File preview -->
+    <SolidColorBrush x:Key="PreviewEmptyForeground" Color="#8B949E" />
+    <SolidColorBrush x:Key="PreviewNoPreviewForeground" Color="#8B949E" />
+    <SolidColorBrush x:Key="PreviewBackground" Color="#0D1117" />
+    <SolidColorBrush x:Key="PreviewForeground" Color="#C9D1D9" />
+    <SolidColorBrush x:Key="PreviewLinkForeground" Color="#79C0FF" />
+    <SolidColorBrush x:Key="PreviewLineNumberForeground" Color="#484F58" />
+
+    <!-- Git status -->
+    <SolidColorBrush x:Key="GitPlaceholderForeground" Color="#8B949E" />
+    <SolidColorBrush x:Key="GitStagedForeground" Color="#56D4A0" />
+    <SolidColorBrush x:Key="GitUnstagedForeground" Color="#E3B341" />
+    <SolidColorBrush x:Key="GitStagedLabelForeground" Color="#8B949E" />
+
+    <!-- File explorer -->
+    <SolidColorBrush x:Key="ExplorerToolbarBackground" Color="#161B22" />
+    <SolidColorBrush x:Key="ExplorerToolbarBorderBrush" Color="#30363D" />
+    <SolidColorBrush x:Key="ExplorerForeground" Color="#C9D1D9" />
+    <SolidColorBrush x:Key="ExplorerSelectedBackground" Color="#1F3A5F" />
+    <SolidColorBrush x:Key="ExplorerSelectedForeground" Color="#FFFFFF" />
+    <SolidColorBrush x:Key="ExplorerHoverBackground" Color="#1C2128" />
+
+    <!-- Panel placeholder -->
+    <SolidColorBrush x:Key="PlaceholderBackground" Color="#0D1117" />
+    <SolidColorBrush x:Key="PlaceholderTitleForeground" Color="#8B949E" />
+    <SolidColorBrush x:Key="PlaceholderSubtitleForeground" Color="#6E7681" />
+
+    <!-- Title bar -->
+    <SolidColorBrush x:Key="TitleBarBackground" Color="#161B22" />
+    <SolidColorBrush x:Key="TitleBarForeground" Color="#C9D1D9" />
+    <SolidColorBrush x:Key="TitleBarButtonHover" Color="#21262D" />
+    <SolidColorBrush x:Key="CloseButtonHover" Color="#DA3633" />
+    <SolidColorBrush x:Key="CloseButtonHoverForeground" Color="#FFFFFF" />
+    <SolidColorBrush x:Key="MenuIconForeground" Color="#8B949E" />
+
+    <!-- Menu -->
+    <SolidColorBrush x:Key="MenuBackground" Color="#161B22" />
+    <SolidColorBrush x:Key="MenuForeground" Color="#C9D1D9" />
+    <SolidColorBrush x:Key="MenuSeparatorBrush" Color="#30363D" />
+    <SolidColorBrush x:Key="MenuHighlightBackground" Color="#21262D" />
+    <SolidColorBrush x:Key="MenuDisabledForeground" Color="#484F58" />
+    <SolidColorBrush x:Key="MenuPopupBackground" Color="#0D1117" />
+    <SolidColorBrush x:Key="MenuPopupBorderBrush" Color="#30363D" />
+
+    <!-- ScrollBar -->
+    <SolidColorBrush x:Key="ScrollBarBackground" Color="#161B22" />
+    <SolidColorBrush x:Key="ScrollBarThumbBackground" Color="#21262D" />
+    <SolidColorBrush x:Key="ScrollBarThumbHover" Color="#30363D" />
+    <SolidColorBrush x:Key="ScrollBarThumbPressed" Color="#484F58" />
+    <SolidColorBrush x:Key="ScrollBarArrowForeground" Color="#8B949E" />
+    <SolidColorBrush x:Key="ScrollBarArrowHover" Color="#58A6FF" />
+
+    <!-- Help / About windows -->
+    <SolidColorBrush x:Key="HelpBackground" Color="#0D1117" />
+    <SolidColorBrush x:Key="HelpForeground" Color="#C9D1D9" />
+    <SolidColorBrush x:Key="HelpHeadingForeground" Color="#58A6FF" />
+    <SolidColorBrush x:Key="HelpMutedForeground" Color="#8B949E" />
+    <SolidColorBrush x:Key="HelpLinkForeground" Color="#79C0FF" />
+    <SolidColorBrush x:Key="HelpCardBackground" Color="#161B22" />
+    <SolidColorBrush x:Key="HelpCardBorderBrush" Color="#30363D" />
+    <SolidColorBrush x:Key="HelpKbdBackground" Color="#21262D" />
+    <SolidColorBrush x:Key="HelpKbdBorderBrush" Color="#484F58" />
+
+    <!-- Diff colors -->
+    <Color x:Key="DiffAddedColor">#132A1C</Color>
+    <Color x:Key="DiffRemovedColor">#31171B</Color>
+    <Color x:Key="DiffHunkHeaderColor">#1B1A34</Color>
+    <SolidColorBrush x:Key="DiffAddedForeground" Color="#3FB950" />
+    <SolidColorBrush x:Key="DiffRemovedForeground" Color="#F85149" />
+    <SolidColorBrush x:Key="DiffHunkHeaderForeground" Color="#BC8CFF" />
+    <SolidColorBrush x:Key="DiffAddedBackground" Color="{StaticResource DiffAddedColor}" />
+    <SolidColorBrush x:Key="DiffRemovedBackground" Color="{StaticResource DiffRemovedColor}" />
+    <SolidColorBrush x:Key="DiffHunkHeaderBackground" Color="{StaticResource DiffHunkHeaderColor}" />
+
+    <!-- AI Chat panel -->
+    <SolidColorBrush x:Key="ChatBackground" Color="#0D1117" />
+    <SolidColorBrush x:Key="ChatTextForeground" Color="#C9D1D9" />
+    <SolidColorBrush x:Key="ChatMutedForeground" Color="#8B949E" />
+    <SolidColorBrush x:Key="ChatSubtleForeground" Color="#6E7681" />
+
+    <!-- Chat status bar -->
+    <SolidColorBrush x:Key="ChatStatusBarBackground" Color="#161B22" />
+    <SolidColorBrush x:Key="ChatStatusWorkingForeground" Color="#58A6FF" />
+    <SolidColorBrush x:Key="ChatStatusWarningForeground" Color="#E3B341" />
+    <SolidColorBrush x:Key="ChatStatusErrorForeground" Color="#F85149" />
+
+    <!-- Chat input -->
+    <SolidColorBrush x:Key="ChatInputBackground" Color="#0D1117" />
+    <SolidColorBrush x:Key="ChatInputForeground" Color="#C9D1D9" />
+    <SolidColorBrush x:Key="ChatInputBorderBrush" Color="#30363D" />
+    <SolidColorBrush x:Key="ChatInputPromptForeground" Color="#58A6FF" />
+
+    <!-- Chat buttons -->
+    <SolidColorBrush x:Key="ChatButtonBackground" Color="#1F6FEB" />
+    <SolidColorBrush x:Key="ChatButtonForeground" Color="#C9D1D9" />
+    <SolidColorBrush x:Key="ChatButtonBorderBrush" Color="#388BFD" />
+
+    <!-- Chat agent selection cards -->
+    <SolidColorBrush x:Key="ChatAgentCardBackground" Color="#161B22" />
+    <SolidColorBrush x:Key="ChatAgentCardBorderBrush" Color="#30363D" />
+
+    <!-- Chat user messages -->
+    <SolidColorBrush x:Key="ChatUserBubbleBackground" Color="#1F3A5F" />
+    <SolidColorBrush x:Key="ChatUserLabelForeground" Color="#58A6FF" />
+
+    <!-- Chat assistant messages -->
+    <SolidColorBrush x:Key="ChatAssistantBubbleBackground" Color="#1C2128" />
+    <SolidColorBrush x:Key="ChatAssistantLabelForeground" Color="#56D4A0" />
+
+    <!-- Chat thinking -->
+    <SolidColorBrush x:Key="ChatThinkingBackground" Color="#161B22" />
+    <SolidColorBrush x:Key="ChatThinkingBorderBrush" Color="#30363D" />
+
+    <!-- Chat execution -->
+    <SolidColorBrush x:Key="ChatExecutionBackground" Color="#0D1F12" />
+    <SolidColorBrush x:Key="ChatExecutionBorderBrush" Color="#1A3020" />
+    <SolidColorBrush x:Key="ChatExecutionForeground" Color="#3FB950" />
+
+    <!-- Chat permission prompt -->
+    <SolidColorBrush x:Key="ChatPermissionBackground" Color="#261C10" />
+    <SolidColorBrush x:Key="ChatPermissionBorderBrush" Color="#D29922" />
+    <SolidColorBrush x:Key="ChatPermissionTitleForeground" Color="#E3B341" />
+
+    <!-- Chat question prompt -->
+    <SolidColorBrush x:Key="ChatQuestionBackground" Color="#161825" />
+    <SolidColorBrush x:Key="ChatQuestionBorderBrush" Color="#6E7681" />
+    <SolidColorBrush x:Key="ChatQuestionTitleForeground" Color="#79C0FF" />
+    <SolidColorBrush x:Key="ChatOptionButtonBackground" Color="#1F3A5F" />
+    <SolidColorBrush x:Key="ChatOptionButtonBorderBrush" Color="#388BFD" />
+
+    <!-- Chat warning -->
+    <SolidColorBrush x:Key="ChatWarningBackground" Color="#261C10" />
+    <SolidColorBrush x:Key="ChatWarningBorderBrush" Color="#D29922" />
+
+    <!-- Chat danger / stop -->
+    <SolidColorBrush x:Key="ChatDangerBackground" Color="#2D1315" />
+    <SolidColorBrush x:Key="ChatDangerBorderBrush" Color="#DA3633" />
+    <SolidColorBrush x:Key="ChatDangerForeground" Color="#F85149" />
+    <SolidColorBrush x:Key="ChatDangerMutedForeground" Color="#F8514980" />
+    <SolidColorBrush x:Key="ChatStopButtonBorderBrush" Color="#F85149" />
+    <SolidColorBrush x:Key="ChatKillButtonBackground" Color="#5A1D1F" />
+    <SolidColorBrush x:Key="ChatKillButtonBorderBrush" Color="#DA3633" />
+
+</ResourceDictionary>

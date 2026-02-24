@@ -4,14 +4,14 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              mc:Ignorable="d"
-             Background="#1E1E1E">
+             Background="{DynamicResource ChatBackground}">
     <UserControl.Resources>
         <Style x:Key="ChatButtonStyle" TargetType="Button">
             <Setter Property="FontFamily" Value="Cascadia Code, Consolas, Courier New" />
             <Setter Property="FontSize" Value="11" />
-            <Setter Property="Foreground" Value="#E0E0E0" />
-            <Setter Property="Background" Value="#0E639C" />
-            <Setter Property="BorderBrush" Value="#1177BB" />
+            <Setter Property="Foreground" Value="{DynamicResource ChatButtonForeground}" />
+            <Setter Property="Background" Value="{DynamicResource ChatButtonBackground}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ChatButtonBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="Padding" Value="8,4" />
@@ -26,7 +26,7 @@
             <TextBlock Text="Agent Selection"
                        FontFamily="Cascadia Code, Consolas, Courier New"
                        FontSize="18" FontWeight="SemiBold"
-                       Foreground="#E0E0E0"
+                       Foreground="{DynamicResource ChatTextForeground}"
                        HorizontalAlignment="Center"
                        Margin="0,0,0,20" />
             <!-- Claude (normal) -->
@@ -38,8 +38,8 @@
                     BorderThickness="0"
                     HorizontalContentAlignment="Stretch"
                     Padding="0">
-                <Border Background="#252526"
-                        BorderBrush="#3C3C3C"
+                <Border Background="{DynamicResource ChatAgentCardBackground}"
+                        BorderBrush="{DynamicResource ChatAgentCardBorderBrush}"
                         BorderThickness="1"
                         CornerRadius="4"
                         Padding="14,10">
@@ -47,11 +47,11 @@
                         <TextBlock Text="Claude"
                                    FontFamily="Cascadia Code, Consolas, Courier New"
                                    FontSize="13" FontWeight="SemiBold"
-                                   Foreground="#E0E0E0" />
+                                   Foreground="{DynamicResource ChatTextForeground}" />
                         <TextBlock Text="Standard session with permission prompts"
                                    FontFamily="Cascadia Code, Consolas, Courier New"
                                    FontSize="10"
-                                   Foreground="#888"
+                                   Foreground="{DynamicResource ChatMutedForeground}"
                                    Margin="0,3,0,0" />
                     </StackPanel>
                 </Border>
@@ -66,8 +66,8 @@
                     HorizontalContentAlignment="Stretch"
                     Padding="0"
                     ToolTip="Bypasses all permission prompts — the agent can execute any tool without asking. Use with caution.">
-                <Border Background="#2A1A1A"
-                        BorderBrush="#5C2020"
+                <Border Background="{DynamicResource ChatDangerBackground}"
+                        BorderBrush="{DynamicResource ChatDangerBorderBrush}"
                         BorderThickness="1"
                         CornerRadius="4"
                         Padding="14,10">
@@ -75,11 +75,11 @@
                         <TextBlock Text="Claude Unrestricted"
                                    FontFamily="Cascadia Code, Consolas, Courier New"
                                    FontSize="13" FontWeight="SemiBold"
-                                   Foreground="#FF6B6B" />
+                                   Foreground="{DynamicResource ChatDangerForeground}" />
                         <TextBlock Text="No permission prompts (--dangerously-skip-permissions)"
                                    FontFamily="Cascadia Code, Consolas, Courier New"
                                    FontSize="10"
-                                   Foreground="#AA6666"
+                                   Foreground="{DynamicResource ChatDangerMutedForeground}"
                                    Margin="0,3,0,0" />
                     </StackPanel>
                 </Border>
@@ -88,7 +88,7 @@
                        Visibility="Collapsed"
                        FontFamily="Cascadia Code, Consolas, Courier New"
                        FontSize="11"
-                       Foreground="#FF6B6B"
+                       Foreground="{DynamicResource ChatDangerForeground}"
                        HorizontalAlignment="Center"
                        TextWrapping="Wrap"
                        MaxWidth="300"
@@ -99,13 +99,13 @@
         <DockPanel x:Name="ChatPanel" Visibility="Collapsed">
 
             <!-- Status bar at top -->
-            <Border DockPanel.Dock="Top" Background="#252526" Padding="8,4">
+            <Border DockPanel.Dock="Top" Background="{DynamicResource ChatStatusBarBackground}" Padding="8,4">
                 <DockPanel>
                     <TextBlock x:Name="StatusText"
                                Text="Initializing..."
                                FontFamily="Cascadia Code, Consolas, Courier New"
                                FontSize="11"
-                               Foreground="#888"
+                               Foreground="{DynamicResource ChatMutedForeground}"
                                VerticalAlignment="Center" />
                     <Button x:Name="StopButton"
                             Content="Stop"
@@ -114,9 +114,9 @@
                             HorizontalAlignment="Right"
                             FontFamily="Cascadia Code, Consolas, Courier New"
                             FontSize="10"
-                            Foreground="#FF6B6B"
+                            Foreground="{DynamicResource ChatDangerForeground}"
                             Background="Transparent"
-                            BorderBrush="#FF4444"
+                            BorderBrush="{DynamicResource ChatStopButtonBorderBrush}"
                             BorderThickness="1"
                             Cursor="Hand"
                             Padding="8,2" />
@@ -127,20 +127,20 @@
             <Border x:Name="PermissionPanel"
                     DockPanel.Dock="Bottom"
                     Visibility="Collapsed"
-                    Background="#2A2A1A"
-                    BorderBrush="#FF8C00"
+                    Background="{DynamicResource ChatPermissionBackground}"
+                    BorderBrush="{DynamicResource ChatPermissionBorderBrush}"
                     BorderThickness="0,1,0,0"
                     Padding="8,6">
                 <StackPanel>
                     <TextBlock Text="Permission Required"
                                FontFamily="Cascadia Code, Consolas, Courier New"
                                FontSize="12" FontWeight="SemiBold"
-                               Foreground="#FFB347"
+                               Foreground="{DynamicResource ChatPermissionTitleForeground}"
                                Margin="0,0,0,4" />
                     <TextBlock x:Name="PermissionToolName"
                                FontFamily="Cascadia Code, Consolas, Courier New"
                                FontSize="11"
-                               Foreground="#CCC"
+                               Foreground="{DynamicResource ChatTextForeground}"
                                Margin="0,0,0,4" />
                     <ScrollViewer MaxHeight="120"
                                   VerticalScrollBarVisibility="Auto"
@@ -149,7 +149,7 @@
                         <TextBlock x:Name="PermissionDetail"
                                    FontFamily="Cascadia Code, Consolas, Courier New"
                                    FontSize="10"
-                                   Foreground="#AAA"
+                                   Foreground="{DynamicResource ChatMutedForeground}"
                                    TextWrapping="Wrap" />
                     </ScrollViewer>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
@@ -162,9 +162,9 @@
                                 Click="PermissionDeny_Click"
                                 FontFamily="Cascadia Code, Consolas, Courier New"
                                 FontSize="11"
-                                Foreground="#FF6B6B"
-                                Background="#2A1A1A"
-                                BorderBrush="#FF4444"
+                                Foreground="{DynamicResource ChatDangerForeground}"
+                                Background="{DynamicResource ChatDangerBackground}"
+                                BorderBrush="{DynamicResource ChatStopButtonBorderBrush}"
                                 BorderThickness="1"
                                 Cursor="Hand"
                                 Padding="8,4"
@@ -177,15 +177,15 @@
             <Border x:Name="QuestionPanel"
                     DockPanel.Dock="Bottom"
                     Visibility="Collapsed"
-                    Background="#1A1A2A"
-                    BorderBrush="#5B7BB5"
+                    Background="{DynamicResource ChatQuestionBackground}"
+                    BorderBrush="{DynamicResource ChatQuestionBorderBrush}"
                     BorderThickness="0,1,0,0"
                     Padding="8,6">
                 <StackPanel>
                     <TextBlock x:Name="QuestionText"
                                FontFamily="Cascadia Code, Consolas, Courier New"
                                FontSize="12" FontWeight="SemiBold"
-                               Foreground="#7BA7D9"
+                               Foreground="{DynamicResource ChatQuestionTitleForeground}"
                                TextWrapping="Wrap"
                                Margin="0,0,0,6" />
                     <StackPanel x:Name="QuestionOptionsPanel" Margin="0,0,0,6" />
@@ -195,9 +195,9 @@
                                 DockPanel.Dock="Right"
                                 FontFamily="Cascadia Code, Consolas, Courier New"
                                 FontSize="10"
-                                Foreground="#E0E0E0"
-                                Background="#2D2D40"
-                                BorderBrush="#5B7BB5"
+                                Foreground="{DynamicResource ChatTextForeground}"
+                                Background="{DynamicResource ChatOptionButtonBackground}"
+                                BorderBrush="{DynamicResource ChatQuestionBorderBrush}"
                                 BorderThickness="1"
                                 Cursor="Hand"
                                 Padding="8,4"
@@ -206,10 +206,10 @@
                         <TextBox x:Name="QuestionCustomInput"
                                  FontFamily="Cascadia Code, Consolas, Courier New"
                                  FontSize="11"
-                                 Foreground="#E0E0E0"
-                                 Background="#1E1E1E"
-                                 CaretBrush="#E0E0E0"
-                                 BorderBrush="#3C3C3C"
+                                 Foreground="{DynamicResource ChatInputForeground}"
+                                 Background="{DynamicResource ChatInputBackground}"
+                                 CaretBrush="{DynamicResource ChatInputForeground}"
+                                 BorderBrush="{DynamicResource ChatInputBorderBrush}"
                                  BorderThickness="1"
                                  Padding="4,3"
                                  ToolTip="Type a custom response"
@@ -221,8 +221,8 @@
             <!-- Input area -->
             <Border x:Name="InputPanel"
                     DockPanel.Dock="Bottom"
-                    Background="#252526"
-                    BorderBrush="#3C3C3C"
+                    Background="{DynamicResource ChatStatusBarBackground}"
+                    BorderBrush="{DynamicResource ChatInputBorderBrush}"
                     BorderThickness="0,1,0,0"
                     Padding="8,6">
                 <DockPanel>
@@ -230,7 +230,7 @@
                                DockPanel.Dock="Left"
                                FontFamily="Cascadia Code, Consolas, Courier New"
                                FontSize="14" FontWeight="Bold"
-                               Foreground="#569CD6"
+                               Foreground="{DynamicResource ChatInputPromptForeground}"
                                VerticalAlignment="Center"
                                Margin="0,0,6,0" />
                     <Button x:Name="SendButton"
@@ -243,10 +243,10 @@
                     <TextBox x:Name="InputBox"
                              FontFamily="Cascadia Code, Consolas, Courier New"
                              FontSize="12"
-                             Foreground="#E0E0E0"
-                             Background="#1E1E1E"
-                             CaretBrush="#E0E0E0"
-                             BorderBrush="#3C3C3C"
+                             Foreground="{DynamicResource ChatInputForeground}"
+                             Background="{DynamicResource ChatInputBackground}"
+                             CaretBrush="{DynamicResource ChatInputForeground}"
+                             BorderBrush="{DynamicResource ChatInputBorderBrush}"
                              BorderThickness="1"
                              Padding="6,4"
                              AcceptsReturn="False"
@@ -259,7 +259,7 @@
             <ScrollViewer x:Name="MessageScroller"
                           VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Disabled"
-                          Background="#1E1E1E">
+                          Background="{DynamicResource ChatBackground}">
                 <StackPanel x:Name="MessageList"
                             Margin="8,8,8,8" />
             </ScrollViewer>

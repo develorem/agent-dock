@@ -206,10 +206,18 @@ public partial class App : Application
             """);
     }
 
-    public static string Version =>
-        typeof(App).Assembly
-            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
-            ?.InformationalVersion ?? "0.0.0";
+    public static string Version
+    {
+        get
+        {
+            var raw = typeof(App).Assembly
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+                ?.InformationalVersion ?? "0.0.0";
+            // Strip the +commithash suffix that .NET SDK appends to InformationalVersion
+            var plusIndex = raw.IndexOf('+');
+            return plusIndex >= 0 ? raw[..plusIndex] : raw;
+        }
+    }
 
     private static void ShowVersion()
     {

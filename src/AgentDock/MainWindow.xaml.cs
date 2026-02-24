@@ -67,8 +67,8 @@ public partial class MainWindow : Window
         CommandBindings.Add(new CommandBinding(SaveWorkspaceCommand, (_, _) => SaveWorkspace()));
         CommandBindings.Add(new CommandBinding(CloseProjectCommand, (_, _) => CloseActiveProject()));
 
-        // Set initial theme menu checkmarks
-        UpdateThemeMenuCheckmarks();
+        // Build theme menu and subscribe to changes
+        PopulateThemeMenu();
         ThemeManager.ThemeChanged += OnThemeChanged;
 
         // Sync maximize/restore icon whenever window state changes (button click, double-click, aero snap, etc.)
@@ -240,14 +240,10 @@ public partial class MainWindow : Window
 
     // --- Settings Menu ---
 
-    private void ThemeLight_Click(object sender, RoutedEventArgs e)
+    private void ThemeMenuItem_Click(object sender, RoutedEventArgs e)
     {
-        ThemeManager.ApplyTheme(AppTheme.Light);
-    }
-
-    private void ThemeDark_Click(object sender, RoutedEventArgs e)
-    {
-        ThemeManager.ApplyTheme(AppTheme.Dark);
+        if (sender is MenuItem { Tag: string themeId })
+            ThemeManager.ApplyTheme(themeId);
     }
 
     private void ToolbarPosition_Click(object sender, RoutedEventArgs e)
@@ -494,6 +490,10 @@ public partial class MainWindow : Window
 
     private async System.Threading.Tasks.Task CheckForAppUpdateAsync()
     {
+#if DEBUG
+        Log.Info("UpdateCheck: skipping update check in Debug build");
+        return;
+#else
         var updateInfo = await System.Threading.Tasks.Task.Run(UpdateCheckService.CheckForUpdateAsync);
         if (updateInfo == null)
             return;
@@ -501,6 +501,7 @@ public partial class MainWindow : Window
         Log.Info($"Update available: v{updateInfo.Version}");
         var dialog = new UpdateDialog(this, updateInfo);
         dialog.ShowDialog();
+#endif
     }
 
     // --- Project Management ---
@@ -859,7 +860,7 @@ public partial class MainWindow : Window
         Log.Info("CreateDockingLayout: starting");
         var dockingManager = new DockingManager
         {
-            Theme = ThemeManager.CurrentTheme == AppTheme.Dark
+            Theme = ThemeManager.BaseVariant == ThemeBaseVariant.Dark
                 ? new Vs2013DarkTheme()
                 : new Vs2013LightTheme()
         };
@@ -1427,7 +1428,7 @@ public partial class MainWindow : Window
 
         var workspace = new WorkspaceFile
         {
-            Theme = ThemeManager.CurrentTheme.ToString(),
+            Theme = ThemeManager.CurrentTheme.Id,
             ToolbarPosition = _currentToolbarPosition,
             ActiveProjectPath = _activeProject?.FolderPath
         };
@@ -1517,8 +1518,7 @@ public partial class MainWindow : Window
         _suppressDirty = true;
 
         // Apply theme
-        if (Enum.TryParse<AppTheme>(workspace.Theme, out var theme))
-            ThemeManager.ApplyTheme(theme);
+        ThemeManager.ApplyTheme(ThemeRegistry.Resolve(workspace.Theme));
 
         // Apply toolbar position
         if (!string.IsNullOrEmpty(workspace.ToolbarPosition))
@@ -1717,12 +1717,12 @@ public partial class MainWindow : Window
 
     // --- Theme ---
 
-    private void OnThemeChanged(AppTheme theme)
+    private void OnThemeChanged(ThemeDescriptor theme)
     {
         UpdateThemeMenuCheckmarks();
 
         // Update AvalonDock theme on all DockingManagers
-        var dockTheme = theme == AppTheme.Dark
+        var dockTheme = theme.BaseVariant == ThemeBaseVariant.Dark
             ? (Theme)new Vs2013DarkTheme()
             : new Vs2013LightTheme();
 
@@ -1761,9 +1761,61 @@ public partial class MainWindow : Window
         }
     }
 
+    private void PopulateThemeMenu()
+    {
+        ThemeMenu.Items.Clear();
+
+        // Dark themes group
+        ThemeMenu.Items.Add(new MenuItem
+        {
+            Header = "Dark Themes",
+            IsEnabled = false,
+            FontStyle = FontStyles.Italic
+        });
+
+        foreach (var theme in ThemeRegistry.All.Where(t => t.BaseVariant == ThemeBaseVariant.Dark))
+        {
+            var item = new MenuItem
+            {
+                Header = theme.DisplayName,
+                IsCheckable = true,
+                IsChecked = ThemeManager.CurrentTheme.Id == theme.Id,
+                Tag = theme.Id
+            };
+            item.Click += ThemeMenuItem_Click;
+            ThemeMenu.Items.Add(item);
+        }
+
+        ThemeMenu.Items.Add(new Separator());
+
+        // Light themes group
+        ThemeMenu.Items.Add(new MenuItem
+        {
+            Header = "Light Themes",
+            IsEnabled = false,
+            FontStyle = FontStyles.Italic
+        });
+
+        foreach (var theme in ThemeRegistry.All.Where(t => t.BaseVariant == ThemeBaseVariant.Light))
+        {
+            var item = new MenuItem
+            {
+                Header = theme.DisplayName,
+                IsCheckable = true,
+                IsChecked = ThemeManager.CurrentTheme.Id == theme.Id,
+                Tag = theme.Id
+            };
+            item.Click += ThemeMenuItem_Click;
+            ThemeMenu.Items.Add(item);
+        }
+    }
+
     private void UpdateThemeMenuCheckmarks()
     {
-        ThemeLightMenu.IsChecked = ThemeManager.CurrentTheme == AppTheme.Light;
-        ThemeDarkMenu.IsChecked = ThemeManager.CurrentTheme == AppTheme.Dark;
+        foreach (var item in ThemeMenu.Items.OfType<MenuItem>())
+        {
+            if (item.Tag is string themeId)
+                item.IsChecked = ThemeManager.CurrentTheme.Id == themeId;
+        }
     }
 }

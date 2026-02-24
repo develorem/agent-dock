@@ -41,6 +41,9 @@ public partial class AiChatControl : UserControl
     // Pending AskUserQuestion — tracks question text for response
     private string? _pendingQuestionText;
 
+    // Inactivity warning bubble (removable when activity resumes)
+    private Border? _inactivityWarning;
+
     /// <summary>
     /// Raised when session state changes (for toolbar icon updates).
     /// </summary>
@@ -122,6 +125,7 @@ public partial class AiChatControl : UserControl
         _session.ResultReceived += result => Dispatcher.BeginInvoke(() => OnResultReceived(result));
         _session.ErrorOutput += text => Dispatcher.BeginInvoke(() => OnErrorOutput(text));
         _session.ProcessExited += code => Dispatcher.BeginInvoke(() => OnProcessExited(code));
+        _session.InactivityTimeout += () => Dispatcher.BeginInvoke(OnInactivityTimeout);
     }
 
     // --- State Handling ---
@@ -150,10 +154,10 @@ public partial class AiChatControl : UserControl
 
         StatusText.Foreground = state switch
         {
-            ClaudeSessionState.Working => new SolidColorBrush(Color.FromRgb(0x56, 0x9C, 0xD6)),
-            ClaudeSessionState.WaitingForPermission => new SolidColorBrush(Color.FromRgb(0xFF, 0xB3, 0x47)),
-            ClaudeSessionState.Error => new SolidColorBrush(Color.FromRgb(0xFF, 0x6B, 0x6B)),
-            _ => new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88))
+            ClaudeSessionState.Working => ThemeManager.GetBrush("ChatStatusWorkingForeground"),
+            ClaudeSessionState.WaitingForPermission => ThemeManager.GetBrush("ChatStatusWarningForeground"),
+            ClaudeSessionState.Error => ThemeManager.GetBrush("ChatStatusErrorForeground"),
+            _ => ThemeManager.GetBrush("ChatMutedForeground")
         };
 
         var canSend = state == ClaudeSessionState.Idle;
@@ -203,9 +207,10 @@ public partial class AiChatControl : UserControl
         InputBox.IsEnabled = false;
         SendButton.IsEnabled = false;
         StatusText.Text = "Stopping...";
-        StatusText.Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88));
+        StatusText.Foreground = ThemeManager.GetBrush("ChatMutedForeground");
 
         RemoveWaitingBubble();
+        RemoveInactivityWarning();
         FinalizeThinkingBlock();
         FinalizeStreamingBlock();
 
@@ -262,19 +267,19 @@ public partial class AiChatControl : UserControl
             Text = "Thinking...",
             FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
             FontSize = 11,
-            Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)),
+            Foreground = ThemeManager.GetBrush("ChatMutedForeground"),
             FontStyle = FontStyles.Italic,
             TextWrapping = TextWrapping.Wrap
         };
 
         _waitingBubble = new Border
         {
-            Background = new SolidColorBrush(Color.FromRgb(0x25, 0x25, 0x25)),
+            Background = ThemeManager.GetBrush("ChatThinkingBackground"),
             CornerRadius = new CornerRadius(6),
             Padding = new Thickness(8, 4, 8, 4),
             Margin = new Thickness(8, 2, 40, 2),
             HorizontalAlignment = HorizontalAlignment.Left,
-            BorderBrush = new SolidColorBrush(Color.FromRgb(0x3C, 0x3C, 0x3C)),
+            BorderBrush = ThemeManager.GetBrush("ChatThinkingBorderBrush"),
             BorderThickness = new Thickness(1),
             Child = tb
         };
@@ -303,7 +308,7 @@ public partial class AiChatControl : UserControl
             // Start a new thinking bubble
             _thinkingText = "";
             _thinkingBlock = CreateSelectableText(11,
-                new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)),
+                ThemeManager.GetBrush("ChatMutedForeground"),
                 FontStyles.Italic);
             _thinkingBubble = CreateThinkingBubble(_thinkingBlock);
             _thinkingExpanded = true;
@@ -325,6 +330,7 @@ public partial class AiChatControl : UserControl
     private void OnStreamDelta(ClaudeStreamDelta delta)
     {
         RemoveWaitingBubble();
+        RemoveInactivityWarning();
 
         if (delta.DeltaType == "thinking_delta")
         {
@@ -359,7 +365,7 @@ public partial class AiChatControl : UserControl
             // No content_block_start arrived — create thinking bubble on first delta
             _thinkingText = "";
             _thinkingBlock = CreateSelectableText(11,
-                new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)),
+                ThemeManager.GetBrush("ChatMutedForeground"),
                 FontStyles.Italic);
             _thinkingBubble = CreateThinkingBubble(_thinkingBlock);
             _thinkingExpanded = true;
@@ -414,6 +420,7 @@ public partial class AiChatControl : UserControl
     private void OnResultReceived(ClaudeResultMessage result)
     {
         RemoveWaitingBubble();
+        RemoveInactivityWarning();
         FinalizeThinkingBlock();
         FinalizeStreamingBlock();
 
@@ -540,8 +547,8 @@ public partial class AiChatControl : UserControl
                     var btn = new Button
                     {
                         Cursor = Cursors.Hand,
-                        Background = new SolidColorBrush(Color.FromRgb(0x2D, 0x2D, 0x40)),
-                        BorderBrush = new SolidColorBrush(Color.FromRgb(0x4A, 0x4A, 0x6A)),
+                        Background = ThemeManager.GetBrush("ChatOptionButtonBackground"),
+                        BorderBrush = ThemeManager.GetBrush("ChatOptionButtonBorderBrush"),
                         BorderThickness = new Thickness(1),
                         Padding = new Thickness(10, 6, 10, 6),
                         Margin = new Thickness(0, 0, 0, 4),
@@ -554,7 +561,7 @@ public partial class AiChatControl : UserControl
                         Text = label,
                         FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
                         FontSize = 12,
-                        Foreground = new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0))
+                        Foreground = ThemeManager.GetBrush("ChatTextForeground")
                     });
                     if (!string.IsNullOrEmpty(desc))
                     {
@@ -563,7 +570,7 @@ public partial class AiChatControl : UserControl
                             Text = desc,
                             FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
                             FontSize = 10,
-                            Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)),
+                            Foreground = ThemeManager.GetBrush("ChatMutedForeground"),
                             TextWrapping = TextWrapping.Wrap,
                             Margin = new Thickness(0, 2, 0, 0)
                         });
@@ -635,6 +642,70 @@ public partial class AiChatControl : UserControl
         InputPanel.Visibility = Visibility.Visible;
     }
 
+    // --- Inactivity Warning ---
+
+    private void OnInactivityTimeout()
+    {
+        if (_session == null || _inactivityWarning != null)
+            return; // Already showing a warning or no session
+
+        var warningText = new TextBlock
+        {
+            Text = "Claude hasn't responded for a while — it may be stuck.",
+            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
+            FontSize = 11,
+            Foreground = ThemeManager.GetBrush("ChatStatusWarningForeground"),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 4)
+        };
+
+        var killBtn = new Button
+        {
+            Content = "Kill process",
+            Cursor = Cursors.Hand,
+            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
+            FontSize = 11,
+            Background = ThemeManager.GetBrush("ChatKillButtonBackground"),
+            Foreground = ThemeManager.GetBrush("ChatDangerForeground"),
+            BorderBrush = ThemeManager.GetBrush("ChatKillButtonBorderBrush"),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(10, 4, 10, 4),
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
+        killBtn.Click += (_, _) =>
+        {
+            RemoveInactivityWarning();
+            Stop_Click(this, new RoutedEventArgs());
+        };
+
+        var panel = new StackPanel { Margin = new Thickness(0) };
+        panel.Children.Add(warningText);
+        panel.Children.Add(killBtn);
+
+        _inactivityWarning = new Border
+        {
+            Background = ThemeManager.GetBrush("ChatWarningBackground"),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(10, 8, 10, 8),
+            Margin = new Thickness(8, 4, 8, 4),
+            BorderBrush = ThemeManager.GetBrush("ChatWarningBorderBrush"),
+            BorderThickness = new Thickness(1),
+            Child = panel
+        };
+
+        MessageList.Children.Add(_inactivityWarning);
+        ScrollToBottom();
+    }
+
+    private void RemoveInactivityWarning()
+    {
+        if (_inactivityWarning != null)
+        {
+            MessageList.Children.Remove(_inactivityWarning);
+            _inactivityWarning = null;
+        }
+    }
+
     // --- Error / Exit ---
 
     private void OnErrorOutput(string text)
@@ -665,7 +736,7 @@ public partial class AiChatControl : UserControl
     {
         var bubble = new Border
         {
-            Background = new SolidColorBrush(Color.FromRgb(0x26, 0x4F, 0x78)),
+            Background = ThemeManager.GetBrush("ChatUserBubbleBackground"),
             CornerRadius = new CornerRadius(8, 8, 2, 8),
             Padding = new Thickness(10, 6, 10, 6),
             Margin = new Thickness(40, 4, 8, 4),
@@ -678,11 +749,11 @@ public partial class AiChatControl : UserControl
             Text = "You",
             FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
             FontSize = 10,
-            Foreground = new SolidColorBrush(Color.FromRgb(0x56, 0x9C, 0xD6)),
+            Foreground = ThemeManager.GetBrush("ChatUserLabelForeground"),
             Margin = new Thickness(0, 0, 0, 2)
         };
         var content = CreateSelectableText(12,
-            new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0)));
+            ThemeManager.GetBrush("ChatTextForeground"));
         content.Text = text;
         panel.Children.Add(label);
         panel.Children.Add(content);
@@ -696,7 +767,7 @@ public partial class AiChatControl : UserControl
     {
         var bubble = new Border
         {
-            Background = new SolidColorBrush(Color.FromRgb(0x2D, 0x2D, 0x2D)),
+            Background = ThemeManager.GetBrush("ChatAssistantBubbleBackground"),
             CornerRadius = new CornerRadius(8, 8, 8, 2),
             Padding = new Thickness(10, 6, 10, 6),
             Margin = new Thickness(8, 4, 40, 4),
@@ -709,7 +780,7 @@ public partial class AiChatControl : UserControl
             Text = "Claude",
             FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
             FontSize = 10,
-            Foreground = new SolidColorBrush(Color.FromRgb(0x4E, 0xC9, 0xB0)),
+            Foreground = ThemeManager.GetBrush("ChatAssistantLabelForeground"),
             Margin = new Thickness(0, 0, 0, 2)
         };
         panel.Children.Add(label);
@@ -722,19 +793,19 @@ public partial class AiChatControl : UserControl
     private static TextBox CreateStreamingBlock()
     {
         return CreateSelectableText(12,
-            new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0)));
+            ThemeManager.GetBrush("ChatTextForeground"));
     }
 
     private static Border CreateThinkingBubble(TextBox contentBlock)
     {
         var bubble = new Border
         {
-            Background = new SolidColorBrush(Color.FromRgb(0x25, 0x25, 0x25)),
+            Background = ThemeManager.GetBrush("ChatThinkingBackground"),
             CornerRadius = new CornerRadius(6),
             Padding = new Thickness(8, 4, 8, 4),
             Margin = new Thickness(8, 2, 40, 2),
             HorizontalAlignment = HorizontalAlignment.Left,
-            BorderBrush = new SolidColorBrush(Color.FromRgb(0x3C, 0x3C, 0x3C)),
+            BorderBrush = ThemeManager.GetBrush("ChatThinkingBorderBrush"),
             BorderThickness = new Thickness(1)
         };
 
@@ -744,7 +815,7 @@ public partial class AiChatControl : UserControl
             Text = "Thinking",
             FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
             FontSize = 10,
-            Foreground = new SolidColorBrush(Color.FromRgb(0x66, 0x66, 0x66)),
+            Foreground = ThemeManager.GetBrush("ChatSubtleForeground"),
             FontStyle = FontStyles.Italic,
             Margin = new Thickness(0, 0, 0, 2)
         };
@@ -760,7 +831,7 @@ public partial class AiChatControl : UserControl
         if (_executionBubble == null)
         {
             _executionContentBlock = CreateSelectableText(10,
-                new SolidColorBrush(Color.FromRgb(0x6A, 0x99, 0x55)),
+                ThemeManager.GetBrush("ChatExecutionForeground"),
                 FontStyles.Normal);
             _executionBubble = CreateExecutionBubble(_executionContentBlock);
             MessageList.Children.Add(_executionBubble);
@@ -776,12 +847,12 @@ public partial class AiChatControl : UserControl
     {
         var bubble = new Border
         {
-            Background = new SolidColorBrush(Color.FromRgb(0x1A, 0x2A, 0x1A)),
+            Background = ThemeManager.GetBrush("ChatExecutionBackground"),
             CornerRadius = new CornerRadius(6),
             Padding = new Thickness(8, 4, 8, 4),
             Margin = new Thickness(8, 2, 40, 2),
             HorizontalAlignment = HorizontalAlignment.Left,
-            BorderBrush = new SolidColorBrush(Color.FromRgb(0x2A, 0x3A, 0x2A)),
+            BorderBrush = ThemeManager.GetBrush("ChatExecutionBorderBrush"),
             BorderThickness = new Thickness(1)
         };
 
@@ -792,7 +863,7 @@ public partial class AiChatControl : UserControl
             Text = "Execution",
             FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
             FontSize = 10,
-            Foreground = new SolidColorBrush(Color.FromRgb(0x6A, 0x99, 0x55)),
+            Foreground = ThemeManager.GetBrush("ChatExecutionForeground"),
             FontStyle = FontStyles.Italic,
             Margin = new Thickness(0, 0, 0, 2)
         };
@@ -828,8 +899,8 @@ public partial class AiChatControl : UserControl
             FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
             FontSize = 10,
             Foreground = isWarning
-                ? new SolidColorBrush(Color.FromRgb(0xFF, 0x6B, 0x6B))
-                : new SolidColorBrush(Color.FromRgb(0x66, 0x66, 0x66)),
+                ? ThemeManager.GetBrush("ChatDangerForeground")
+                : ThemeManager.GetBrush("ChatSubtleForeground"),
             HorizontalAlignment = HorizontalAlignment.Center,
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(8, 6, 8, 6)
@@ -879,7 +950,7 @@ public partial class AiChatControl : UserControl
             Text = expanded ? "▼" : "▶",
             FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
             FontSize = 10,
-            Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)),
+            Foreground = ThemeManager.GetBrush("ChatMutedForeground"),
             Cursor = Cursors.Hand,
             Margin = new Thickness(0, 0, 4, 0),
             VerticalAlignment = VerticalAlignment.Center
