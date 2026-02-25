@@ -1639,35 +1639,96 @@ public partial class MainWindow : Window
 
     // --- Recent Workspaces ---
 
+    private readonly List<MenuItem> _recentWorkspaceMenuItems = [];
+
     private void PopulateRecentWorkspacesMenu()
     {
+        // Remove previously inserted recent workspace items from File menu
+        foreach (var old in _recentWorkspaceMenuItems)
+            FileMenu.Items.Remove(old);
+        _recentWorkspaceMenuItems.Clear();
+
         var recent = WorkspaceManager.GetRecentWorkspaces();
+        var shown = recent.Take(5).ToList();
 
-        RecentWorkspacesMenu.Items.Clear();
-
-        if (recent.Count == 0)
+        if (shown.Count == 0)
         {
-            RecentWorkspacesMenu.IsEnabled = false;
+            RecentWorkspacesSeparator.Visibility = Visibility.Collapsed;
+            RecentWorkspacesHeader.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            RecentWorkspacesSeparator.Visibility = Visibility.Visible;
+            RecentWorkspacesHeader.Visibility = Visibility.Visible;
+
+            // Insert recent items between RecentWorkspacesHeader and ExitSeparator
+            var insertIndex = FileMenu.Items.IndexOf(ExitSeparator);
+            foreach (var path in shown)
+            {
+                var item = new MenuItem
+                {
+                    Header = Path.GetFileNameWithoutExtension(path),
+                    ToolTip = path
+                };
+                var capturedPath = path;
+                item.Click += (_, _) =>
+                {
+                    if (!PromptSaveIfDirty())
+                        return;
+                    OpenWorkspaceFile(capturedPath);
+                };
+                FileMenu.Items.Insert(insertIndex, item);
+                _recentWorkspaceMenuItems.Add(item);
+                insertIndex++;
+            }
+        }
+
+        // Also refresh the empty state list
+        PopulateEmptyStateRecentWorkspaces();
+    }
+
+    private void PopulateEmptyStateRecentWorkspaces()
+    {
+        EmptyStateRecentList.Children.Clear();
+
+        var recent = WorkspaceManager.GetRecentWorkspaces();
+        var shown = recent.Take(5).ToList();
+
+        if (shown.Count == 0)
+        {
+            EmptyStateRecentPanel.Visibility = Visibility.Collapsed;
             return;
         }
 
-        RecentWorkspacesMenu.IsEnabled = true;
+        EmptyStateRecentPanel.Visibility = Visibility.Visible;
 
-        foreach (var path in recent)
+        foreach (var path in shown)
         {
-            var item = new MenuItem
+            var name = Path.GetFileNameWithoutExtension(path);
+            var button = new Button
             {
-                Header = Path.GetFileNameWithoutExtension(path),
+                Cursor = Cursors.Hand,
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(8, 4, 8, 4),
+                HorizontalContentAlignment = HorizontalAlignment.Center,
                 ToolTip = path
             };
-            var capturedPath = path;
-            item.Click += (_, _) =>
+
+            var label = new TextBlock
             {
-                if (!PromptSaveIfDirty())
-                    return;
-                OpenWorkspaceFile(capturedPath);
+                Text = name,
+                FontSize = 13,
+                Foreground = (Brush)FindResource("TabButtonActiveBorderBrush"),
+                TextDecorations = TextDecorations.Underline
             };
-            RecentWorkspacesMenu.Items.Add(item);
+
+            button.Content = label;
+
+            var capturedPath = path;
+            button.Click += (_, _) => OpenWorkspaceFile(capturedPath);
+
+            EmptyStateRecentList.Children.Add(button);
         }
     }
 
