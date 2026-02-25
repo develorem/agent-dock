@@ -60,10 +60,12 @@ public class ClaudeSession : IDisposable
     {
         try
         {
+            // Use cmd.exe /c to resolve .cmd/.bat wrappers (npm-installed CLIs on Windows)
+            // This matches the prerequisite check behaviour.
             var psi = new ProcessStartInfo
             {
-                FileName = ClaudeBinaryPath,
-                Arguments = "--version",
+                FileName = "cmd.exe",
+                Arguments = $"/c {ClaudeBinaryPath} --version",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
@@ -80,6 +82,44 @@ public class ClaudeSession : IDisposable
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Resolves the Claude binary path to a full path that Process.Start can use directly.
+    /// Searches PATH for .cmd/.bat/.exe variants if ClaudeBinaryPath is just a name like "claude".
+    /// </summary>
+    public static string ResolveClaudeBinaryPath()
+    {
+        var path = ClaudeBinaryPath;
+
+        // If it's already a rooted path that exists, use it directly
+        if (Path.IsPathRooted(path) && File.Exists(path))
+            return path;
+
+        // Search PATH for the command, matching Windows PATHEXT resolution order:
+        // bare name and .exe first (preserves existing behaviour for working installs),
+        // then .cmd/.bat (fixes npm-installed CLI wrappers).
+        var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? "";
+        var extensions = new[] { "", ".exe", ".cmd", ".bat" };
+
+        foreach (var dir in pathEnv.Split(Path.PathSeparator))
+        {
+            if (string.IsNullOrWhiteSpace(dir))
+                continue;
+
+            foreach (var ext in extensions)
+            {
+                var candidate = Path.Combine(dir, path + ext);
+                if (File.Exists(candidate))
+                {
+                    Log.Info($"ClaudeSession: resolved '{path}' to '{candidate}'");
+                    return candidate;
+                }
+            }
+        }
+
+        // Fallback: return as-is and let Process.Start try
+        return path;
     }
 
     /// <summary>
@@ -136,7 +176,7 @@ public class ClaudeSession : IDisposable
 
         var psi = new ProcessStartInfo
         {
-            FileName = ClaudeBinaryPath,
+            FileName = ResolveClaudeBinaryPath(),
             Arguments = args,
             WorkingDirectory = _workingDirectory,
             RedirectStandardInput = true,
