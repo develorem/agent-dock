@@ -1,4 +1,12 @@
+using System.Collections.Generic;
+
 namespace AgentDock.Models;
+
+public class TodoItem
+{
+    public string Text { get; set; } = "";
+    public bool IsCompleted { get; set; }
+}
 
 /// <summary>
 /// Per-project settings stored in .agentdock/settings.json within the project folder.
@@ -31,4 +39,10 @@ public class ProjectSettings
     /// Null means use the default (13).
     /// </summary>
     public double? DescriptionFontSize { get; set; }
+
+    /// <summary>
+    /// Per-project todo list items.
+    /// Null means no items have been created yet.
+    /// </summary>
+    public List<TodoItem>? TodoItems { get; set; }
 }

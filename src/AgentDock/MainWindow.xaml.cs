@@ -41,6 +41,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<ProjectInfo, DispatcherTimer> _tabIconTimers = [];
     private readonly Dictionary<ProjectInfo, DockingManager> _projectDockingManagers = [];
     private readonly Dictionary<ProjectInfo, ProjectDescriptionControl> _projectDescriptionControls = [];
+    private readonly Dictionary<ProjectInfo, TodoListControl> _projectTodoListControls = [];
     private ProjectInfo? _activeProject;
 
     // Workspace state
@@ -57,6 +58,7 @@ public partial class MainWindow : Window
     private const string FilePreviewId = "filePreview";
     private const string AiChatId = "aiChat";
     private const string ProjectDescriptionId = "projectDescription";
+    private const string TodoListId = "todoList";
 
     public MainWindow()
     {
@@ -570,11 +572,12 @@ public partial class MainWindow : Window
         ToolbarBorder.Visibility = Visibility.Visible;
 
         // Create docking layout for this project
-        var (content, chatControl, gitControl, descControl) = CreateProjectDockingLayout(project, layoutXml);
+        var (content, chatControl, gitControl, descControl, todoControl) = CreateProjectDockingLayout(project, layoutXml);
         _projectContents[project] = content;
         _projectChatControls[project] = chatControl;
         _projectGitControls[project] = gitControl;
         _projectDescriptionControls[project] = descControl;
+        _projectTodoListControls[project] = todoControl;
         chatControl.SessionStateChanged += state => UpdateTabIcon(project, state);
 
         // Switch to the new project
@@ -858,7 +861,7 @@ public partial class MainWindow : Window
         return item;
     }
 
-    private (DockingManager, AiChatControl, GitStatusControl, ProjectDescriptionControl) CreateProjectDockingLayout(ProjectInfo project, string? layoutXml = null)
+    private (DockingManager, AiChatControl, GitStatusControl, ProjectDescriptionControl, TodoListControl) CreateProjectDockingLayout(ProjectInfo project, string? layoutXml = null)
     {
         Log.Info("CreateDockingLayout: starting");
         var dockingManager = new DockingManager
@@ -879,6 +882,9 @@ public partial class MainWindow : Window
 
         var descriptionControl = new ProjectDescriptionControl();
         descriptionControl.LoadProject(project.FolderPath);
+
+        var todoListControl = new TodoListControl();
+        todoListControl.LoadProject(project.FolderPath);
 
         // Shared handler for refreshing UI after project settings change
         void OnProjectSettingsChanged()
@@ -945,7 +951,8 @@ public partial class MainWindow : Window
             [GitStatusId] = gitStatusControl,
             [FilePreviewId] = filePreviewControl,
             [AiChatId] = aiChatControl,
-            [ProjectDescriptionId] = descriptionControl
+            [ProjectDescriptionId] = descriptionControl,
+            [TodoListId] = todoListControl
         };
 
         // Title map for restored anchorables
@@ -955,7 +962,8 @@ public partial class MainWindow : Window
             [GitStatusId] = "Git Status",
             [FilePreviewId] = "File Preview",
             [AiChatId] = "AI Chat",
-            [ProjectDescriptionId] = "Project Description"
+            [ProjectDescriptionId] = "Project Description",
+            [TodoListId] = "Todo List"
         };
 
         if (layoutXml != null)
@@ -1010,18 +1018,35 @@ public partial class MainWindow : Window
                     anchorGroup.Children.Add(descAnchorable);
                     dockingManager.Layout.RightSide.Children.Add(anchorGroup);
                 }
+
+                // Ensure todo list panel exists (handles old workspace files that pre-date this feature)
+                if (todoListControl.Parent == null)
+                {
+                    var todoAnchorable = new LayoutAnchorable
+                    {
+                        Title = "Todo List",
+                        ContentId = TodoListId,
+                        CanClose = false,
+                        CanHide = false,
+                        CanAutoHide = true,
+                        Content = todoListControl
+                    };
+                    var anchorGroup = new LayoutAnchorGroup();
+                    anchorGroup.Children.Add(todoAnchorable);
+                    dockingManager.Layout.RightSide.Children.Add(anchorGroup);
+                }
             }
             catch (Exception ex)
             {
                 Log.Warn($"CreateDockingLayout: failed to restore layout, falling back to default — {ex.Message}");
                 // Fall through to build default layout
-                BuildDefaultLayout(dockingManager, project, fileExplorerControl, gitStatusControl, filePreviewControl, aiChatControl, descriptionControl);
+                BuildDefaultLayout(dockingManager, project, fileExplorerControl, gitStatusControl, filePreviewControl, aiChatControl, descriptionControl, todoListControl);
             }
         }
         else
         {
             // Build default layout
-            BuildDefaultLayout(dockingManager, project, fileExplorerControl, gitStatusControl, filePreviewControl, aiChatControl, descriptionControl);
+            BuildDefaultLayout(dockingManager, project, fileExplorerControl, gitStatusControl, filePreviewControl, aiChatControl, descriptionControl, todoListControl);
         }
 
         _projectDockingManagers[project] = dockingManager;
@@ -1039,7 +1064,7 @@ public partial class MainWindow : Window
         };
 
         Log.Info("CreateDockingLayout: complete");
-        return (dockingManager, aiChatControl, gitStatusControl, descriptionControl);
+        return (dockingManager, aiChatControl, gitStatusControl, descriptionControl, todoListControl);
     }
 
     private void BuildDefaultLayout(
@@ -1049,7 +1074,8 @@ public partial class MainWindow : Window
         GitStatusControl gitStatusControl,
         FilePreviewControl filePreviewControl,
         AiChatControl aiChatControl,
-        ProjectDescriptionControl descriptionControl)
+        ProjectDescriptionControl descriptionControl,
+        TodoListControl todoListControl)
     {
         // Calculate column widths as ~33% each based on actual window width
         var availableWidth = ActualWidth > 0 ? ActualWidth : SystemParameters.PrimaryScreenWidth;
@@ -1138,9 +1164,24 @@ public partial class MainWindow : Window
             Content = descriptionControl
         };
 
-        var anchorGroup = new LayoutAnchorGroup();
-        anchorGroup.Children.Add(descriptionAnchorable);
-        layoutRoot.RightSide.Children.Add(anchorGroup);
+        var descAnchorGroup = new LayoutAnchorGroup();
+        descAnchorGroup.Children.Add(descriptionAnchorable);
+        layoutRoot.RightSide.Children.Add(descAnchorGroup);
+
+        // --- Auto-collapsed todo list panel on right side ---
+        var todoAnchorable = new LayoutAnchorable
+        {
+            Title = "Todo List",
+            ContentId = TodoListId,
+            CanClose = false,
+            CanHide = false,
+            CanAutoHide = true,
+            Content = todoListControl
+        };
+
+        var todoAnchorGroup = new LayoutAnchorGroup();
+        todoAnchorGroup.Children.Add(todoAnchorable);
+        layoutRoot.RightSide.Children.Add(todoAnchorGroup);
     }
 
     private static UIElement CreatePanelPlaceholder(string title, string subtitle)
@@ -1286,6 +1327,7 @@ public partial class MainWindow : Window
         _projectTabIcons.Remove(project);
         _projectDockingManagers.Remove(project);
         _projectDescriptionControls.Remove(project);
+        _projectTodoListControls.Remove(project);
 
         // Remove content
         _projectContents.Remove(project);
@@ -1348,6 +1390,7 @@ public partial class MainWindow : Window
             _projectTabIcons.Remove(project);
             _projectDockingManagers.Remove(project);
             _projectDescriptionControls.Remove(project);
+            _projectTodoListControls.Remove(project);
             _projectContents.Remove(project);
         }
 

@@ -1,0 +1,108 @@
+<UserControl x:Class="AgentDock.Controls.TodoListControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d"
+             Background="{DynamicResource ContentBackground}">
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Toolbar: Add button -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,6">
+            <Button Click="AddButton_Click"
+                    ToolTip="Add new item"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    Padding="2"
+                    Cursor="Hand">
+                <TextBlock Text="&#xE109;"
+                           FontFamily="Segoe MDL2 Assets"
+                           FontSize="14"
+                           Foreground="{DynamicResource GitPlaceholderForeground}" />
+            </Button>
+        </StackPanel>
+
+        <!-- Inline add text box (hidden by default) -->
+        <Grid x:Name="AddItemPanel" Grid.Row="1" Visibility="Collapsed" Margin="0,0,0,6">
+            <TextBox x:Name="NewItemTextBox"
+                     KeyDown="NewItemTextBox_KeyDown"
+                     LostFocus="NewItemTextBox_LostFocus"
+                     Background="{DynamicResource PreviewBackground}"
+                     Foreground="{DynamicResource PreviewForeground}"
+                     BorderBrush="{DynamicResource ExplorerToolbarBorderBrush}"
+                     BorderThickness="1"
+                     Padding="6,4"
+                     FontSize="13" />
+        </Grid>
+
+        <!-- Todo items list -->
+        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+            <ItemsControl x:Name="TodoItemsList">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Grid Margin="0,2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <CheckBox Grid.Column="0"
+                                      IsChecked="{Binding IsCompleted}"
+                                      Checked="TodoCheckBox_Changed"
+                                      Unchecked="TodoCheckBox_Changed"
+                                      VerticalAlignment="Center"
+                                      Margin="0,0,6,0" />
+
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding Text}"
+                                       VerticalAlignment="Center"
+                                       FontSize="13"
+                                       TextWrapping="Wrap"
+                                       Foreground="{DynamicResource HelpForeground}">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsCompleted}" Value="True">
+                                                <Setter Property="TextDecorations" Value="Strikethrough" />
+                                                <Setter Property="Opacity" Value="0.5" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+
+                            <Button Grid.Column="2"
+                                    Click="DeleteButton_Click"
+                                    ToolTip="Delete item"
+                                    Background="Transparent"
+                                    BorderThickness="0"
+                                    Padding="2"
+                                    Cursor="Hand"
+                                    VerticalAlignment="Center"
+                                    Margin="6,0,0,0">
+                                <TextBlock Text="&#xE711;"
+                                           FontFamily="Segoe MDL2 Assets"
+                                           FontSize="12"
+                                           Foreground="{DynamicResource GitPlaceholderForeground}" />
+                            </Button>
+                        </Grid>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+
+        <!-- Placeholder when empty -->
+        <TextBlock x:Name="PlaceholderText"
+                   Grid.Row="2"
+                   Text="No items yet. Click + to add one."
+                   FontSize="13"
+                   Foreground="{DynamicResource GitPlaceholderForeground}"
+                   Padding="4" />
+    </Grid>
+</UserControl>
