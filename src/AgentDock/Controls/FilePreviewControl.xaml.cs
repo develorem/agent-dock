@@ -22,10 +22,16 @@ public partial class FilePreviewControl : UserControl
         ".nupkg", ".snk", ".pfx"
     };
 
+    private static readonly HashSet<string> MarkdownExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".md", ".markdown"
+    };
+
     // Max file size to preview (5 MB)
     private const long MaxTextFileSize = 5 * 1024 * 1024;
 
     private string? _currentExtension;
+    private bool _isMarkdownRendered;
 
     public FilePreviewControl()
     {
@@ -45,6 +51,14 @@ public partial class FilePreviewControl : UserControl
         }
 
         TextPreview.TextArea.TextView.Redraw();
+
+        // Re-render markdown so FlowDocument picks up new theme colors
+        if (MarkdownPreview.Visibility == Visibility.Visible)
+        {
+            var md = MarkdownPreview.Markdown;
+            MarkdownPreview.Markdown = "";
+            MarkdownPreview.Markdown = md;
+        }
     }
 
     private void ApplyLinkColor()
@@ -59,8 +73,7 @@ public partial class FilePreviewControl : UserControl
     {
         RemoveMarkdownLinkColorizer();
 
-        if (extension.Equals(".md", StringComparison.OrdinalIgnoreCase) ||
-            extension.Equals(".markdown", StringComparison.OrdinalIgnoreCase))
+        if (MarkdownExtensions.Contains(extension))
         {
             _linkColorizer = new MarkdownLinkColorizer();
             TextPreview.TextArea.TextView.LineTransformers.Add(_linkColorizer);
@@ -96,6 +109,10 @@ public partial class FilePreviewControl : UserControl
         {
             ShowNoPreview("No Preview — binary file");
         }
+        else if (MarkdownExtensions.Contains(extension))
+        {
+            ShowMarkdown(filePath, extension);
+        }
         else
         {
             ShowText(filePath, extension);
@@ -125,6 +142,70 @@ public partial class FilePreviewControl : UserControl
     {
         HideAll();
         EmptyMessage.Visibility = Visibility.Visible;
+    }
+
+    private void ShowMarkdown(string filePath, string extension)
+    {
+        try
+        {
+            var fileInfo = new FileInfo(filePath);
+            if (fileInfo.Length > MaxTextFileSize)
+            {
+                ShowNoPreview($"File too large ({fileInfo.Length / 1024 / 1024} MB)");
+                return;
+            }
+
+            if (IsBinaryFile(filePath))
+            {
+                ShowNoPreview("No Preview — binary file");
+                return;
+            }
+
+            var markdownText = File.ReadAllText(filePath);
+            _currentExtension = extension;
+
+            // Load into AvalonEdit for source view (hidden initially)
+            TextPreview.Load(filePath);
+            TextPreview.SyntaxHighlighting = ThemeManager.GetHighlighting(extension);
+            ApplyMarkdownLinkColorizer(extension);
+            TextPreview.ScrollToHome();
+
+            // Render markdown preview
+            MarkdownPreview.Markdown = markdownText;
+            MarkdownPreview.Visibility = Visibility.Visible;
+
+            // Show toggle button in "rendered" state
+            _isMarkdownRendered = true;
+            MarkdownToggleIcon.Text = "\uE943"; // Code icon — click to see source
+            MarkdownToggleButton.ToolTip = "Switch to source view";
+            MarkdownToggleButton.Visibility = Visibility.Visible;
+        }
+        catch (Exception ex)
+        {
+            ShowNoPreview($"Cannot preview: {ex.Message}");
+        }
+    }
+
+    private void MarkdownToggle_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isMarkdownRendered)
+        {
+            // Switch to source view
+            MarkdownPreview.Visibility = Visibility.Collapsed;
+            TextPreview.Visibility = Visibility.Visible;
+            _isMarkdownRendered = false;
+            MarkdownToggleIcon.Text = "\uE890"; // Preview/eye icon — click to see rendered
+            MarkdownToggleButton.ToolTip = "Switch to rendered view";
+        }
+        else
+        {
+            // Switch to rendered view
+            TextPreview.Visibility = Visibility.Collapsed;
+            MarkdownPreview.Visibility = Visibility.Visible;
+            _isMarkdownRendered = true;
+            MarkdownToggleIcon.Text = "\uE943"; // Code icon — click to see source
+            MarkdownToggleButton.ToolTip = "Switch to source view";
+        }
     }
 
     private void ShowText(string filePath, string extension)
@@ -195,8 +276,11 @@ public partial class FilePreviewControl : UserControl
     {
         EmptyMessage.Visibility = Visibility.Collapsed;
         TextPreview.Visibility = Visibility.Collapsed;
+        MarkdownPreview.Visibility = Visibility.Collapsed;
+        MarkdownToggleButton.Visibility = Visibility.Collapsed;
         ImageContainer.Visibility = Visibility.Collapsed;
         NoPreviewMessage.Visibility = Visibility.Collapsed;
+        _isMarkdownRendered = false;
         RemoveDiffColorizer();
         RemoveMarkdownLinkColorizer();
     }

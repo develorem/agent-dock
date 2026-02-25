@@ -191,7 +191,6 @@ public partial class GitStatusControl : UserControl
         // the current selection and hover state on every debounce tick
         if (FileList.ItemsSource is List<GitStatusItem> current && EntriesMatch(current, viewItems))
         {
-            FileSystemChanged?.Invoke();
             return;
         }
 
