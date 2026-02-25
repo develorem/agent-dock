@@ -14,6 +14,7 @@ public partial class ProjectSettingsDialog : Window
 {
     private string? _selectedIcon;
     private string? _selectedIconColor;
+    private string? _selectedDescription;
     private Border? _selectedIconTile;
     private Border? _selectedFgSwatch;
     private readonly string _projectFolder;
@@ -44,9 +45,11 @@ public partial class ProjectSettingsDialog : Window
         _projectFolder = projectFolder;
         _selectedIcon = settings.Icon ?? "folder";
         _selectedIconColor = settings.IconColor;
+        _selectedDescription = settings.Description;
 
         InitializeComponent();
 
+        DescriptionTextBox.Text = _selectedDescription ?? "";
         PopulateIconGrid(settings.Icon);
         PopulateSwatches();
         UpdatePreview();
@@ -365,7 +368,8 @@ public partial class ProjectSettingsDialog : Window
         Result = new ProjectSettings
         {
             Icon = _selectedIcon,
-            IconColor = _selectedIconColor
+            IconColor = _selectedIconColor,
+            Description = string.IsNullOrWhiteSpace(DescriptionTextBox.Text) ? null : DescriptionTextBox.Text.Trim()
         };
         DialogResult = true;
     }

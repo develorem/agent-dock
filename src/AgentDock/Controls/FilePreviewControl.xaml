@@ -4,8 +4,17 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:avalonedit="http://icsharpcode.net/sharpdevelop/avalonedit"
+             xmlns:mdxaml="clr-namespace:MdXaml;assembly=MdXaml"
              mc:Ignorable="d"
              Background="{DynamicResource PreviewBackground}">
+    <UserControl.Resources>
+        <Style x:Key="ThemeMarkdownStyle" TargetType="FlowDocument">
+            <Setter Property="Foreground" Value="{DynamicResource PreviewForeground}" />
+            <Setter Property="FontFamily" Value="Segoe UI, Segoe UI Emoji" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="PagePadding" Value="0" />
+        </Style>
+    </UserControl.Resources>
     <Grid>
         <!-- Empty state -->
         <TextBlock x:Name="EmptyMessage"
@@ -29,6 +38,15 @@
                                HorizontalScrollBarVisibility="Auto"
                                VerticalScrollBarVisibility="Auto" />
 
+        <!-- Rendered markdown preview -->
+        <mdxaml:MarkdownScrollViewer x:Name="MarkdownPreview"
+                                     Visibility="Collapsed"
+                                     Background="{DynamicResource PreviewBackground}"
+                                     Foreground="{DynamicResource PreviewForeground}"
+                                     MarkdownStyle="{StaticResource ThemeMarkdownStyle}"
+                                     VerticalScrollBarVisibility="Auto"
+                                     Padding="16" />
+
         <!-- Image preview -->
         <ScrollViewer x:Name="ImageContainer"
                       Visibility="Collapsed"
@@ -50,5 +68,26 @@
                    VerticalAlignment="Center"
                    FontSize="18"
                    Foreground="{DynamicResource PreviewNoPreviewForeground}" />
+
+        <!-- Markdown source/preview toggle button (floating top-right) -->
+        <Button x:Name="MarkdownToggleButton"
+                Visibility="Collapsed"
+                Click="MarkdownToggle_Click"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Top"
+                Margin="0,6,6,0"
+                Padding="6,4"
+                Cursor="Hand"
+                ToolTip="Switch to source view"
+                Background="{DynamicResource PreviewBackground}"
+                BorderBrush="{DynamicResource PreviewLineNumberForeground}"
+                BorderThickness="1"
+                Opacity="0.85">
+            <TextBlock x:Name="MarkdownToggleIcon"
+                       Text="&#xE943;"
+                       FontFamily="Segoe MDL2 Assets"
+                       FontSize="14"
+                       Foreground="{DynamicResource PreviewForeground}" />
+        </Button>
     </Grid>
 </UserControl>
