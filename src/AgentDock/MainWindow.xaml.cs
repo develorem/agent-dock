@@ -59,6 +59,7 @@ public partial class MainWindow : Window
     private Point _tabDragStartPoint;
     private bool _tabDragging;
     private Button? _tabDragSource;
+    private Border? _tabDragIndicator; // visual insertion line shown during drag
 
     // Toolbar add-project button (always last in ToolbarPanel)
     private readonly Button _toolbarAddButton;
@@ -81,6 +82,12 @@ public partial class MainWindow : Window
         // Create the + button for the project tab bar
         _toolbarAddButton = CreateToolbarAddButton();
         ToolbarPanel.Children.Add(_toolbarAddButton);
+
+        // ToolbarPanel handles drag-over/drop for tab reordering (provides full-panel hit area)
+        ToolbarPanel.AllowDrop = true;
+        ToolbarPanel.DragOver += ToolbarPanel_DragOver;
+        ToolbarPanel.Drop += ToolbarPanel_Drop;
+        ToolbarPanel.DragLeave += (_, _) => RemoveTabDragIndicator();
 
         CommandBindings.Add(new CommandBinding(AddProjectCommand, (_, _) => AddProject()));
         CommandBindings.Add(new CommandBinding(SaveWorkspaceCommand, (_, _) => SaveWorkspace()));
@@ -939,7 +946,7 @@ public partial class MainWindow : Window
                 button.BorderBrush = ThemeManager.GetBrush("TabButtonActiveBorderBrush");
         };
 
-        // Drag-and-drop reordering
+        // Drag initiation (DragOver/Drop handled at ToolbarPanel level)
         button.PreviewMouseLeftButtonDown += (_, e) =>
         {
             _tabDragStartPoint = e.GetPosition(null);
@@ -959,51 +966,8 @@ public partial class MainWindow : Window
                 _tabDragging = true;
                 DragDrop.DoDragDrop(button, new DataObject("ProjectTab", project), DragDropEffects.Move);
                 _tabDragSource = null;
+                RemoveTabDragIndicator();
             }
-        };
-        button.AllowDrop = true;
-        button.DragOver += (_, e) =>
-        {
-            if (!e.Data.GetDataPresent("ProjectTab"))
-            {
-                e.Effects = DragDropEffects.None;
-                e.Handled = true;
-                return;
-            }
-            e.Effects = DragDropEffects.Move;
-            e.Handled = true;
-        };
-        button.Drop += (_, e) =>
-        {
-            if (e.Data.GetData("ProjectTab") is not ProjectInfo sourceProject)
-                return;
-            if (sourceProject == project)
-                return;
-
-            // Rearrange in data model
-            var sourceIdx = _projects.IndexOf(sourceProject);
-            var targetIdx = _projects.IndexOf(project);
-            if (sourceIdx < 0 || targetIdx < 0) return;
-
-            _projects.RemoveAt(sourceIdx);
-            _projects.Insert(targetIdx, sourceProject);
-
-            // Rearrange in toolbar UI (keep + button as last child)
-            if (_projectTabButtons.TryGetValue(sourceProject, out var sourceBtn))
-            {
-                ToolbarPanel.Children.Remove(sourceBtn);
-                var targetBtn = _projectTabButtons[project];
-                var targetUiIdx = ToolbarPanel.Children.IndexOf(targetBtn);
-                var insertIdx = targetIdx <= sourceIdx ? targetUiIdx : targetUiIdx + 1;
-                // Ensure we don't insert after the + button
-                var addBtnIdx = ToolbarPanel.Children.IndexOf(_toolbarAddButton);
-                if (addBtnIdx >= 0 && insertIdx > addBtnIdx)
-                    insertIdx = addBtnIdx;
-                ToolbarPanel.Children.Insert(insertIdx, sourceBtn);
-            }
-
-            SetWorkspaceDirty();
-            e.Handled = true;
         };
 
         // Right-click context menu
@@ -1069,6 +1033,137 @@ public partial class MainWindow : Window
         };
 
         return button;
+    }
+
+    // --- Tab drag-and-drop (panel-level handlers) ---
+
+    /// <summary>
+    /// Finds the insertion index among tab buttons for the given mouse position.
+    /// Returns the index in _projects where the dragged tab should be inserted.
+    /// </summary>
+    private int GetTabInsertionIndex(DragEventArgs e)
+    {
+        var isHorizontal = ToolbarPanel.Orientation == Orientation.Horizontal;
+
+        for (int i = 0; i < ToolbarPanel.Children.Count; i++)
+        {
+            if (ToolbarPanel.Children[i] is not FrameworkElement child)
+                continue;
+            if (child == _toolbarAddButton || child == _tabDragIndicator || child.Tag is not ProjectInfo)
+                continue;
+
+            var pos = e.GetPosition(child);
+            var midpoint = isHorizontal ? child.RenderSize.Width / 2 : child.RenderSize.Height / 2;
+            var coord = isHorizontal ? pos.X : pos.Y;
+
+            if (coord < midpoint)
+            {
+                // Before this tab — find its project index
+                var proj = (ProjectInfo)child.Tag;
+                return _projects.IndexOf(proj);
+            }
+        }
+
+        // After all tabs
+        return _projects.Count;
+    }
+
+    private void ToolbarPanel_DragOver(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent("ProjectTab"))
+        {
+            e.Effects = DragDropEffects.None;
+            e.Handled = true;
+            return;
+        }
+
+        e.Effects = DragDropEffects.Move;
+        e.Handled = true;
+
+        // Show insertion indicator
+        var insertIdx = GetTabInsertionIndex(e);
+        ShowTabDragIndicator(insertIdx);
+    }
+
+    private void ToolbarPanel_Drop(object sender, DragEventArgs e)
+    {
+        RemoveTabDragIndicator();
+
+        if (e.Data.GetData("ProjectTab") is not ProjectInfo sourceProject)
+            return;
+
+        var targetIdx = GetTabInsertionIndex(e);
+        var sourceIdx = _projects.IndexOf(sourceProject);
+        if (sourceIdx < 0 || targetIdx < 0) return;
+
+        // Adjust target if dragging forward (removal shifts indices)
+        if (targetIdx > sourceIdx)
+            targetIdx--;
+        if (targetIdx == sourceIdx)
+            return;
+
+        // Rearrange data model
+        _projects.RemoveAt(sourceIdx);
+        _projects.Insert(targetIdx, sourceProject);
+
+        // Rearrange toolbar UI
+        if (_projectTabButtons.TryGetValue(sourceProject, out var sourceBtn))
+        {
+            ToolbarPanel.Children.Remove(sourceBtn);
+            // Insert at the correct UI position (before the + button)
+            var addBtnIdx = ToolbarPanel.Children.IndexOf(_toolbarAddButton);
+            var uiIdx = Math.Min(targetIdx, addBtnIdx >= 0 ? addBtnIdx : ToolbarPanel.Children.Count);
+            ToolbarPanel.Children.Insert(uiIdx, sourceBtn);
+        }
+
+        SetWorkspaceDirty();
+        e.Handled = true;
+    }
+
+    private void ShowTabDragIndicator(int projectIndex)
+    {
+        var isHorizontal = ToolbarPanel.Orientation == Orientation.Horizontal;
+
+        // Create indicator if needed
+        if (_tabDragIndicator == null)
+        {
+            _tabDragIndicator = new Border
+            {
+                Background = ThemeManager.GetBrush("TabButtonActiveBorderBrush"),
+                IsHitTestVisible = false
+            };
+        }
+
+        // Size the indicator
+        if (isHorizontal)
+        {
+            _tabDragIndicator.Width = 3;
+            _tabDragIndicator.Height = 30;
+            _tabDragIndicator.Margin = new Thickness(-1, 3, -1, 3);
+        }
+        else
+        {
+            _tabDragIndicator.Width = 30;
+            _tabDragIndicator.Height = 3;
+            _tabDragIndicator.Margin = new Thickness(3, -1, 3, -1);
+        }
+
+        // Remove from current position
+        ToolbarPanel.Children.Remove(_tabDragIndicator);
+
+        // Find the UI insertion point (clamped before the + button)
+        var addBtnIdx = ToolbarPanel.Children.IndexOf(_toolbarAddButton);
+        var uiIdx = Math.Min(projectIndex, addBtnIdx >= 0 ? addBtnIdx : ToolbarPanel.Children.Count);
+        ToolbarPanel.Children.Insert(uiIdx, _tabDragIndicator);
+    }
+
+    private void RemoveTabDragIndicator()
+    {
+        if (_tabDragIndicator != null)
+        {
+            ToolbarPanel.Children.Remove(_tabDragIndicator);
+            _tabDragIndicator = null;
+        }
     }
 
     private static MenuItem CreateMenuItem(string header, Action action)
