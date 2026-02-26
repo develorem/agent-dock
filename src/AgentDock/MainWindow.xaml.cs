@@ -1083,7 +1083,7 @@ public partial class MainWindow : Window
                 gitStatusControl.RefreshStatus();
         };
 
-        // Update AI Chat panel title with cumulative session cost
+        // Update AI Chat panel title with cumulative session cost, and update total cost
         aiChatControl.SessionCostChanged += cost =>
         {
             if (_projectDockingManagers.TryGetValue(project, out var dm))
@@ -1093,6 +1093,8 @@ public partial class MainWindow : Window
                 if (anchorable != null)
                     anchorable.Title = $"AI Chat — ${cost:F4}";
             }
+
+            UpdateTotalCost();
         };
 
         // Map ContentId → control for layout serialization callback
@@ -1423,6 +1425,12 @@ public partial class MainWindow : Window
             Title = $"Agent Dock — {_activeProject.FolderName}{dirtyMarker}";
             TitleBarText.Text = $"{_activeProject.FolderName}{dirtyMarker}";
         }
+    }
+
+    private void UpdateTotalCost()
+    {
+        var total = _projectChatControls.Values.Sum(c => c.SessionCostUsd);
+        TotalCostText.Text = total > 0 ? $"${total:F4}" : "";
     }
 
     private static void SetTabButtonActive(Button button, bool active)
