@@ -51,6 +51,16 @@ public partial class AiChatControl : UserControl
     public event Action<ClaudeSessionState>? SessionStateChanged;
 
     /// <summary>
+    /// Raised when cumulative session cost changes (carries new total in USD).
+    /// </summary>
+    public event Action<double>? SessionCostChanged;
+
+    /// <summary>
+    /// Cumulative cost (USD) for the current session.
+    /// </summary>
+    public double SessionCostUsd { get; private set; }
+
+    /// <summary>
     /// Whether the current session is running in dangerous mode.
     /// </summary>
     public bool IsDangerousMode => _session?.IsDangerousMode ?? false;
@@ -432,10 +442,12 @@ public partial class AiChatControl : UserControl
 
         if (result.TotalCostUsd.HasValue)
         {
-            var costText = $"Cost: ${result.TotalCostUsd:F4}";
+            SessionCostUsd += result.TotalCostUsd.Value;
+            var costText = $"Cost: ${result.TotalCostUsd:F4} (session: ${SessionCostUsd:F4})";
             if (result.DurationMs.HasValue)
                 costText += $" | {result.DurationMs / 1000.0:F1}s";
             AddSystemMessage(costText);
+            SessionCostChanged?.Invoke(SessionCostUsd);
         }
     }
 

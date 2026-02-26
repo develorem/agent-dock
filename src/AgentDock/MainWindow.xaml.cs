@@ -1083,6 +1083,18 @@ public partial class MainWindow : Window
                 gitStatusControl.RefreshStatus();
         };
 
+        // Update AI Chat panel title with cumulative session cost
+        aiChatControl.SessionCostChanged += cost =>
+        {
+            if (_projectDockingManagers.TryGetValue(project, out var dm))
+            {
+                var anchorable = dm.Layout.Descendents().OfType<LayoutAnchorable>()
+                    .FirstOrDefault(a => a.ContentId == AiChatId);
+                if (anchorable != null)
+                    anchorable.Title = $"AI Chat — ${cost:F4}";
+            }
+        };
+
         // Map ContentId → control for layout serialization callback
         var controlMap = new Dictionary<string, object>
         {
