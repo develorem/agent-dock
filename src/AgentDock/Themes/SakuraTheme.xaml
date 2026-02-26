@@ -50,6 +50,7 @@
     <SolidColorBrush x:Key="ExplorerSelectedBackground" Color="#F5D5DE" />
     <SolidColorBrush x:Key="ExplorerSelectedForeground" Color="#2D1A24" />
     <SolidColorBrush x:Key="ExplorerHoverBackground" Color="#FDE8EE" />
+    <SolidColorBrush x:Key="ExplorerFolderIconForeground" Color="#C08030" />
 
     <!-- Panel placeholder -->
     <SolidColorBrush x:Key="PlaceholderBackground" Color="#FFF5F7" />

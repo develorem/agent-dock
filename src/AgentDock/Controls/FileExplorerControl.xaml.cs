@@ -5,6 +5,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using AgentDock.Models;
 using AgentDock.Services;
 
@@ -429,6 +430,13 @@ public class FileNode : INotifyPropertyChanged
         get => _icon;
         set { _icon = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Icon))); }
     }
+
+    /// <summary>
+    /// Returns a themed foreground brush: folder-yellow for directories, normal for files.
+    /// </summary>
+    public Brush IconForeground => IsDirectory
+        ? ThemeManager.GetBrush("ExplorerFolderIconForeground")
+        : ThemeManager.GetBrush("ExplorerForeground");
 
     public bool IsExpanded
     {

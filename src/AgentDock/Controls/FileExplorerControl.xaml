@@ -182,7 +182,7 @@
                     <StackPanel Orientation="Horizontal" Margin="2,1">
                         <TextBlock Text="{Binding Icon}" FontSize="14" Margin="0,0,5,0"
                                    VerticalAlignment="Center"
-                                   Foreground="{DynamicResource ExplorerForeground}" />
+                                   Foreground="{Binding IconForeground}" />
                         <TextBlock Text="{Binding Name}" FontSize="12"
                                    VerticalAlignment="Center"
                                    Foreground="{DynamicResource ExplorerForeground}" />
