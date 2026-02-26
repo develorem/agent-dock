@@ -52,6 +52,11 @@ public partial class MainWindow : Window
     // Prerequisites check results (populated on startup)
     private List<(string Name, bool Found, string Detail)>? _prerequisiteResults;
 
+    // Tab drag-and-drop reordering state
+    private Point _tabDragStartPoint;
+    private bool _tabDragging;
+    private Button? _tabDragSource;
+
     // Panel ContentId constants (stable across app runs)
     private const string FileExplorerId = "fileExplorer";
     private const string GitStatusId = "gitStatus";
@@ -825,7 +830,11 @@ public partial class MainWindow : Window
             }
         };
 
-        button.Click += (_, _) => SwitchToProject(project);
+        button.Click += (_, _) =>
+        {
+            if (!_tabDragging)
+                SwitchToProject(project);
+        };
 
         // Hover: highlight border only (no background fill)
         button.MouseEnter += (_, _) =>
@@ -839,6 +848,68 @@ public partial class MainWindow : Window
                 button.BorderBrush = ThemeManager.GetBrush("TabButtonBorderBrush");
             else
                 button.BorderBrush = ThemeManager.GetBrush("TabButtonActiveBorderBrush");
+        };
+
+        // Drag-and-drop reordering
+        button.PreviewMouseLeftButtonDown += (_, e) =>
+        {
+            _tabDragStartPoint = e.GetPosition(null);
+            _tabDragSource = button;
+            _tabDragging = false;
+        };
+        button.PreviewMouseMove += (_, e) =>
+        {
+            if (_tabDragSource != button || e.LeftButton != MouseButtonState.Pressed)
+                return;
+
+            var pos = e.GetPosition(null);
+            var diff = pos - _tabDragStartPoint;
+            if (Math.Abs(diff.X) > SystemParameters.MinimumHorizontalDragDistance ||
+                Math.Abs(diff.Y) > SystemParameters.MinimumVerticalDragDistance)
+            {
+                _tabDragging = true;
+                DragDrop.DoDragDrop(button, new DataObject("ProjectTab", project), DragDropEffects.Move);
+                _tabDragSource = null;
+            }
+        };
+        button.AllowDrop = true;
+        button.DragOver += (_, e) =>
+        {
+            if (!e.Data.GetDataPresent("ProjectTab"))
+            {
+                e.Effects = DragDropEffects.None;
+                e.Handled = true;
+                return;
+            }
+            e.Effects = DragDropEffects.Move;
+            e.Handled = true;
+        };
+        button.Drop += (_, e) =>
+        {
+            if (e.Data.GetData("ProjectTab") is not ProjectInfo sourceProject)
+                return;
+            if (sourceProject == project)
+                return;
+
+            // Rearrange in data model
+            var sourceIdx = _projects.IndexOf(sourceProject);
+            var targetIdx = _projects.IndexOf(project);
+            if (sourceIdx < 0 || targetIdx < 0) return;
+
+            _projects.RemoveAt(sourceIdx);
+            _projects.Insert(targetIdx, sourceProject);
+
+            // Rearrange in toolbar UI
+            if (_projectTabButtons.TryGetValue(sourceProject, out var sourceBtn))
+            {
+                ToolbarPanel.Children.Remove(sourceBtn);
+                var targetBtn = _projectTabButtons[project];
+                var targetUiIdx = ToolbarPanel.Children.IndexOf(targetBtn);
+                ToolbarPanel.Children.Insert(targetIdx <= sourceIdx ? targetUiIdx : targetUiIdx + 1, sourceBtn);
+            }
+
+            SetWorkspaceDirty();
+            e.Handled = true;
         };
 
         // Right-click context menu
