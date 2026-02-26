@@ -53,3 +53,6 @@ appsettings.*.json
 # Build artifacts
 artifacts/
 publish/
+
+# Local investigation files (screenshots, logs from users)
+investigation/
