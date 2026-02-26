@@ -10,7 +10,6 @@
         WindowStartupLocation="CenterScreen"
         WindowState="Maximized"
         WindowStyle="None"
-        Icon="/Assets/agentdock.png"
         Closing="MainWindow_Closing">
 
     <WindowChrome.WindowChrome>

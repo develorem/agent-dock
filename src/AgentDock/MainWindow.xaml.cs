@@ -86,6 +86,7 @@ public partial class MainWindow : Window
         // Build theme menu and subscribe to changes
         PopulateThemeMenu();
         ThemeManager.ThemeChanged += OnThemeChanged;
+        UpdateTaskbarIcon();
 
         // Sync maximize/restore icon whenever window state changes (button click, double-click, aero snap, etc.)
         StateChanged += (_, _) => UpdateMaximizeIcon();
@@ -1427,6 +1428,12 @@ public partial class MainWindow : Window
         }
     }
 
+    private void UpdateTaskbarIcon()
+    {
+        var accentBrush = ThemeManager.GetBrush("TabButtonActiveBorderBrush");
+        Icon = TaskbarIconHelper.CreateThemedIcon(accentBrush.Color);
+    }
+
     private void UpdateTotalCost()
     {
         var total = _projectChatControls.Values.Sum(c => c.SessionCostUsd);
@@ -2083,6 +2090,12 @@ public partial class MainWindow : Window
             if (_projectChatControls.TryGetValue(project, out var chat))
                 UpdateTabIcon(project, chat.CurrentState);
         }
+
+        // Update toolbar + button accent
+        _toolbarAddButton.BorderBrush = ThemeManager.GetBrush("AddButtonBorderBrush");
+
+        // Update taskbar icon with new theme accent bar
+        UpdateTaskbarIcon();
     }
 
     private void PopulateThemeMenu()
