@@ -291,6 +291,12 @@ public partial class FileExplorerControl : UserControl
             OpenInExplorer(_rootPath);
     }
 
+    private void OpenInConsole_Click(object sender, RoutedEventArgs e)
+    {
+        if (!string.IsNullOrEmpty(_rootPath))
+            OpenCommandLine(_rootPath);
+    }
+
     private void OpenSettings_Click(object sender, RoutedEventArgs e)
     {
         if (string.IsNullOrEmpty(_rootPath))

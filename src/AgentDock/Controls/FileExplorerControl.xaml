@@ -65,6 +65,14 @@
                            Foreground="{DynamicResource ExplorerForeground}" />
             </Button>
             <Button Style="{StaticResource ExplorerToolbarButton}"
+                    ToolTip="Open in Console"
+                    Click="OpenInConsole_Click">
+                <TextBlock Text="&#xE756;"
+                           FontFamily="Segoe MDL2 Assets"
+                           FontSize="14"
+                           Foreground="{DynamicResource ExplorerForeground}" />
+            </Button>
+            <Button Style="{StaticResource ExplorerToolbarButton}"
                     ToolTip="Project Settings"
                     Click="OpenSettings_Click">
                 <TextBlock Text="&#xE713;"
