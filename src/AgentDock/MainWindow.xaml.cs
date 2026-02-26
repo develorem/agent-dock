@@ -52,6 +52,9 @@ public partial class MainWindow : Window
     // Prerequisites check results (populated on startup)
     private List<(string Name, bool Found, string Detail)>? _prerequisiteResults;
 
+    // App session start time (for elapsed display in title bar)
+    private readonly DateTime _appStartTime = DateTime.Now;
+
     // Tab drag-and-drop reordering state
     private Point _tabDragStartPoint;
     private bool _tabDragging;
@@ -1438,9 +1441,18 @@ public partial class MainWindow : Window
     {
         var totalCost = _projectChatControls.Values.Sum(c => c.Stats.TotalCostUsd);
         var totalTokens = _projectChatControls.Values.Sum(c => c.Stats.TotalTokens);
-        TotalCostText.Text = totalCost > 0
-            ? $"${totalCost:F4} · {SessionStats.FormatTokens(totalTokens)} tokens"
-            : "";
+        if (totalCost > 0)
+        {
+            var elapsed = DateTime.Now - _appStartTime;
+            var elapsedText = elapsed.TotalHours >= 1
+                ? $"{(int)elapsed.TotalHours}h {elapsed.Minutes}m"
+                : $"{elapsed.Minutes}m";
+            TotalCostText.Text = $"{elapsedText} · ${totalCost:F4} · {SessionStats.FormatTokens(totalTokens)} tokens";
+        }
+        else
+        {
+            TotalCostText.Text = "";
+        }
     }
 
     private static void SetTabButtonActive(Button button, bool active)
