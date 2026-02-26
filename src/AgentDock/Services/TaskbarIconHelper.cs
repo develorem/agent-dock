@@ -22,8 +22,8 @@ public static class TaskbarIconHelper
         int width = _logoBitmap.PixelWidth;
         int height = _logoBitmap.PixelHeight;
 
-        // Bar: full width, ~8% of height, pinned to bottom
-        int barHeight = Math.Max(2, (int)(height * 0.08));
+        // Bar: full width, ~18% of height, pinned to bottom
+        int barHeight = Math.Max(4, (int)(height * 0.18));
         int barY = height - barHeight;
 
         var visual = new DrawingVisual();

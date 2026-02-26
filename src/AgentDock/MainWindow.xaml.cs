@@ -1430,7 +1430,7 @@ public partial class MainWindow : Window
 
     private void UpdateTaskbarIcon()
     {
-        var accentBrush = ThemeManager.GetBrush("TabButtonActiveBorderBrush");
+        var accentBrush = ThemeManager.GetBrush("TaskbarAccentColor");
         Icon = TaskbarIconHelper.CreateThemedIcon(accentBrush.Color);
     }
 

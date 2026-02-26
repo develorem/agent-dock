@@ -14,6 +14,9 @@
     <SolidColorBrush x:Key="TabButtonActiveBorderBrush" Color="#B89030" />
     <SolidColorBrush x:Key="TabButtonInactiveBackground" Color="Transparent" />
 
+    <!-- Taskbar icon accent bar -->
+    <SolidColorBrush x:Key="TaskbarAccentColor" Color="#E8DCA0" />
+
     <!-- Add button -->
     <SolidColorBrush x:Key="AddButtonBorderBrush" Color="#C0B49A" />
     <SolidColorBrush x:Key="AddButtonForeground" Color="#8B7D6B" />
