@@ -96,11 +96,11 @@ public class ClaudeSession : IDisposable
         if (Path.IsPathRooted(path) && File.Exists(path))
             return path;
 
-        // Search PATH for the command, matching Windows PATHEXT resolution order:
-        // bare name and .exe first (preserves existing behaviour for working installs),
-        // then .cmd/.bat (fixes npm-installed CLI wrappers).
+        // Search PATH for the command. Prefer .cmd/.bat first because Claude Code CLI
+        // on Windows is an npm .cmd wrapper, and we must avoid picking up claude.exe from
+        // the Claude Desktop app (which doesn't support the JSON-lines protocol).
         var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? "";
-        var extensions = new[] { "", ".exe", ".cmd", ".bat" };
+        var extensions = new[] { ".cmd", ".bat", "", ".exe" };
 
         foreach (var dir in pathEnv.Split(Path.PathSeparator))
         {
@@ -172,11 +172,12 @@ public class ClaudeSession : IDisposable
         if (IsDangerousMode)
             args += " --dangerously-skip-permissions";
 
-        Log.Info($"ClaudeSession.SendMessage: launching claude with args: {args}");
+        var resolvedPath = ResolveClaudeBinaryPath();
+        Log.Info($"ClaudeSession.SendMessage: launching '{resolvedPath}' with args: {args}");
 
         var psi = new ProcessStartInfo
         {
-            FileName = ResolveClaudeBinaryPath(),
+            FileName = resolvedPath,
             Arguments = args,
             WorkingDirectory = _workingDirectory,
             RedirectStandardInput = true,
