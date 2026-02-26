@@ -1084,15 +1084,15 @@ public partial class MainWindow : Window
                 gitStatusControl.RefreshStatus();
         };
 
-        // Update AI Chat panel title with cumulative session cost, and update total cost
-        aiChatControl.SessionCostChanged += cost =>
+        // Update AI Chat panel title with cumulative session stats, and update total cost
+        aiChatControl.SessionStatsChanged += stats =>
         {
             if (_projectDockingManagers.TryGetValue(project, out var dm))
             {
                 var anchorable = dm.Layout.Descendents().OfType<LayoutAnchorable>()
                     .FirstOrDefault(a => a.ContentId == AiChatId);
                 if (anchorable != null)
-                    anchorable.Title = $"AI Chat — ${cost:F4}";
+                    anchorable.Title = $"AI Chat — ${stats.TotalCostUsd:F4} · {SessionStats.FormatTokens(stats.TotalTokens)} tokens";
             }
 
             UpdateTotalCost();
@@ -1436,8 +1436,11 @@ public partial class MainWindow : Window
 
     private void UpdateTotalCost()
     {
-        var total = _projectChatControls.Values.Sum(c => c.SessionCostUsd);
-        TotalCostText.Text = total > 0 ? $"${total:F4}" : "";
+        var totalCost = _projectChatControls.Values.Sum(c => c.Stats.TotalCostUsd);
+        var totalTokens = _projectChatControls.Values.Sum(c => c.Stats.TotalTokens);
+        TotalCostText.Text = totalCost > 0
+            ? $"${totalCost:F4} · {SessionStats.FormatTokens(totalTokens)} tokens"
+            : "";
     }
 
     private static void SetTabButtonActive(Button button, bool active)

@@ -173,6 +173,43 @@ public class ClaudePermissionRequest
 /// <summary>
 /// Result message emitted when Claude finishes.
 /// </summary>
+/// <summary>
+/// Cumulative session statistics (cost + token usage).
+/// </summary>
+public class SessionStats
+{
+    public double TotalCostUsd { get; set; }
+    public long InputTokens { get; set; }
+    public long OutputTokens { get; set; }
+    public long CacheReadInputTokens { get; set; }
+    public long CacheCreationInputTokens { get; set; }
+    public int Interactions { get; set; }
+
+    public long TotalTokens => InputTokens + OutputTokens + CacheReadInputTokens + CacheCreationInputTokens;
+
+    public void Add(ClaudeResultMessage result)
+    {
+        if (result.TotalCostUsd.HasValue)
+            TotalCostUsd += result.TotalCostUsd.Value;
+        InputTokens += result.InputTokens;
+        OutputTokens += result.OutputTokens;
+        CacheReadInputTokens += result.CacheReadInputTokens;
+        CacheCreationInputTokens += result.CacheCreationInputTokens;
+        Interactions++;
+    }
+
+    /// <summary>Formats token count as human-readable (e.g. "12.3k", "1.2M").</summary>
+    public static string FormatTokens(long tokens)
+    {
+        return tokens switch
+        {
+            >= 1_000_000 => $"{tokens / 1_000_000.0:F1}M",
+            >= 1_000 => $"{tokens / 1_000.0:F1}k",
+            _ => tokens.ToString()
+        };
+    }
+}
+
 public class ClaudeResultMessage
 {
     public string Subtype { get; init; } = "";
@@ -182,4 +219,10 @@ public class ClaudeResultMessage
     public int? NumTurns { get; init; }
     public long? DurationMs { get; init; }
     public List<string>? Errors { get; init; }
+
+    // Token usage (from "usage" object in result JSON)
+    public long InputTokens { get; init; }
+    public long OutputTokens { get; init; }
+    public long CacheReadInputTokens { get; init; }
+    public long CacheCreationInputTokens { get; init; }
 }

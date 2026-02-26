@@ -51,14 +51,17 @@ public partial class AiChatControl : UserControl
     public event Action<ClaudeSessionState>? SessionStateChanged;
 
     /// <summary>
-    /// Raised when cumulative session cost changes (carries new total in USD).
+    /// Raised when cumulative session stats change (cost, tokens).
     /// </summary>
-    public event Action<double>? SessionCostChanged;
+    public event Action<SessionStats>? SessionStatsChanged;
 
     /// <summary>
-    /// Cumulative cost (USD) for the current session.
+    /// Cumulative stats for the current session.
     /// </summary>
-    public double SessionCostUsd { get; private set; }
+    public SessionStats Stats { get; } = new();
+
+    /// <summary>Shortcut for backwards compat.</summary>
+    public double SessionCostUsd => Stats.TotalCostUsd;
 
     /// <summary>
     /// Whether the current session is running in dangerous mode.
@@ -440,15 +443,27 @@ public partial class AiChatControl : UserControl
             AddSystemMessage($"Error: {string.Join("; ", result.Errors)}", isWarning: true);
         }
 
+        // Accumulate session stats
+        Stats.Add(result);
+
+        // Build per-interaction summary line
+        var parts = new List<string>();
         if (result.TotalCostUsd.HasValue)
+            parts.Add($"${result.TotalCostUsd:F4}");
+        if (result.DurationMs.HasValue)
+            parts.Add($"{result.DurationMs / 1000.0:F1}s");
+        var queryTokens = result.InputTokens + result.OutputTokens
+                        + result.CacheReadInputTokens + result.CacheCreationInputTokens;
+        if (queryTokens > 0)
+            parts.Add($"{SessionStats.FormatTokens(queryTokens)} tokens");
+        if (parts.Count > 0)
         {
-            SessionCostUsd += result.TotalCostUsd.Value;
-            var costText = $"Cost: ${result.TotalCostUsd:F4} (session: ${SessionCostUsd:F4})";
-            if (result.DurationMs.HasValue)
-                costText += $" | {result.DurationMs / 1000.0:F1}s";
+            var costText = string.Join(" | ", parts);
+            costText += $"  (session: ${Stats.TotalCostUsd:F4}, {SessionStats.FormatTokens(Stats.TotalTokens)} tokens)";
             AddSystemMessage(costText);
-            SessionCostChanged?.Invoke(SessionCostUsd);
         }
+
+        SessionStatsChanged?.Invoke(Stats);
     }
 
     private void FinalizeThinkingBlock()
