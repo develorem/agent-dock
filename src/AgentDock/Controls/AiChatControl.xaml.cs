@@ -7,6 +7,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using AgentDock.Models;
 using AgentDock.Services;
+using MdXaml;
 
 namespace AgentDock.Controls;
 
@@ -479,11 +480,15 @@ public partial class AiChatControl : UserControl
         if (_streamingBlock == null)
             return;
 
-        // Find the parent container and make it collapsible if long
+        // Find the parent container and add markdown toggle + collapsible support
         var parent = _streamingBlock.Parent as StackPanel;
-        if (parent?.Parent is Border border && _streamingText.Contains('\n'))
+        if (parent?.Parent is Border border)
         {
-            MakeCollapsible(border, parent, _streamingBlock, _streamingText);
+            // Add markdown preview toggle for multi-line assistant messages
+            if (_streamingText.Contains('\n'))
+            {
+                AddMarkdownToggle(border, parent, _streamingBlock, _streamingText);
+            }
         }
 
         _streamingBlock = null;
@@ -910,7 +915,86 @@ public partial class AiChatControl : UserControl
         ScrollToBottom();
     }
 
-    // --- Collapsible Messages ---
+    // --- Markdown Toggle + Collapsible Messages ---
+
+    private void AddMarkdownToggle(Border bubble, StackPanel panel, TextBox contentBlock, string fullText)
+    {
+        // Create the markdown rendered view
+        var markdownViewer = new MarkdownScrollViewer
+        {
+            Markdown = fullText,
+            Background = Brushes.Transparent,
+            Foreground = ThemeManager.GetBrush("ChatTextForeground"),
+            MarkdownStyle = (Style)FindResource("ChatMarkdownStyle"),
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Padding = new Thickness(0)
+        };
+
+        var isRendered = true;
+        contentBlock.Visibility = Visibility.Collapsed;
+        panel.Children.Add(markdownViewer);
+
+        // Toggle button (top-right of bubble)
+        var toggleIcon = new TextBlock
+        {
+            Text = "\uE943", // Code icon (showing rendered, click to see source)
+            FontFamily = new FontFamily("Segoe MDL2 Assets"),
+            FontSize = 11,
+            Foreground = ThemeManager.GetBrush("ChatMutedForeground")
+        };
+
+        var toggleButton = new Button
+        {
+            Content = toggleIcon,
+            Background = Brushes.Transparent,
+            BorderBrush = ThemeManager.GetBrush("ChatThinkingBorderBrush"),
+            BorderThickness = new Thickness(1),
+            Cursor = Cursors.Hand,
+            Padding = new Thickness(4, 2, 4, 2),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            ToolTip = "Switch to source view",
+            Opacity = 0.7
+        };
+
+        // Remove default button chrome
+        var btnTemplate = new ControlTemplate(typeof(Button));
+        var bdFactory = new FrameworkElementFactory(typeof(Border), "Bd");
+        bdFactory.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(BackgroundProperty));
+        bdFactory.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(BorderBrushProperty));
+        bdFactory.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(BorderThicknessProperty));
+        bdFactory.SetValue(Border.CornerRadiusProperty, new CornerRadius(3));
+        bdFactory.SetValue(Border.PaddingProperty, new TemplateBindingExtension(PaddingProperty));
+        var cp = new FrameworkElementFactory(typeof(ContentPresenter));
+        cp.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+        cp.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+        bdFactory.AppendChild(cp);
+        btnTemplate.VisualTree = bdFactory;
+        toggleButton.Template = btnTemplate;
+
+        toggleButton.Click += (_, _) =>
+        {
+            if (isRendered)
+            {
+                markdownViewer.Visibility = Visibility.Collapsed;
+                contentBlock.Visibility = Visibility.Visible;
+                toggleIcon.Text = "\uE890"; // Preview/eye icon
+                toggleButton.ToolTip = "Switch to rendered view";
+                isRendered = false;
+            }
+            else
+            {
+                contentBlock.Visibility = Visibility.Collapsed;
+                markdownViewer.Visibility = Visibility.Visible;
+                toggleIcon.Text = "\uE943"; // Code icon
+                toggleButton.ToolTip = "Switch to source view";
+                isRendered = true;
+            }
+        };
+
+        // Insert toggle button at the top of the panel (after label)
+        panel.Children.Insert(1, toggleButton);
+    }
 
     private void MakeCollapsible(Border bubble, StackPanel panel, TextBox contentBlock, string fullText)
     {
