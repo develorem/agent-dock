@@ -359,9 +359,13 @@ public partial class MainWindow : Window
 
     private static List<(string Name, bool Found, string Detail)> RunPrerequisiteChecks()
     {
+        // Log environment info for diagnostics
+        Log.Info($"Prereq: OS={Environment.OSVersion}, .NET={Environment.Version}, 64-bit={Environment.Is64BitProcess}");
+        Log.Info($"Prereq: User={Environment.UserName}, Machine={Environment.MachineName}");
+
         var results = new List<(string Name, bool Found, string Detail)>();
 
-        // Command-line tools
+        // Command-line tools — each gets: name, found/not-found, resolved path, version
         var cliChecks = new (string Name, string Command, string Args)[]
         {
             ("Claude Code CLI", ClaudeSession.ClaudeBinaryPath, "--version"),
@@ -372,22 +376,93 @@ public partial class MainWindow : Window
 
         foreach (var (name, command, args) in cliChecks)
         {
-            var (found, detail) = CheckCommand(command, args);
-            results.Add((name, found, detail));
+            var (found, version) = CheckCommandVersion(command, args);
+            var resolvedPath = ResolveCommandPath(command);
+            if (found)
+                Log.Info($"Prereq: {name} — FOUND, path='{resolvedPath}', version='{version}'");
+            else
+                Log.Info($"Prereq: {name} — NOT FOUND (searched PATH for '{command}')");
+            results.Add((name, found, version));
         }
+
+        // Claude-specific extras: log all matches on PATH and any custom override
+        LogClaudePathDetails();
 
         // Visual Studio — check install directories
         var vsResult = FindVisualStudio();
+        if (vsResult.Found)
+            Log.Info($"Prereq: {vsResult.Name} — FOUND, {vsResult.Detail}");
+        else
+            Log.Info($"Prereq: {vsResult.Name} — NOT FOUND");
         results.Add(vsResult);
 
         return results;
     }
 
-    private static (bool Found, string Detail) CheckCommand(string command, string args)
+    /// <summary>
+    /// Resolves a command name to its full path on the system PATH.
+    /// Returns the first match (preferring .cmd/.bat for npm wrappers), or the bare name if not found.
+    /// </summary>
+    private static string ResolveCommandPath(string command)
+    {
+        if (Path.IsPathRooted(command) && File.Exists(command))
+            return command;
+
+        var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? "";
+        var extensions = new[] { ".cmd", ".bat", "", ".exe" };
+
+        foreach (var dir in pathEnv.Split(Path.PathSeparator))
+        {
+            if (string.IsNullOrWhiteSpace(dir))
+                continue;
+            foreach (var ext in extensions)
+            {
+                var candidate = Path.Combine(dir, command + ext);
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+        }
+
+        return command;
+    }
+
+    /// <summary>
+    /// Logs all claude binaries found on PATH and any custom path override.
+    /// This helps diagnose cases where the wrong binary is picked up.
+    /// </summary>
+    private static void LogClaudePathDetails()
+    {
+        var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? "";
+        var extensions = new[] { ".cmd", ".bat", "", ".exe" };
+        var found = new List<string>();
+
+        foreach (var dir in pathEnv.Split(Path.PathSeparator))
+        {
+            if (string.IsNullOrWhiteSpace(dir))
+                continue;
+            foreach (var ext in extensions)
+            {
+                var candidate = Path.Combine(dir, "claude" + ext);
+                if (File.Exists(candidate))
+                    found.Add(candidate);
+            }
+        }
+
+        if (found.Count > 1)
+            Log.Info($"Prereq: Claude — all matches on PATH ({found.Count}): {string.Join(", ", found)}");
+
+        if (ClaudeSession.ClaudeBinaryPath != "claude")
+            Log.Info($"Prereq: Claude — custom path override = '{ClaudeSession.ClaudeBinaryPath}'");
+    }
+
+    /// <summary>
+    /// Runs a command via cmd.exe /c to get its version output.
+    /// Returns (found, version-string).
+    /// </summary>
+    private static (bool Found, string Version) CheckCommandVersion(string command, string args)
     {
         try
         {
-            // Use cmd.exe /c to resolve .cmd/.bat wrappers (e.g. code, cursor)
             var psi = new System.Diagnostics.ProcessStartInfo
             {
                 FileName = "cmd.exe",
@@ -407,7 +482,6 @@ public partial class MainWindow : Window
 
             if (process.ExitCode == 0)
             {
-                // Take just the first line (e.g. VS Code outputs multiple lines)
                 var firstLine = output.Split('\n')[0].Trim();
                 return (true, firstLine);
             }
