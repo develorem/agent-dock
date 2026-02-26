@@ -57,6 +57,9 @@ public partial class MainWindow : Window
     private bool _tabDragging;
     private Button? _tabDragSource;
 
+    // Toolbar add-project button (always last in ToolbarPanel)
+    private readonly Button _toolbarAddButton;
+
     // Panel ContentId constants (stable across app runs)
     private const string FileExplorerId = "fileExplorer";
     private const string GitStatusId = "gitStatus";
@@ -71,6 +74,10 @@ public partial class MainWindow : Window
         InitializeComponent();
 
         _toolbarPositionMenuItems = [ToolbarTopMenu, ToolbarLeftMenu, ToolbarRightMenu, ToolbarBottomMenu];
+
+        // Create the + button for the project tab bar
+        _toolbarAddButton = CreateToolbarAddButton();
+        ToolbarPanel.Children.Add(_toolbarAddButton);
 
         CommandBindings.Add(new CommandBinding(AddProjectCommand, (_, _) => AddProject()));
         CommandBindings.Add(new CommandBinding(SaveWorkspaceCommand, (_, _) => SaveWorkspace()));
@@ -572,8 +579,12 @@ public partial class MainWindow : Window
         var tabButton = CreateProjectTabButton(project);
         _projectTabButtons[project] = tabButton;
 
-        // Add tab button to toolbar
-        ToolbarPanel.Children.Add(tabButton);
+        // Add tab button to toolbar (before the + button, which is always last)
+        var addBtnIdx = ToolbarPanel.Children.IndexOf(_toolbarAddButton);
+        if (addBtnIdx >= 0)
+            ToolbarPanel.Children.Insert(addBtnIdx, tabButton);
+        else
+            ToolbarPanel.Children.Add(tabButton);
         ToolbarBorder.Visibility = Visibility.Visible;
 
         // Create docking layout for this project
@@ -899,13 +910,18 @@ public partial class MainWindow : Window
             _projects.RemoveAt(sourceIdx);
             _projects.Insert(targetIdx, sourceProject);
 
-            // Rearrange in toolbar UI
+            // Rearrange in toolbar UI (keep + button as last child)
             if (_projectTabButtons.TryGetValue(sourceProject, out var sourceBtn))
             {
                 ToolbarPanel.Children.Remove(sourceBtn);
                 var targetBtn = _projectTabButtons[project];
                 var targetUiIdx = ToolbarPanel.Children.IndexOf(targetBtn);
-                ToolbarPanel.Children.Insert(targetIdx <= sourceIdx ? targetUiIdx : targetUiIdx + 1, sourceBtn);
+                var insertIdx = targetIdx <= sourceIdx ? targetUiIdx : targetUiIdx + 1;
+                // Ensure we don't insert after the + button
+                var addBtnIdx = ToolbarPanel.Children.IndexOf(_toolbarAddButton);
+                if (addBtnIdx >= 0 && insertIdx > addBtnIdx)
+                    insertIdx = addBtnIdx;
+                ToolbarPanel.Children.Insert(insertIdx, sourceBtn);
             }
 
             SetWorkspaceDirty();
@@ -920,6 +936,58 @@ public partial class MainWindow : Window
                 CreateMenuItem("Close Project", () => CloseProject(project)),
                 CreateMenuItem("Open in Explorer", () => OpenInExplorer(project))
             }
+        };
+
+        return button;
+    }
+
+    private Button CreateToolbarAddButton()
+    {
+        // Custom template: border only, no default button chrome
+        var template = new ControlTemplate(typeof(Button));
+        var borderFactory = new FrameworkElementFactory(typeof(Border), "Bd");
+        borderFactory.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(BackgroundProperty));
+        borderFactory.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(BorderBrushProperty));
+        borderFactory.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(BorderThicknessProperty));
+        borderFactory.SetValue(Border.CornerRadiusProperty, new CornerRadius(3));
+        borderFactory.SetValue(Border.PaddingProperty, new TemplateBindingExtension(PaddingProperty));
+        var contentPresenter = new FrameworkElementFactory(typeof(ContentPresenter));
+        contentPresenter.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+        contentPresenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+        borderFactory.AppendChild(contentPresenter);
+        template.VisualTree = borderFactory;
+
+        var button = new Button
+        {
+            Width = 36,
+            Height = 36,
+            Margin = new Thickness(2),
+            Background = Brushes.Transparent,
+            BorderBrush = ThemeManager.GetBrush("AddButtonBorderBrush"),
+            BorderThickness = new Thickness(1),
+            Cursor = Cursors.Hand,
+            ToolTip = "Add Project (Ctrl+N)",
+            Template = template,
+            Content = new TextBlock
+            {
+                Text = "+",
+                FontSize = 18,
+                FontWeight = FontWeights.Light,
+                Foreground = ThemeManager.GetBrush("AddButtonForeground"),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            }
+        };
+
+        button.Click += (_, _) => AddProject();
+
+        button.MouseEnter += (_, _) =>
+        {
+            button.BorderBrush = ThemeManager.GetBrush("TabButtonHoverBorderBrush");
+        };
+        button.MouseLeave += (_, _) =>
+        {
+            button.BorderBrush = ThemeManager.GetBrush("AddButtonBorderBrush");
         };
 
         return button;
