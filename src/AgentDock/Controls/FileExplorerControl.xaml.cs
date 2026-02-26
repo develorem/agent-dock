@@ -5,6 +5,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using AgentDock.Models;
 using AgentDock.Services;
 
@@ -291,6 +292,12 @@ public partial class FileExplorerControl : UserControl
             OpenInExplorer(_rootPath);
     }
 
+    private void OpenInConsole_Click(object sender, RoutedEventArgs e)
+    {
+        if (!string.IsNullOrEmpty(_rootPath))
+            OpenCommandLine(_rootPath);
+    }
+
     private void OpenSettings_Click(object sender, RoutedEventArgs e)
     {
         if (string.IsNullOrEmpty(_rootPath))
@@ -423,6 +430,13 @@ public class FileNode : INotifyPropertyChanged
         get => _icon;
         set { _icon = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Icon))); }
     }
+
+    /// <summary>
+    /// Returns a themed foreground brush: folder-yellow for directories, normal for files.
+    /// </summary>
+    public Brush IconForeground => IsDirectory
+        ? ThemeManager.GetBrush("ExplorerFolderIconForeground")
+        : ThemeManager.GetBrush("ExplorerForeground");
 
     public bool IsExpanded
     {

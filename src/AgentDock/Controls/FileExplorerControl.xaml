@@ -26,7 +26,7 @@
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="Bd" Property="Background"
-                                        Value="{DynamicResource MenuHighlightBackground}" />
+                                        Value="{DynamicResource IconButtonHoverBackground}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -60,6 +60,14 @@
                     ToolTip="Open in Explorer"
                     Click="OpenInExplorer_Click">
                 <TextBlock Text="&#xED25;"
+                           FontFamily="Segoe MDL2 Assets"
+                           FontSize="14"
+                           Foreground="{DynamicResource ExplorerForeground}" />
+            </Button>
+            <Button Style="{StaticResource ExplorerToolbarButton}"
+                    ToolTip="Open in Console"
+                    Click="OpenInConsole_Click">
+                <TextBlock Text="&#xE756;"
                            FontFamily="Segoe MDL2 Assets"
                            FontSize="14"
                            Foreground="{DynamicResource ExplorerForeground}" />
@@ -174,7 +182,7 @@
                     <StackPanel Orientation="Horizontal" Margin="2,1">
                         <TextBlock Text="{Binding Icon}" FontSize="14" Margin="0,0,5,0"
                                    VerticalAlignment="Center"
-                                   Foreground="{DynamicResource ExplorerForeground}" />
+                                   Foreground="{Binding IconForeground}" />
                         <TextBlock Text="{Binding Name}" FontSize="12"
                                    VerticalAlignment="Center"
                                    Foreground="{DynamicResource ExplorerForeground}" />

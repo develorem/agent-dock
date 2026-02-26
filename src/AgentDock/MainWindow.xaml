@@ -10,7 +10,6 @@
         WindowStartupLocation="CenterScreen"
         WindowState="Maximized"
         WindowStyle="None"
-        Icon="/Assets/agentdock.png"
         Closing="MainWindow_Closing">
 
     <WindowChrome.WindowChrome>
@@ -33,6 +32,7 @@
                     <ColumnDefinition Width="Auto" /> <!-- Menu -->
                     <ColumnDefinition Width="Auto" /> <!-- Add button -->
                     <ColumnDefinition Width="*" />    <!-- Title (fills) -->
+                    <ColumnDefinition Width="Auto" /> <!-- Total cost -->
                     <ColumnDefinition Width="Auto" /> <!-- Minimize -->
                     <ColumnDefinition Width="Auto" /> <!-- Maximize -->
                     <ColumnDefinition Width="Auto" /> <!-- Close -->
@@ -230,8 +230,17 @@
                            HorizontalAlignment="Center"
                            Opacity="0.7" />
 
+                <!-- Total cost across all projects -->
+                <TextBlock x:Name="TotalCostText" Grid.Column="5"
+                           Text=""
+                           FontSize="11"
+                           Foreground="{DynamicResource TitleBarForeground}"
+                           VerticalAlignment="Center"
+                           Margin="0,0,8,0"
+                           Opacity="0.5" />
+
                 <!-- Window buttons (right side) -->
-                <Button Grid.Column="5"
+                <Button Grid.Column="6"
                         Style="{StaticResource TitleBarButtonStyle}"
                         Click="MinimizeButton_Click"
                         ToolTip="Minimize"
@@ -242,7 +251,7 @@
                                Foreground="{DynamicResource TitleBarForeground}" />
                 </Button>
 
-                <Button x:Name="MaximizeButton" Grid.Column="6"
+                <Button x:Name="MaximizeButton" Grid.Column="7"
                         Style="{StaticResource TitleBarButtonStyle}"
                         Click="MaximizeButton_Click"
                         ToolTip="Maximize"
@@ -254,7 +263,7 @@
                                Foreground="{DynamicResource TitleBarForeground}" />
                 </Button>
 
-                <Button Grid.Column="7"
+                <Button Grid.Column="8"
                         Style="{StaticResource TitleBarCloseButtonStyle}"
                         Click="CloseButton_Click"
                         ToolTip="Close"

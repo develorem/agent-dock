@@ -14,6 +14,9 @@
     <SolidColorBrush x:Key="TabButtonActiveBorderBrush" Color="#B89030" />
     <SolidColorBrush x:Key="TabButtonInactiveBackground" Color="Transparent" />
 
+    <!-- Taskbar icon accent bar -->
+    <SolidColorBrush x:Key="TaskbarAccentColor" Color="#E8DCA0" />
+
     <!-- Add button -->
     <SolidColorBrush x:Key="AddButtonBorderBrush" Color="#C0B49A" />
     <SolidColorBrush x:Key="AddButtonForeground" Color="#8B7D6B" />
@@ -50,6 +53,7 @@
     <SolidColorBrush x:Key="ExplorerSelectedBackground" Color="#E8DCC0" />
     <SolidColorBrush x:Key="ExplorerSelectedForeground" Color="#3B3020" />
     <SolidColorBrush x:Key="ExplorerHoverBackground" Color="#F0E8DC" />
+    <SolidColorBrush x:Key="ExplorerFolderIconForeground" Color="#8B6914" />
 
     <!-- Panel placeholder -->
     <SolidColorBrush x:Key="PlaceholderBackground" Color="#FAF5EE" />
@@ -72,6 +76,9 @@
     <SolidColorBrush x:Key="MenuDisabledForeground" Color="#C0B49A" />
     <SolidColorBrush x:Key="MenuPopupBackground" Color="#FAF5EE" />
     <SolidColorBrush x:Key="MenuPopupBorderBrush" Color="#D0C4B0" />
+
+    <!-- Icon button hover (subtle, for small toolbar/icon buttons) -->
+    <SolidColorBrush x:Key="IconButtonHoverBackground" Color="#E8DFD0" />
 
     <!-- ScrollBar -->
     <SolidColorBrush x:Key="ScrollBarBackground" Color="#F0E8DC" />

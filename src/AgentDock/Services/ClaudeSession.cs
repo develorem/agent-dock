@@ -96,11 +96,11 @@ public class ClaudeSession : IDisposable
         if (Path.IsPathRooted(path) && File.Exists(path))
             return path;
 
-        // Search PATH for the command, matching Windows PATHEXT resolution order:
-        // bare name and .exe first (preserves existing behaviour for working installs),
-        // then .cmd/.bat (fixes npm-installed CLI wrappers).
+        // Search PATH for the command. Prefer .cmd/.bat first because Claude Code CLI
+        // on Windows is an npm .cmd wrapper, and we must avoid picking up claude.exe from
+        // the Claude Desktop app (which doesn't support the JSON-lines protocol).
         var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? "";
-        var extensions = new[] { "", ".exe", ".cmd", ".bat" };
+        var extensions = new[] { ".cmd", ".bat", "", ".exe" };
 
         foreach (var dir in pathEnv.Split(Path.PathSeparator))
         {
@@ -172,11 +172,12 @@ public class ClaudeSession : IDisposable
         if (IsDangerousMode)
             args += " --dangerously-skip-permissions";
 
-        Log.Info($"ClaudeSession.SendMessage: launching claude with args: {args}");
+        var resolvedPath = ResolveClaudeBinaryPath();
+        Log.Info($"ClaudeSession.SendMessage: launching '{resolvedPath}' with args: {args}");
 
         var psi = new ProcessStartInfo
         {
-            FileName = ResolveClaudeBinaryPath(),
+            FileName = resolvedPath,
             Arguments = args,
             WorkingDirectory = _workingDirectory,
             RedirectStandardInput = true,
@@ -633,6 +634,16 @@ public class ClaudeSession : IDisposable
         if (root.TryGetProperty("errors", out var errors) && errors.ValueKind == JsonValueKind.Array)
             errorList = errors.EnumerateArray().Select(e => e.GetString() ?? "").ToList();
 
+        // Parse token usage from "usage" object
+        long inputTokens = 0, outputTokens = 0, cacheRead = 0, cacheCreation = 0;
+        if (root.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
+        {
+            if (usage.TryGetProperty("input_tokens", out var it)) inputTokens = it.GetInt64();
+            if (usage.TryGetProperty("output_tokens", out var ot)) outputTokens = ot.GetInt64();
+            if (usage.TryGetProperty("cache_read_input_tokens", out var cr)) cacheRead = cr.GetInt64();
+            if (usage.TryGetProperty("cache_creation_input_tokens", out var cc)) cacheCreation = cc.GetInt64();
+        }
+
         var result = new ClaudeResultMessage
         {
             Subtype = GetString(root, "subtype") ?? "",
@@ -641,7 +652,11 @@ public class ClaudeSession : IDisposable
             TotalCostUsd = root.TryGetProperty("total_cost_usd", out var cost) ? cost.GetDouble() : null,
             NumTurns = root.TryGetProperty("num_turns", out var turns) ? turns.GetInt32() : null,
             DurationMs = root.TryGetProperty("duration_ms", out var dur) ? dur.GetInt64() : null,
-            Errors = errorList
+            Errors = errorList,
+            InputTokens = inputTokens,
+            OutputTokens = outputTokens,
+            CacheReadInputTokens = cacheRead,
+            CacheCreationInputTokens = cacheCreation
         };
 
         // Process finished this turn — stop the watchdog, close stdin so the process

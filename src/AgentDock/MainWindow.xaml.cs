@@ -52,6 +52,18 @@ public partial class MainWindow : Window
     // Prerequisites check results (populated on startup)
     private List<(string Name, bool Found, string Detail)>? _prerequisiteResults;
 
+    // App session start time (for elapsed display in title bar)
+    private readonly DateTime _appStartTime = DateTime.Now;
+
+    // Tab drag-and-drop reordering state
+    private Point _tabDragStartPoint;
+    private bool _tabDragging;
+    private Button? _tabDragSource;
+    private Border? _tabDragIndicator; // visual insertion line shown during drag
+
+    // Toolbar add-project button (always last in ToolbarPanel)
+    private readonly Button _toolbarAddButton;
+
     // Panel ContentId constants (stable across app runs)
     private const string FileExplorerId = "fileExplorer";
     private const string GitStatusId = "gitStatus";
@@ -67,6 +79,16 @@ public partial class MainWindow : Window
 
         _toolbarPositionMenuItems = [ToolbarTopMenu, ToolbarLeftMenu, ToolbarRightMenu, ToolbarBottomMenu];
 
+        // Create the + button for the project tab bar
+        _toolbarAddButton = CreateToolbarAddButton();
+        ToolbarPanel.Children.Add(_toolbarAddButton);
+
+        // ToolbarPanel handles drag-over/drop for tab reordering (provides full-panel hit area)
+        ToolbarPanel.AllowDrop = true;
+        ToolbarPanel.DragOver += ToolbarPanel_DragOver;
+        ToolbarPanel.Drop += ToolbarPanel_Drop;
+        ToolbarPanel.DragLeave += (_, _) => RemoveTabDragIndicator();
+
         CommandBindings.Add(new CommandBinding(AddProjectCommand, (_, _) => AddProject()));
         CommandBindings.Add(new CommandBinding(SaveWorkspaceCommand, (_, _) => SaveWorkspace()));
         CommandBindings.Add(new CommandBinding(CloseProjectCommand, (_, _) => CloseActiveProject()));
@@ -74,6 +96,7 @@ public partial class MainWindow : Window
         // Build theme menu and subscribe to changes
         PopulateThemeMenu();
         ThemeManager.ThemeChanged += OnThemeChanged;
+        UpdateTaskbarIcon();
 
         // Sync maximize/restore icon whenever window state changes (button click, double-click, aero snap, etc.)
         StateChanged += (_, _) => UpdateMaximizeIcon();
@@ -343,9 +366,13 @@ public partial class MainWindow : Window
 
     private static List<(string Name, bool Found, string Detail)> RunPrerequisiteChecks()
     {
+        // Log environment info for diagnostics
+        Log.Info($"Prereq: OS={Environment.OSVersion}, .NET={Environment.Version}, 64-bit={Environment.Is64BitProcess}");
+        Log.Info($"Prereq: User={Environment.UserName}, Machine={Environment.MachineName}");
+
         var results = new List<(string Name, bool Found, string Detail)>();
 
-        // Command-line tools
+        // Command-line tools — each gets: name, found/not-found, resolved path, version
         var cliChecks = new (string Name, string Command, string Args)[]
         {
             ("Claude Code CLI", ClaudeSession.ClaudeBinaryPath, "--version"),
@@ -356,22 +383,93 @@ public partial class MainWindow : Window
 
         foreach (var (name, command, args) in cliChecks)
         {
-            var (found, detail) = CheckCommand(command, args);
-            results.Add((name, found, detail));
+            var (found, version) = CheckCommandVersion(command, args);
+            var resolvedPath = ResolveCommandPath(command);
+            if (found)
+                Log.Info($"Prereq: {name} — FOUND, path='{resolvedPath}', version='{version}'");
+            else
+                Log.Info($"Prereq: {name} — NOT FOUND (searched PATH for '{command}')");
+            results.Add((name, found, version));
         }
+
+        // Claude-specific extras: log all matches on PATH and any custom override
+        LogClaudePathDetails();
 
         // Visual Studio — check install directories
         var vsResult = FindVisualStudio();
+        if (vsResult.Found)
+            Log.Info($"Prereq: {vsResult.Name} — FOUND, {vsResult.Detail}");
+        else
+            Log.Info($"Prereq: {vsResult.Name} — NOT FOUND");
         results.Add(vsResult);
 
         return results;
     }
 
-    private static (bool Found, string Detail) CheckCommand(string command, string args)
+    /// <summary>
+    /// Resolves a command name to its full path on the system PATH.
+    /// Returns the first match (preferring .cmd/.bat for npm wrappers), or the bare name if not found.
+    /// </summary>
+    private static string ResolveCommandPath(string command)
+    {
+        if (Path.IsPathRooted(command) && File.Exists(command))
+            return command;
+
+        var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? "";
+        var extensions = new[] { ".cmd", ".bat", "", ".exe" };
+
+        foreach (var dir in pathEnv.Split(Path.PathSeparator))
+        {
+            if (string.IsNullOrWhiteSpace(dir))
+                continue;
+            foreach (var ext in extensions)
+            {
+                var candidate = Path.Combine(dir, command + ext);
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+        }
+
+        return command;
+    }
+
+    /// <summary>
+    /// Logs all claude binaries found on PATH and any custom path override.
+    /// This helps diagnose cases where the wrong binary is picked up.
+    /// </summary>
+    private static void LogClaudePathDetails()
+    {
+        var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? "";
+        var extensions = new[] { ".cmd", ".bat", "", ".exe" };
+        var found = new List<string>();
+
+        foreach (var dir in pathEnv.Split(Path.PathSeparator))
+        {
+            if (string.IsNullOrWhiteSpace(dir))
+                continue;
+            foreach (var ext in extensions)
+            {
+                var candidate = Path.Combine(dir, "claude" + ext);
+                if (File.Exists(candidate))
+                    found.Add(candidate);
+            }
+        }
+
+        if (found.Count > 1)
+            Log.Info($"Prereq: Claude — all matches on PATH ({found.Count}): {string.Join(", ", found)}");
+
+        if (ClaudeSession.ClaudeBinaryPath != "claude")
+            Log.Info($"Prereq: Claude — custom path override = '{ClaudeSession.ClaudeBinaryPath}'");
+    }
+
+    /// <summary>
+    /// Runs a command via cmd.exe /c to get its version output.
+    /// Returns (found, version-string).
+    /// </summary>
+    private static (bool Found, string Version) CheckCommandVersion(string command, string args)
     {
         try
         {
-            // Use cmd.exe /c to resolve .cmd/.bat wrappers (e.g. code, cursor)
             var psi = new System.Diagnostics.ProcessStartInfo
             {
                 FileName = "cmd.exe",
@@ -391,7 +489,6 @@ public partial class MainWindow : Window
 
             if (process.ExitCode == 0)
             {
-                // Take just the first line (e.g. VS Code outputs multiple lines)
                 var firstLine = output.Split('\n')[0].Trim();
                 return (true, firstLine);
             }
@@ -567,8 +664,12 @@ public partial class MainWindow : Window
         var tabButton = CreateProjectTabButton(project);
         _projectTabButtons[project] = tabButton;
 
-        // Add tab button to toolbar
-        ToolbarPanel.Children.Add(tabButton);
+        // Add tab button to toolbar (before the + button, which is always last)
+        var addBtnIdx = ToolbarPanel.Children.IndexOf(_toolbarAddButton);
+        if (addBtnIdx >= 0)
+            ToolbarPanel.Children.Insert(addBtnIdx, tabButton);
+        else
+            ToolbarPanel.Children.Add(tabButton);
         ToolbarBorder.Visibility = Visibility.Visible;
 
         // Create docking layout for this project
@@ -825,7 +926,11 @@ public partial class MainWindow : Window
             }
         };
 
-        button.Click += (_, _) => SwitchToProject(project);
+        button.Click += (_, _) =>
+        {
+            if (!_tabDragging)
+                SwitchToProject(project);
+        };
 
         // Hover: highlight border only (no background fill)
         button.MouseEnter += (_, _) =>
@@ -841,6 +946,30 @@ public partial class MainWindow : Window
                 button.BorderBrush = ThemeManager.GetBrush("TabButtonActiveBorderBrush");
         };
 
+        // Drag initiation (DragOver/Drop handled at ToolbarPanel level)
+        button.PreviewMouseLeftButtonDown += (_, e) =>
+        {
+            _tabDragStartPoint = e.GetPosition(null);
+            _tabDragSource = button;
+            _tabDragging = false;
+        };
+        button.PreviewMouseMove += (_, e) =>
+        {
+            if (_tabDragSource != button || e.LeftButton != MouseButtonState.Pressed)
+                return;
+
+            var pos = e.GetPosition(null);
+            var diff = pos - _tabDragStartPoint;
+            if (Math.Abs(diff.X) > SystemParameters.MinimumHorizontalDragDistance ||
+                Math.Abs(diff.Y) > SystemParameters.MinimumVerticalDragDistance)
+            {
+                _tabDragging = true;
+                DragDrop.DoDragDrop(button, new DataObject("ProjectTab", project), DragDropEffects.Move);
+                _tabDragSource = null;
+                RemoveTabDragIndicator();
+            }
+        };
+
         // Right-click context menu
         button.ContextMenu = new ContextMenu
         {
@@ -852,6 +981,189 @@ public partial class MainWindow : Window
         };
 
         return button;
+    }
+
+    private Button CreateToolbarAddButton()
+    {
+        // Custom template: border only, no default button chrome
+        var template = new ControlTemplate(typeof(Button));
+        var borderFactory = new FrameworkElementFactory(typeof(Border), "Bd");
+        borderFactory.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(BackgroundProperty));
+        borderFactory.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(BorderBrushProperty));
+        borderFactory.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(BorderThicknessProperty));
+        borderFactory.SetValue(Border.CornerRadiusProperty, new CornerRadius(3));
+        borderFactory.SetValue(Border.PaddingProperty, new TemplateBindingExtension(PaddingProperty));
+        var contentPresenter = new FrameworkElementFactory(typeof(ContentPresenter));
+        contentPresenter.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+        contentPresenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+        borderFactory.AppendChild(contentPresenter);
+        template.VisualTree = borderFactory;
+
+        var button = new Button
+        {
+            Width = 36,
+            Height = 36,
+            Margin = new Thickness(2),
+            Background = Brushes.Transparent,
+            BorderBrush = ThemeManager.GetBrush("AddButtonBorderBrush"),
+            BorderThickness = new Thickness(1),
+            Cursor = Cursors.Hand,
+            ToolTip = "Add Project (Ctrl+N)",
+            Template = template,
+            Content = new TextBlock
+            {
+                Text = "+",
+                FontSize = 18,
+                FontWeight = FontWeights.Light,
+                Foreground = ThemeManager.GetBrush("AddButtonForeground"),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            }
+        };
+
+        button.Click += (_, _) => AddProject();
+
+        button.MouseEnter += (_, _) =>
+        {
+            button.BorderBrush = ThemeManager.GetBrush("TabButtonHoverBorderBrush");
+        };
+        button.MouseLeave += (_, _) =>
+        {
+            button.BorderBrush = ThemeManager.GetBrush("AddButtonBorderBrush");
+        };
+
+        return button;
+    }
+
+    // --- Tab drag-and-drop (panel-level handlers) ---
+
+    /// <summary>
+    /// Finds the insertion index among tab buttons for the given mouse position.
+    /// Returns the index in _projects where the dragged tab should be inserted.
+    /// </summary>
+    private int GetTabInsertionIndex(DragEventArgs e)
+    {
+        var isHorizontal = ToolbarPanel.Orientation == Orientation.Horizontal;
+
+        for (int i = 0; i < ToolbarPanel.Children.Count; i++)
+        {
+            if (ToolbarPanel.Children[i] is not FrameworkElement child)
+                continue;
+            if (child == _toolbarAddButton || child == _tabDragIndicator || child.Tag is not ProjectInfo)
+                continue;
+
+            var pos = e.GetPosition(child);
+            var midpoint = isHorizontal ? child.RenderSize.Width / 2 : child.RenderSize.Height / 2;
+            var coord = isHorizontal ? pos.X : pos.Y;
+
+            if (coord < midpoint)
+            {
+                // Before this tab — find its project index
+                var proj = (ProjectInfo)child.Tag;
+                return _projects.IndexOf(proj);
+            }
+        }
+
+        // After all tabs
+        return _projects.Count;
+    }
+
+    private void ToolbarPanel_DragOver(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent("ProjectTab"))
+        {
+            e.Effects = DragDropEffects.None;
+            e.Handled = true;
+            return;
+        }
+
+        e.Effects = DragDropEffects.Move;
+        e.Handled = true;
+
+        // Show insertion indicator
+        var insertIdx = GetTabInsertionIndex(e);
+        ShowTabDragIndicator(insertIdx);
+    }
+
+    private void ToolbarPanel_Drop(object sender, DragEventArgs e)
+    {
+        RemoveTabDragIndicator();
+
+        if (e.Data.GetData("ProjectTab") is not ProjectInfo sourceProject)
+            return;
+
+        var targetIdx = GetTabInsertionIndex(e);
+        var sourceIdx = _projects.IndexOf(sourceProject);
+        if (sourceIdx < 0 || targetIdx < 0) return;
+
+        // Adjust target if dragging forward (removal shifts indices)
+        if (targetIdx > sourceIdx)
+            targetIdx--;
+        if (targetIdx == sourceIdx)
+            return;
+
+        // Rearrange data model
+        _projects.RemoveAt(sourceIdx);
+        _projects.Insert(targetIdx, sourceProject);
+
+        // Rearrange toolbar UI
+        if (_projectTabButtons.TryGetValue(sourceProject, out var sourceBtn))
+        {
+            ToolbarPanel.Children.Remove(sourceBtn);
+            // Insert at the correct UI position (before the + button)
+            var addBtnIdx = ToolbarPanel.Children.IndexOf(_toolbarAddButton);
+            var uiIdx = Math.Min(targetIdx, addBtnIdx >= 0 ? addBtnIdx : ToolbarPanel.Children.Count);
+            ToolbarPanel.Children.Insert(uiIdx, sourceBtn);
+        }
+
+        SetWorkspaceDirty();
+        e.Handled = true;
+    }
+
+    private void ShowTabDragIndicator(int projectIndex)
+    {
+        var isHorizontal = ToolbarPanel.Orientation == Orientation.Horizontal;
+
+        // Create indicator if needed
+        if (_tabDragIndicator == null)
+        {
+            _tabDragIndicator = new Border
+            {
+                Background = ThemeManager.GetBrush("TabButtonActiveBorderBrush"),
+                IsHitTestVisible = false
+            };
+        }
+
+        // Size the indicator
+        if (isHorizontal)
+        {
+            _tabDragIndicator.Width = 3;
+            _tabDragIndicator.Height = 30;
+            _tabDragIndicator.Margin = new Thickness(-1, 3, -1, 3);
+        }
+        else
+        {
+            _tabDragIndicator.Width = 30;
+            _tabDragIndicator.Height = 3;
+            _tabDragIndicator.Margin = new Thickness(3, -1, 3, -1);
+        }
+
+        // Remove from current position
+        ToolbarPanel.Children.Remove(_tabDragIndicator);
+
+        // Find the UI insertion point (clamped before the + button)
+        var addBtnIdx = ToolbarPanel.Children.IndexOf(_toolbarAddButton);
+        var uiIdx = Math.Min(projectIndex, addBtnIdx >= 0 ? addBtnIdx : ToolbarPanel.Children.Count);
+        ToolbarPanel.Children.Insert(uiIdx, _tabDragIndicator);
+    }
+
+    private void RemoveTabDragIndicator()
+    {
+        if (_tabDragIndicator != null)
+        {
+            ToolbarPanel.Children.Remove(_tabDragIndicator);
+            _tabDragIndicator = null;
+        }
     }
 
     private static MenuItem CreateMenuItem(string header, Action action)
@@ -942,6 +1254,20 @@ public partial class MainWindow : Window
         {
             if (state == ClaudeSessionState.Idle)
                 gitStatusControl.RefreshStatus();
+        };
+
+        // Update AI Chat panel title with cumulative session stats, and update total cost
+        aiChatControl.SessionStatsChanged += stats =>
+        {
+            if (_projectDockingManagers.TryGetValue(project, out var dm))
+            {
+                var anchorable = dm.Layout.Descendents().OfType<LayoutAnchorable>()
+                    .FirstOrDefault(a => a.ContentId == AiChatId);
+                if (anchorable != null)
+                    anchorable.Title = $"AI Chat — ${stats.TotalCostUsd:F4} · {SessionStats.FormatTokens(stats.TotalTokens)} tokens";
+            }
+
+            UpdateTotalCost();
         };
 
         // Map ContentId → control for layout serialization callback
@@ -1271,6 +1597,30 @@ public partial class MainWindow : Window
         {
             Title = $"Agent Dock — {_activeProject.FolderName}{dirtyMarker}";
             TitleBarText.Text = $"{_activeProject.FolderName}{dirtyMarker}";
+        }
+    }
+
+    private void UpdateTaskbarIcon()
+    {
+        var accentBrush = ThemeManager.GetBrush("TaskbarAccentColor");
+        Icon = TaskbarIconHelper.CreateThemedIcon(accentBrush.Color);
+    }
+
+    private void UpdateTotalCost()
+    {
+        var totalCost = _projectChatControls.Values.Sum(c => c.Stats.TotalCostUsd);
+        var totalTokens = _projectChatControls.Values.Sum(c => c.Stats.TotalTokens);
+        if (totalCost > 0)
+        {
+            var elapsed = DateTime.Now - _appStartTime;
+            var elapsedText = elapsed.TotalHours >= 1
+                ? $"{(int)elapsed.TotalHours}h {elapsed.Minutes}m"
+                : $"{elapsed.Minutes}m";
+            TotalCostText.Text = $"{elapsedText} · ${totalCost:F4} · {SessionStats.FormatTokens(totalTokens)} tokens";
+        }
+        else
+        {
+            TotalCostText.Text = "";
         }
     }
 
@@ -1924,6 +2274,12 @@ public partial class MainWindow : Window
             if (_projectChatControls.TryGetValue(project, out var chat))
                 UpdateTabIcon(project, chat.CurrentState);
         }
+
+        // Update toolbar + button accent
+        _toolbarAddButton.BorderBrush = ThemeManager.GetBrush("AddButtonBorderBrush");
+
+        // Update taskbar icon with new theme accent bar
+        UpdateTaskbarIcon();
     }
 
     private void PopulateThemeMenu()

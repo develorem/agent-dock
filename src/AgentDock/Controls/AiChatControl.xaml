@@ -3,6 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:mdxaml="clr-namespace:MdXaml;assembly=MdXaml"
              mc:Ignorable="d"
              Background="{DynamicResource ChatBackground}">
     <UserControl.Resources>
@@ -15,6 +16,12 @@
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="Padding" Value="8,4" />
+        </Style>
+        <Style x:Key="ChatMarkdownStyle" TargetType="FlowDocument">
+            <Setter Property="Foreground" Value="{DynamicResource ChatTextForeground}" />
+            <Setter Property="FontFamily" Value="Segoe UI, Segoe UI Emoji" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="PagePadding" Value="0" />
         </Style>
     </UserControl.Resources>
     <Grid>
