@@ -73,6 +73,9 @@
     <SolidColorBrush x:Key="MenuPopupBackground" Color="#0D1117" />
     <SolidColorBrush x:Key="MenuPopupBorderBrush" Color="#30363D" />
 
+    <!-- Icon button hover (subtle, for small toolbar/icon buttons) -->
+    <SolidColorBrush x:Key="IconButtonHoverBackground" Color="#1C2128" />
+
     <!-- ScrollBar -->
     <SolidColorBrush x:Key="ScrollBarBackground" Color="#161B22" />
     <SolidColorBrush x:Key="ScrollBarThumbBackground" Color="#21262D" />
