@@ -17,11 +17,11 @@
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="Padding" Value="8,4" />
         </Style>
-        <Style x:Key="ChatMarkdownStyle" TargetType="FlowDocument">
+        <Style x:Key="ChatMarkdownStyle" TargetType="FlowDocument"
+               BasedOn="{x:Static mdxaml:MarkdownStyle.GithubLike}">
             <Setter Property="Foreground" Value="{DynamicResource ChatTextForeground}" />
             <Setter Property="FontFamily" Value="Segoe UI, Segoe UI Emoji" />
             <Setter Property="FontSize" Value="13" />
-            <Setter Property="PagePadding" Value="0" />
         </Style>
     </UserControl.Resources>
     <Grid>
