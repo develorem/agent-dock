@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -318,6 +319,27 @@ public partial class MainWindow : Window
         ClaudeSession.ClaudeBinaryPath = dialog.FileName;
         AppSettings.SetString("ClaudePath", dialog.FileName);
         Log.Info($"ClaudePathOverride: set to '{dialog.FileName}'");
+    }
+
+    private void OpenLogsFolder_Click(object sender, RoutedEventArgs e)
+    {
+        var logPath = Log.LogFilePath;
+        var folder = !string.IsNullOrEmpty(logPath)
+            ? Path.GetDirectoryName(logPath)
+            : null;
+
+        if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder))
+        {
+            ThemedMessageBox.Show(this, "Logs folder not found.", "Open Logs",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = folder,
+            UseShellExecute = true
+        });
     }
 
     // --- Help Menu ---
