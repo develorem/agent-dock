@@ -102,6 +102,28 @@ public class GitService
         return result;
     }
 
+    public List<string> GetLocalBranches()
+    {
+        var output = RunGit("branch --format=%(refname:short)");
+        if (string.IsNullOrEmpty(output))
+            return [];
+
+        return output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                     .Select(b => b.Trim())
+                     .OrderBy(b => b, StringComparer.OrdinalIgnoreCase)
+                     .ToList();
+    }
+
+    public (bool Success, string Message) CheckoutBranch(string branchName)
+    {
+        return RunGitCommand($"checkout \"{branchName}\"");
+    }
+
+    public (bool Success, string Message) CreateAndCheckoutBranch(string branchName)
+    {
+        return RunGitCommand($"checkout -b \"{branchName}\"");
+    }
+
     private static GitFileStatus ParseStatus(char c) => c switch
     {
         'M' => GitFileStatus.Modified,
@@ -139,6 +161,38 @@ public class GitService
         catch
         {
             return null;
+        }
+    }
+
+    private (bool Success, string Message) RunGitCommand(string arguments)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "git",
+                Arguments = arguments,
+                WorkingDirectory = _workingDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using var process = Process.Start(psi);
+            if (process == null)
+                return (false, "Failed to start git process");
+
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+            process.WaitForExit(5000);
+
+            var message = !string.IsNullOrWhiteSpace(stderr) ? stderr.Trim() : stdout.Trim();
+            return (process.ExitCode == 0, message);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message);
         }
     }
 }
