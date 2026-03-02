@@ -1,4 +1,4 @@
-# Installing & Using Agent Dock
+# Installing Agent Dock
 
 ## Prerequisites
 
@@ -51,90 +51,17 @@ If this prints a version number, you're ready to go.
 
 ## Quick Start
 
-### Adding a Project
+1. Click **+** in the toolbar to add a project folder
+2. In the AI Chat panel, click **Claude** or **Claude Unrestricted** to start a session
+3. Type your prompt and press **Enter**
 
-Click the **+** button in the toolbar to open a folder picker. Select any project folder — it will appear as a new tab in the toolbar. You can add as many projects as you like.
+For detailed usage, see the documentation:
 
-### Starting an AI Session
-
-Each project has an **AI panel** on the right side of the workspace. When you open a project for the first time, the panel will show options to start a session:
-
-- **Start** — launches the agent in normal mode, where it asks for permission before running commands or editing files
-- **Start (Dangerous Mode)** — launches with full autonomy (e.g. `--dangerously-skip-permissions` for Claude Code). Use with caution.
-
-Once started, type your prompt in the input area at the bottom of the AI panel and press Enter.
-
-### Navigating the Workspace
-
-Each project tab has four panels that you can rearrange freely:
-
-| Panel | Description |
-|-------|-------------|
-| **File Explorer** | Tree view of your project folder (respects `.gitignore`) |
-| **Git Status** | Staged and unstaged changes with color-coded indicators |
-| **File Preview** | Syntax-highlighted code, images, markdown, and diffs |
-| **AI Chat** | Terminal-style interface for interacting with your AI agent |
-
-**Rearranging panels** — Drag any panel by its title bar to dock it to a different edge, tab it alongside another panel, or float it as a separate window. Each project's layout is independent.
-
-### Understanding Toolbar Icons
-
-The toolbar shows one icon per project. The icon reflects the agent's current state:
-
-| Icon State | Meaning |
-|------------|---------|
-| Folder icon | No AI session running |
-| Agent icon | Session active, agent is idle |
-| Agent icon + spinner | Agent is working |
-| Agent icon + **?** badge | Agent is waiting for your input |
-| Agent icon + red badge | Session running in dangerous mode |
-
-### Handling Permission Prompts
-
-When the agent wants to run a command or edit a file (in normal mode), a permission prompt appears inline in the AI panel — right where the input area normally is. You'll see what the agent wants to do and can **Allow** or **Deny** the action. No pop-up dialogs.
-
-### Viewing Files and Diffs
-
-- Click any file in the **File Explorer** to open it in the **File Preview** panel with syntax highlighting
-- Click a changed file in **Git Status** to see its diff in the preview panel
-- Supported previews: source code (dozens of languages), images (PNG, JPG, GIF, SVG), and markdown
-
----
-
-## Workspaces
-
-Workspaces let you save and restore your entire session.
-
-### Saving a Workspace
-
-**File > Save Workspace** (Ctrl+S) saves:
-- All open project folders
-- Panel layouts for each project
-- Toolbar position
-- Active theme
-- AI session modes
-
-### Loading a Workspace
-
-**File > Open Workspace** to browse for a workspace file, or check **File > Recent Workspaces** for quick access.
-
-### Behavior on Close
-
-When you close Agent Dock:
-- All running AI sessions are stopped
-- If you have unsaved workspace changes, you'll be prompted to save
-
----
-
-## Settings
-
-Access settings from the **Settings** menu:
-
-| Setting | Options | Notes |
-|---------|---------|-------|
-| **Theme** | 6 built-in themes (light & dark variants) | Applied globally |
-| **Toolbar Position** | Top, Left, Right, Bottom | Per-workspace setting |
-| **Agent Path Override** | Custom path to the agent binary | Use if the agent CLI isn't in your PATH |
+- **[Features overview](docs/features.md)** — what Agent Dock can do
+- **[Workspace](docs/workspace.md)** — saving, loading, themes, and settings
+- **[Projects](docs/projects.md)** — tabs, project settings, and panel layouts
+- **[Project features](docs/project-features.md)** — File Explorer, Git Status, and File Preview
+- **[AI Chat](docs/ai-chat.md)** — sessions, message types, and troubleshooting
 
 ---
 
@@ -153,27 +80,8 @@ Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) (n
 
 ---
 
-## Troubleshooting
-
-### "Agent not found" or session won't start
-
-Make sure the agent CLI is available in your PATH. For Claude Code, open a terminal and run `claude --version`. If it's not found, [install Claude Code](https://docs.anthropic.com/en/docs/claude-code) or set a custom path in **Settings > Agent Path Override**.
-
-### App won't launch
-
-Ensure you have the [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) installed. The SDK alone isn't sufficient — you need the desktop runtime.
-
-### Panels disappeared
-
-If a panel goes missing, you can reset the layout by closing the project tab and re-adding the folder. Alternatively, load a saved workspace.
-
-### Git status not updating
-
-Git status refreshes automatically via file watcher. If it seems stuck, click the refresh button in the Git Status panel header. The folder must be a git repository — non-git folders will show "Not a git repository".
-
----
-
 ## Getting Help
 
 - [Open an issue](https://github.com/develorem/agent-dock/issues) on GitHub
 - Check [existing issues](https://github.com/develorem/agent-dock/issues?q=is%3Aissue) for known problems and workarounds
+- See the [troubleshooting section](docs/ai-chat.md#troubleshooting) for common issues
