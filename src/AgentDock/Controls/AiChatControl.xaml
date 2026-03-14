@@ -248,8 +248,8 @@
                             BorderThickness="0"
                             Cursor="Hand"
                             Padding="0"
-                            VerticalAlignment="Center"
-                            Margin="0,0,6,0"
+                            VerticalAlignment="Bottom"
+                            Margin="0,0,6,3"
                             ToolTip="Commands">
                         <TextBlock Text=">"
                                    FontFamily="Cascadia Code, Consolas, Courier New"
@@ -260,6 +260,7 @@
                             Content="Send"
                             Click="Send_Click"
                             DockPanel.Dock="Right"
+                            VerticalAlignment="Bottom"
                             Style="{StaticResource ChatButtonStyle}"
                             Width="60" Height="28"
                             Margin="6,0,0,0" />
@@ -272,9 +273,13 @@
                              BorderBrush="{DynamicResource ChatInputBorderBrush}"
                              BorderThickness="1"
                              Padding="6,4"
-                             AcceptsReturn="False"
+                             AcceptsReturn="True"
+                             TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto"
+                             MaxHeight="76"
+                             MinHeight="28"
                              KeyDown="InputBox_KeyDown"
-                             VerticalContentAlignment="Center" />
+                             VerticalContentAlignment="Top" />
                 </DockPanel>
             </Border>
 
