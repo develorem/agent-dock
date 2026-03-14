@@ -256,13 +256,62 @@ public partial class AiChatControl : UserControl
         }
     }
 
+    // --- Prompt Menu (> button) ---
+
+    private void PromptMenu_Click(object sender, RoutedEventArgs e)
+    {
+        var menu = new ContextMenu
+        {
+            Style = null, // use default WPF style
+            PlacementTarget = PromptMenuButton,
+            Placement = System.Windows.Controls.Primitives.PlacementMode.Top
+        };
+
+        var hasSession = _session != null;
+        var isIdle = hasSession && _session!.State == ClaudeSessionState.Idle;
+
+        AddMenuItem(menu, "Clear Chat", "/clear", isIdle, ExecuteLocalCommand);
+        AddMenuItem(menu, "Compact History", "/compact", isIdle, ExecuteLocalCommand);
+        menu.Items.Add(new Separator());
+        AddMenuItem(menu, "Stop Session", "/stop", hasSession, ExecuteLocalCommand);
+        AddMenuItem(menu, "Open Logs Folder", "/logs", true, ExecuteLocalCommand);
+
+        menu.IsOpen = true;
+    }
+
+    private static void AddMenuItem(ContextMenu menu, string header, string command, bool isEnabled, Action<string> handler)
+    {
+        var item = new MenuItem
+        {
+            Header = $"{header}  {command}",
+            IsEnabled = isEnabled,
+            Tag = command
+        };
+        item.Click += (_, _) => handler(command);
+        menu.Items.Add(item);
+    }
+
+    // --- Slash Command Handling ---
+
     private void SendCurrentMessage()
     {
         var text = InputBox.Text.Trim();
-        if (string.IsNullOrEmpty(text) || _session == null || _session.State != ClaudeSessionState.Idle)
+        if (string.IsNullOrEmpty(text))
             return;
 
         InputBox.Text = "";
+
+        // Check for slash commands
+        if (text.StartsWith('/'))
+        {
+            if (TryHandleLocalCommand(text))
+                return;
+
+            // Not a local command — pass through to Claude Code as-is
+        }
+
+        if (_session == null || _session.State != ClaudeSessionState.Idle)
+            return;
 
         // Collapse previous streaming block if still open
         FinalizeStreamingBlock();
@@ -274,6 +323,86 @@ public partial class AiChatControl : UserControl
         AddUserMessage(text);
         ShowWaitingBubble();
         _session.SendMessage(text);
+    }
+
+    /// <summary>
+    /// Returns true if the command was handled locally (should not be sent to Claude).
+    /// </summary>
+    private bool TryHandleLocalCommand(string text)
+    {
+        var command = text.Split(' ', 2)[0].ToLowerInvariant();
+        switch (command)
+        {
+            case "/clear":
+                ExecuteLocalCommand("/clear");
+                return true;
+            case "/stop":
+                ExecuteLocalCommand("/stop");
+                return true;
+            case "/logs":
+                ExecuteLocalCommand("/logs");
+                return true;
+            default:
+                return false; // not a local command — pass through
+        }
+    }
+
+    private void ExecuteLocalCommand(string command)
+    {
+        switch (command)
+        {
+            case "/clear":
+                if (_session != null && _session.State == ClaudeSessionState.Idle)
+                {
+                    MessageList.Children.Clear();
+                    AddSystemMessage("Chat cleared.");
+                }
+                break;
+
+            case "/compact":
+                // Compact is a Claude Code command — send it through
+                if (_session != null && _session.State == ClaudeSessionState.Idle)
+                {
+                    FinalizeStreamingBlock();
+                    _executionContentBlock = null;
+                    _executionFullText = "";
+                    _executionBubble = null;
+                    _lastMessageSentTime = DateTime.UtcNow;
+                    AddUserMessage("/compact");
+                    ShowWaitingBubble();
+                    _session.SendMessage("/compact");
+                }
+                break;
+
+            case "/stop":
+                Stop_Click(this, new RoutedEventArgs());
+                break;
+
+            case "/logs":
+                var logPath = Log.LogFilePath;
+                if (logPath != null)
+                {
+                    var folder = System.IO.Path.GetDirectoryName(logPath);
+                    if (folder != null && System.IO.Directory.Exists(folder))
+                        System.Diagnostics.Process.Start("explorer.exe", folder);
+                }
+                break;
+        }
+    }
+
+    private void AddSystemMessage(string text)
+    {
+        var block = new TextBlock
+        {
+            Text = text,
+            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
+            FontSize = 11,
+            Foreground = ThemeManager.GetBrush("ChatMutedForeground"),
+            FontStyle = FontStyles.Italic,
+            Margin = new Thickness(0, 4, 0, 4)
+        };
+        MessageList.Children.Add(block);
+        ScrollToBottom();
     }
 
     // --- Waiting Bubble (shown until first delta arrives) ---
