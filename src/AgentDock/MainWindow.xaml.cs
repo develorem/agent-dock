@@ -856,7 +856,7 @@ public partial class MainWindow : Window
     {
         var iconElement = ResolveProjectIcon(project.FolderPath);
 
-        // Status diamond area (right of name): diamond + skull badge + error badge
+        // Status diamond area (right of name): diamond + error badge
         var statusGrid = new Grid
         {
             Width = 20,
@@ -876,17 +876,6 @@ public partial class MainWindow : Window
             VerticalAlignment = VerticalAlignment.Center
         };
 
-        var skullBadge = new TextBlock
-        {
-            Name = "skullBadge",
-            Text = "\u2620", // ☠
-            FontSize = 9,
-            Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x44, 0x44)),
-            HorizontalAlignment = HorizontalAlignment.Right,
-            VerticalAlignment = VerticalAlignment.Bottom,
-            Visibility = Visibility.Collapsed
-        };
-
         var statusBadge = new TextBlock
         {
             Name = "statusBadge",
@@ -898,7 +887,6 @@ public partial class MainWindow : Window
         };
 
         statusGrid.Children.Add(diamondIcon);
-        statusGrid.Children.Add(skullBadge);
         statusGrid.Children.Add(statusBadge);
 
         _projectTabIcons[project] = statusGrid;
@@ -1791,8 +1779,7 @@ public partial class MainWindow : Window
             return;
 
         var diamondIcon = (TextBlock)statusGrid.Children[0];
-        var skullBadge = (TextBlock)statusGrid.Children[1];
-        var statusBadge = (TextBlock)statusGrid.Children[2];
+        var statusBadge = (TextBlock)statusGrid.Children[1];
 
         // Stop any existing pulse timer for this project
         if (_tabIconTimers.TryGetValue(project, out var existingTimer))
@@ -1801,11 +1788,7 @@ public partial class MainWindow : Window
             _tabIconTimers.Remove(project);
         }
 
-        // Check dangerous mode
-        var isDangerous = _projectChatControls.TryGetValue(project, out var chat) && chat.IsDangerousMode;
-
         // Reset
-        skullBadge.Visibility = Visibility.Collapsed;
         statusBadge.Visibility = Visibility.Collapsed;
         statusBadge.Opacity = 1.0;
         diamondIcon.Opacity = 1.0;
@@ -1821,30 +1804,22 @@ public partial class MainWindow : Window
             case ClaudeSessionState.Initializing:
                 diamondIcon.Text = "\u25C6"; // ◆ filled diamond
                 diamondIcon.Foreground = ThemeManager.GetBrush("TabIconWaitingForeground");
-                if (isDangerous)
-                    skullBadge.Visibility = Visibility.Visible;
                 break;
 
             case ClaudeSessionState.Idle:
                 diamondIcon.Text = "\u25C6"; // ◆
                 diamondIcon.Foreground = ThemeManager.GetBrush("TabIconIdleForeground");
-                if (isDangerous)
-                    skullBadge.Visibility = Visibility.Visible;
                 break;
 
             case ClaudeSessionState.Working:
                 diamondIcon.Text = "\u25C6"; // ◆
                 diamondIcon.Foreground = ThemeManager.GetBrush("TabIconWorkingForeground");
-                if (isDangerous)
-                    skullBadge.Visibility = Visibility.Visible;
                 StartDiamondPulse(project, diamondIcon);
                 break;
 
             case ClaudeSessionState.WaitingForPermission:
                 diamondIcon.Text = "\u25C6"; // ◆
                 diamondIcon.Foreground = ThemeManager.GetBrush("TabIconWaitingForeground");
-                if (isDangerous)
-                    skullBadge.Visibility = Visibility.Visible;
                 break;
 
             case ClaudeSessionState.Error:

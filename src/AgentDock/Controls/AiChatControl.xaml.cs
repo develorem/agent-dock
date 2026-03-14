@@ -161,7 +161,7 @@ public partial class AiChatControl : UserControl
             StatusText.Text = state switch
             {
                 ClaudeSessionState.Initializing => "Initializing...",
-                ClaudeSessionState.Idle => _session?.IsDangerousMode == true ? "Idle (dangerous mode)" : "Idle",
+                ClaudeSessionState.Idle => "Idle",
                 ClaudeSessionState.WaitingForPermission => "Waiting for permission...",
                 ClaudeSessionState.Exited => "Session ended",
                 ClaudeSessionState.Error => "Error",
@@ -176,6 +176,12 @@ public partial class AiChatControl : UserControl
             ClaudeSessionState.Error => ThemeManager.GetBrush("ChatStatusErrorForeground"),
             _ => ThemeManager.GetBrush("ChatMutedForeground")
         };
+
+        // Show danger icon when session is active in dangerous mode
+        var showDanger = _session?.IsDangerousMode == true
+            && state != ClaudeSessionState.NotStarted
+            && state != ClaudeSessionState.Exited;
+        DangerIcon.Visibility = showDanger ? Visibility.Visible : Visibility.Collapsed;
 
         var canSend = state == ClaudeSessionState.Idle;
         InputBox.IsEnabled = canSend;
@@ -388,21 +394,6 @@ public partial class AiChatControl : UserControl
                 }
                 break;
         }
-    }
-
-    private void AddSystemMessage(string text)
-    {
-        var block = new TextBlock
-        {
-            Text = text,
-            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
-            FontSize = 11,
-            Foreground = ThemeManager.GetBrush("ChatMutedForeground"),
-            FontStyle = FontStyles.Italic,
-            Margin = new Thickness(0, 4, 0, 4)
-        };
-        MessageList.Children.Add(block);
-        ScrollToBottom();
     }
 
     // --- Waiting Bubble (shown until first delta arrives) ---

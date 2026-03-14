@@ -108,6 +108,14 @@
             <!-- Status bar at top -->
             <Border DockPanel.Dock="Top" Background="{DynamicResource ChatStatusBarBackground}" Padding="8,4">
                 <DockPanel>
+                    <TextBlock x:Name="DangerIcon"
+                               Text="⚠"
+                               FontSize="12"
+                               Foreground="{DynamicResource ChatDangerForeground}"
+                               VerticalAlignment="Center"
+                               Margin="0,0,4,0"
+                               ToolTip="Dangerous mode — all permissions auto-approved"
+                               Visibility="Collapsed" />
                     <TextBlock x:Name="StatusText"
                                Text="Initializing..."
                                FontFamily="Cascadia Code, Consolas, Courier New"
