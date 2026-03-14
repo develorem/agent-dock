@@ -716,7 +716,17 @@ public class ClaudeSession : IDisposable
 
     private void OnProcessExited(object? sender, EventArgs e)
     {
-        var exitCode = _process?.ExitCode ?? -1;
+        int exitCode;
+        try
+        {
+            exitCode = _process?.ExitCode ?? -1;
+        }
+        catch (InvalidOperationException)
+        {
+            // Race condition: the Exited event fires before the OS handle is fully ready.
+            exitCode = -1;
+        }
+
         Log.Info($"ClaudeSession: process exited with code {exitCode}");
 
         // Only transition to error if we weren't expecting the exit
@@ -762,6 +772,14 @@ public class ClaudeSession : IDisposable
         if (_inactivityTimer == null) return;
         _inactivityTimer.Stop();
         _inactivityTimer.Start();
+    }
+
+    /// <summary>
+    /// Restarts the inactivity timer from scratch (called when user clicks "Wait longer").
+    /// </summary>
+    public void ExtendInactivityTimer()
+    {
+        StartInactivityTimer();
     }
 
     private void StopInactivityTimer()

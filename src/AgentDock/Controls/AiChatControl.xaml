@@ -266,7 +266,8 @@
             <ScrollViewer x:Name="MessageScroller"
                           VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Disabled"
-                          Background="{DynamicResource ChatBackground}">
+                          Background="{DynamicResource ChatBackground}"
+                          PreviewMouseWheel="MessageScroller_PreviewMouseWheel">
                 <StackPanel x:Name="MessageList"
                             Margin="8,8,8,8" />
             </ScrollViewer>

@@ -44,6 +44,9 @@ public partial class AiChatControl : UserControl
 
     // Inactivity warning bubble (removable when activity resumes)
     private Border? _inactivityWarning;
+    private DispatcherTimer? _inactivityElapsedTimer;
+    private TextBlock? _inactivityElapsedText;
+    private DateTime _lastMessageSentTime;
 
     /// <summary>
     /// Raised when session state changes (for toolbar icon updates).
@@ -267,6 +270,7 @@ public partial class AiChatControl : UserControl
         _executionFullText = "";
         _executionBubble = null;
 
+        _lastMessageSentTime = DateTime.UtcNow;
         AddUserMessage(text);
         ShowWaitingBubble();
         _session.SendMessage(text);
@@ -681,6 +685,7 @@ public partial class AiChatControl : UserControl
         if (_session == null || _inactivityWarning != null)
             return; // Already showing a warning or no session
 
+        var elapsed = DateTime.UtcNow - _lastMessageSentTime;
         var warningText = new TextBlock
         {
             Text = "Claude hasn't responded for a while — it may be stuck.",
@@ -689,6 +694,46 @@ public partial class AiChatControl : UserControl
             Foreground = ThemeManager.GetBrush("ChatStatusWarningForeground"),
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 4)
+        };
+
+        _inactivityElapsedText = new TextBlock
+        {
+            Text = FormatElapsed(elapsed),
+            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
+            FontSize = 10,
+            Foreground = ThemeManager.GetBrush("ChatMutedForeground"),
+            Margin = new Thickness(0, 0, 0, 6)
+        };
+
+        // Start a timer to keep the elapsed display up to date
+        _inactivityElapsedTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _inactivityElapsedTimer.Tick += (_, _) =>
+        {
+            if (_inactivityElapsedText != null)
+                _inactivityElapsedText.Text = FormatElapsed(DateTime.UtcNow - _lastMessageSentTime);
+        };
+        _inactivityElapsedTimer.Start();
+
+        var buttonPanel = new StackPanel { Orientation = Orientation.Horizontal };
+
+        var waitBtn = new Button
+        {
+            Content = "Wait longer",
+            Cursor = Cursors.Hand,
+            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
+            FontSize = 11,
+            Background = ThemeManager.GetBrush("ChatButtonBackground"),
+            Foreground = ThemeManager.GetBrush("ChatButtonForeground"),
+            BorderBrush = ThemeManager.GetBrush("ChatButtonBorderBrush"),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(10, 4, 10, 4),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 0, 8, 0)
+        };
+        waitBtn.Click += (_, _) =>
+        {
+            RemoveInactivityWarning();
+            _session?.ExtendInactivityTimer();
         };
 
         var killBtn = new Button
@@ -710,9 +755,13 @@ public partial class AiChatControl : UserControl
             Stop_Click(this, new RoutedEventArgs());
         };
 
+        buttonPanel.Children.Add(waitBtn);
+        buttonPanel.Children.Add(killBtn);
+
         var panel = new StackPanel { Margin = new Thickness(0) };
         panel.Children.Add(warningText);
-        panel.Children.Add(killBtn);
+        panel.Children.Add(_inactivityElapsedText);
+        panel.Children.Add(buttonPanel);
 
         _inactivityWarning = new Border
         {
@@ -729,8 +778,18 @@ public partial class AiChatControl : UserControl
         ScrollToBottom();
     }
 
+    private static string FormatElapsed(TimeSpan elapsed)
+    {
+        if (elapsed.TotalMinutes >= 1)
+            return $"Waiting for {(int)elapsed.TotalMinutes}m {elapsed.Seconds}s";
+        return $"Waiting for {(int)elapsed.TotalSeconds}s";
+    }
+
     private void RemoveInactivityWarning()
     {
+        _inactivityElapsedTimer?.Stop();
+        _inactivityElapsedTimer = null;
+        _inactivityElapsedText = null;
         if (_inactivityWarning != null)
         {
             MessageList.Children.Remove(_inactivityWarning);
@@ -1099,6 +1158,13 @@ public partial class AiChatControl : UserControl
         {
             return input.ToString();
         }
+    }
+
+    private void MessageScroller_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        // Prevent child controls (TextBox, MarkdownScrollViewer) from stealing wheel events
+        MessageScroller.ScrollToVerticalOffset(MessageScroller.VerticalOffset - e.Delta);
+        e.Handled = true;
     }
 
     private void ScrollToBottom()

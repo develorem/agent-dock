@@ -80,6 +80,14 @@
                            FontSize="14"
                            Foreground="{DynamicResource ExplorerForeground}" />
             </Button>
+            <Button Style="{StaticResource ExplorerToolbarButton}"
+                    ToolTip="Refresh"
+                    Click="Refresh_Click">
+                <TextBlock Text="&#xE72C;"
+                           FontFamily="Segoe MDL2 Assets"
+                           FontSize="14"
+                           Foreground="{DynamicResource ExplorerForeground}" />
+            </Button>
         </StackPanel>
         </Border>
 
