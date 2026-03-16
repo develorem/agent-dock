@@ -44,6 +44,9 @@ public partial class AiChatControl : UserControl
 
     // Inactivity warning bubble (removable when activity resumes)
     private Border? _inactivityWarning;
+    private DispatcherTimer? _inactivityElapsedTimer;
+    private TextBlock? _inactivityElapsedText;
+    private DateTime _lastMessageSentTime;
 
     /// <summary>
     /// Raised when session state changes (for toolbar icon updates).
@@ -158,7 +161,7 @@ public partial class AiChatControl : UserControl
             StatusText.Text = state switch
             {
                 ClaudeSessionState.Initializing => "Initializing...",
-                ClaudeSessionState.Idle => _session?.IsDangerousMode == true ? "Idle (dangerous mode)" : "Idle",
+                ClaudeSessionState.Idle => "Idle",
                 ClaudeSessionState.WaitingForPermission => "Waiting for permission...",
                 ClaudeSessionState.Exited => "Session ended",
                 ClaudeSessionState.Error => "Error",
@@ -173,6 +176,12 @@ public partial class AiChatControl : UserControl
             ClaudeSessionState.Error => ThemeManager.GetBrush("ChatStatusErrorForeground"),
             _ => ThemeManager.GetBrush("ChatMutedForeground")
         };
+
+        // Show danger icon when session is active in dangerous mode
+        var showDanger = _session?.IsDangerousMode == true
+            && state != ClaudeSessionState.NotStarted
+            && state != ClaudeSessionState.Exited;
+        DangerIcon.Visibility = showDanger ? Visibility.Visible : Visibility.Collapsed;
 
         var canSend = state == ClaudeSessionState.Idle;
         InputBox.IsEnabled = canSend;
@@ -253,13 +262,62 @@ public partial class AiChatControl : UserControl
         }
     }
 
+    // --- Prompt Menu (> button) ---
+
+    private void PromptMenu_Click(object sender, RoutedEventArgs e)
+    {
+        var menu = new ContextMenu
+        {
+            Style = null, // use default WPF style
+            PlacementTarget = PromptMenuButton,
+            Placement = System.Windows.Controls.Primitives.PlacementMode.Top
+        };
+
+        var hasSession = _session != null;
+        var isIdle = hasSession && _session!.State == ClaudeSessionState.Idle;
+
+        AddMenuItem(menu, "Clear Chat", "/clear", isIdle, ExecuteLocalCommand);
+        AddMenuItem(menu, "Compact History", "/compact", isIdle, ExecuteLocalCommand);
+        menu.Items.Add(new Separator());
+        AddMenuItem(menu, "Stop Session", "/stop", hasSession, ExecuteLocalCommand);
+        AddMenuItem(menu, "Open Logs Folder", "/logs", true, ExecuteLocalCommand);
+
+        menu.IsOpen = true;
+    }
+
+    private static void AddMenuItem(ContextMenu menu, string header, string command, bool isEnabled, Action<string> handler)
+    {
+        var item = new MenuItem
+        {
+            Header = $"{header}  {command}",
+            IsEnabled = isEnabled,
+            Tag = command
+        };
+        item.Click += (_, _) => handler(command);
+        menu.Items.Add(item);
+    }
+
+    // --- Slash Command Handling ---
+
     private void SendCurrentMessage()
     {
         var text = InputBox.Text.Trim();
-        if (string.IsNullOrEmpty(text) || _session == null || _session.State != ClaudeSessionState.Idle)
+        if (string.IsNullOrEmpty(text))
             return;
 
         InputBox.Text = "";
+
+        // Check for slash commands
+        if (text.StartsWith('/'))
+        {
+            if (TryHandleLocalCommand(text))
+                return;
+
+            // Not a local command — pass through to Claude Code as-is
+        }
+
+        if (_session == null || _session.State != ClaudeSessionState.Idle)
+            return;
 
         // Collapse previous streaming block if still open
         FinalizeStreamingBlock();
@@ -267,9 +325,75 @@ public partial class AiChatControl : UserControl
         _executionFullText = "";
         _executionBubble = null;
 
+        _lastMessageSentTime = DateTime.UtcNow;
         AddUserMessage(text);
         ShowWaitingBubble();
         _session.SendMessage(text);
+    }
+
+    /// <summary>
+    /// Returns true if the command was handled locally (should not be sent to Claude).
+    /// </summary>
+    private bool TryHandleLocalCommand(string text)
+    {
+        var command = text.Split(' ', 2)[0].ToLowerInvariant();
+        switch (command)
+        {
+            case "/clear":
+                ExecuteLocalCommand("/clear");
+                return true;
+            case "/stop":
+                ExecuteLocalCommand("/stop");
+                return true;
+            case "/logs":
+                ExecuteLocalCommand("/logs");
+                return true;
+            default:
+                return false; // not a local command — pass through
+        }
+    }
+
+    private void ExecuteLocalCommand(string command)
+    {
+        switch (command)
+        {
+            case "/clear":
+                if (_session != null && _session.State == ClaudeSessionState.Idle)
+                {
+                    MessageList.Children.Clear();
+                    AddSystemMessage("Chat cleared.");
+                }
+                break;
+
+            case "/compact":
+                // Compact is a Claude Code command — send it through
+                if (_session != null && _session.State == ClaudeSessionState.Idle)
+                {
+                    FinalizeStreamingBlock();
+                    _executionContentBlock = null;
+                    _executionFullText = "";
+                    _executionBubble = null;
+                    _lastMessageSentTime = DateTime.UtcNow;
+                    AddUserMessage("/compact");
+                    ShowWaitingBubble();
+                    _session.SendMessage("/compact");
+                }
+                break;
+
+            case "/stop":
+                Stop_Click(this, new RoutedEventArgs());
+                break;
+
+            case "/logs":
+                var logPath = Log.LogFilePath;
+                if (logPath != null)
+                {
+                    var folder = System.IO.Path.GetDirectoryName(logPath);
+                    if (folder != null && System.IO.Directory.Exists(folder))
+                        System.Diagnostics.Process.Start("explorer.exe", folder);
+                }
+                break;
+        }
     }
 
     // --- Waiting Bubble (shown until first delta arrives) ---
@@ -681,6 +805,7 @@ public partial class AiChatControl : UserControl
         if (_session == null || _inactivityWarning != null)
             return; // Already showing a warning or no session
 
+        var elapsed = DateTime.UtcNow - _lastMessageSentTime;
         var warningText = new TextBlock
         {
             Text = "Claude hasn't responded for a while — it may be stuck.",
@@ -689,6 +814,46 @@ public partial class AiChatControl : UserControl
             Foreground = ThemeManager.GetBrush("ChatStatusWarningForeground"),
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 4)
+        };
+
+        _inactivityElapsedText = new TextBlock
+        {
+            Text = FormatElapsed(elapsed),
+            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
+            FontSize = 10,
+            Foreground = ThemeManager.GetBrush("ChatMutedForeground"),
+            Margin = new Thickness(0, 0, 0, 6)
+        };
+
+        // Start a timer to keep the elapsed display up to date
+        _inactivityElapsedTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _inactivityElapsedTimer.Tick += (_, _) =>
+        {
+            if (_inactivityElapsedText != null)
+                _inactivityElapsedText.Text = FormatElapsed(DateTime.UtcNow - _lastMessageSentTime);
+        };
+        _inactivityElapsedTimer.Start();
+
+        var buttonPanel = new StackPanel { Orientation = Orientation.Horizontal };
+
+        var waitBtn = new Button
+        {
+            Content = "Wait longer",
+            Cursor = Cursors.Hand,
+            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
+            FontSize = 11,
+            Background = ThemeManager.GetBrush("ChatButtonBackground"),
+            Foreground = ThemeManager.GetBrush("ChatButtonForeground"),
+            BorderBrush = ThemeManager.GetBrush("ChatButtonBorderBrush"),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(10, 4, 10, 4),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 0, 8, 0)
+        };
+        waitBtn.Click += (_, _) =>
+        {
+            RemoveInactivityWarning();
+            _session?.ExtendInactivityTimer();
         };
 
         var killBtn = new Button
@@ -710,9 +875,13 @@ public partial class AiChatControl : UserControl
             Stop_Click(this, new RoutedEventArgs());
         };
 
+        buttonPanel.Children.Add(waitBtn);
+        buttonPanel.Children.Add(killBtn);
+
         var panel = new StackPanel { Margin = new Thickness(0) };
         panel.Children.Add(warningText);
-        panel.Children.Add(killBtn);
+        panel.Children.Add(_inactivityElapsedText);
+        panel.Children.Add(buttonPanel);
 
         _inactivityWarning = new Border
         {
@@ -729,8 +898,18 @@ public partial class AiChatControl : UserControl
         ScrollToBottom();
     }
 
+    private static string FormatElapsed(TimeSpan elapsed)
+    {
+        if (elapsed.TotalMinutes >= 1)
+            return $"Waiting for {(int)elapsed.TotalMinutes}m {elapsed.Seconds}s";
+        return $"Waiting for {(int)elapsed.TotalSeconds}s";
+    }
+
     private void RemoveInactivityWarning()
     {
+        _inactivityElapsedTimer?.Stop();
+        _inactivityElapsedTimer = null;
+        _inactivityElapsedText = null;
         if (_inactivityWarning != null)
         {
             MessageList.Children.Remove(_inactivityWarning);
@@ -1099,6 +1278,13 @@ public partial class AiChatControl : UserControl
         {
             return input.ToString();
         }
+    }
+
+    private void MessageScroller_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        // Prevent child controls (TextBox, MarkdownScrollViewer) from stealing wheel events
+        MessageScroller.ScrollToVerticalOffset(MessageScroller.VerticalOffset - e.Delta);
+        e.Handled = true;
     }
 
     private void ScrollToBottom()

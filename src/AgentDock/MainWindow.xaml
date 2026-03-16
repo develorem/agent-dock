@@ -149,6 +149,13 @@
                                            Foreground="{DynamicResource MenuIconForeground}" />
                             </MenuItem.Icon>
                         </MenuItem>
+                        <Separator />
+                        <MenuItem Header="Open _Logs Folder" Click="OpenLogsFolder_Click">
+                            <MenuItem.Icon>
+                                <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                           Foreground="{DynamicResource MenuIconForeground}" />
+                            </MenuItem.Icon>
+                        </MenuItem>
                     </MenuItem>
                     <MenuItem Header="_Help">
                         <MenuItem Header="_Getting Started" Click="GettingStarted_Click">

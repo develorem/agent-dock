@@ -8,11 +8,11 @@
              mc:Ignorable="d"
              Background="{DynamicResource PreviewBackground}">
     <UserControl.Resources>
-        <Style x:Key="ThemeMarkdownStyle" TargetType="FlowDocument">
+        <Style x:Key="ThemeMarkdownStyle" TargetType="FlowDocument"
+               BasedOn="{x:Static mdxaml:MarkdownStyle.GithubLike}">
             <Setter Property="Foreground" Value="{DynamicResource PreviewForeground}" />
             <Setter Property="FontFamily" Value="Segoe UI, Segoe UI Emoji" />
             <Setter Property="FontSize" Value="14" />
-            <Setter Property="PagePadding" Value="0" />
         </Style>
     </UserControl.Resources>
     <Grid>

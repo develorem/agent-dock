@@ -298,6 +298,8 @@ public partial class FileExplorerControl : UserControl
             OpenCommandLine(_rootPath);
     }
 
+    private void Refresh_Click(object sender, RoutedEventArgs e) => Refresh();
+
     private void OpenSettings_Click(object sender, RoutedEventArgs e)
     {
         if (string.IsNullOrEmpty(_rootPath))

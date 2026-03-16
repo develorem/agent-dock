@@ -82,7 +82,17 @@ Save your entire session — open projects, panel layouts, toolbar position, the
 2. Download Agent Dock from the [Releases page](https://github.com/develorem/agent-dock/releases/latest)
 3. Launch the app, click **+** to add a project, and start an AI session
 
-**[Full installation & usage guide &rarr;](INSTALL.md)**
+**[Full installation guide &rarr;](INSTALL.md)**
+
+---
+
+## Documentation
+
+- **[Features](docs/features.md)** — overview of everything Agent Dock can do
+- **[Workspace](docs/workspace.md)** — saving, loading, themes, and settings
+- **[Projects](docs/projects.md)** — tabs, project settings, and panel layouts
+- **[Project Features](docs/project-features.md)** — File Explorer, Git Status, and File Preview
+- **[AI Chat](docs/ai-chat.md)** — sessions, message types, and troubleshooting
 
 ---
 
