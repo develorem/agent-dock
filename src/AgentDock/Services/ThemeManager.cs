@@ -10,6 +10,7 @@ public static class ThemeManager
 {
     private static ResourceDictionary? _currentThemeDictionary;
     private static bool _sharedStylesLoaded;
+    private static bool _markdownStylesLoaded;
 
     public static ThemeDescriptor CurrentTheme { get; private set; } = ThemeRegistry.Default;
 
@@ -46,6 +47,14 @@ public static class ThemeManager
             var sharedUri = new Uri("Themes/SharedStyles.xaml", UriKind.Relative);
             app.Resources.MergedDictionaries.Add(new ResourceDictionary { Source = sharedUri });
             _sharedStylesLoaded = true;
+        }
+
+        // Load markdown styles once (theme-aware overrides for MdXaml)
+        if (!_markdownStylesLoaded)
+        {
+            var mdUri = new Uri("Themes/MarkdownStyles.xaml", UriKind.Relative);
+            app.Resources.MergedDictionaries.Add(new ResourceDictionary { Source = mdUri });
+            _markdownStylesLoaded = true;
         }
 
         // Remove previous theme dictionary

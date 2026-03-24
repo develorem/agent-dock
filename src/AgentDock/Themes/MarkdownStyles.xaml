@@ -1,0 +1,161 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:mdxaml="clr-namespace:MdXaml;assembly=MdXaml">
+
+    <!-- Base markdown FlowDocument style used by both AI chat and file preview.
+         Inherits structural layout from MdXaml's GithubLike but replaces all
+         hardcoded light-theme colors with DynamicResource lookups so every
+         theme (dark and light) renders readable markdown. -->
+    <Style x:Key="BaseMarkdownStyle" TargetType="FlowDocument"
+           BasedOn="{x:Static mdxaml:MarkdownStyle.GithubLike}">
+        <Setter Property="FontFamily" Value="Segoe UI, Segoe UI Emoji" />
+        <Style.Resources>
+
+            <!-- Paragraphs: headings, code blocks, notes -->
+            <Style TargetType="Paragraph">
+                <Setter Property="Margin" Value="0,7,0,0" />
+                <Style.Triggers>
+                    <Trigger Property="Tag" Value="Heading1">
+                        <Setter Property="Margin" Value="0,0,15,0" />
+                        <Setter Property="Foreground" Value="{DynamicResource MarkdownHeadingForeground}" />
+                        <Setter Property="FontSize" Value="28" />
+                        <Setter Property="FontWeight" Value="UltraBold" />
+                    </Trigger>
+                    <Trigger Property="Tag" Value="Heading2">
+                        <Setter Property="Margin" Value="0,0,15,0" />
+                        <Setter Property="Foreground" Value="{DynamicResource MarkdownHeadingForeground}" />
+                        <Setter Property="FontSize" Value="21" />
+                        <Setter Property="FontWeight" Value="Bold" />
+                    </Trigger>
+                    <Trigger Property="Tag" Value="Heading3">
+                        <Setter Property="Margin" Value="0,0,10,0" />
+                        <Setter Property="Foreground" Value="{DynamicResource MarkdownHeadingForeground}" />
+                        <Setter Property="FontSize" Value="17.5" />
+                        <Setter Property="FontWeight" Value="Bold" />
+                    </Trigger>
+                    <Trigger Property="Tag" Value="Heading4">
+                        <Setter Property="Margin" Value="0,0,5,0" />
+                        <Setter Property="Foreground" Value="{DynamicResource MarkdownHeadingForeground}" />
+                        <Setter Property="FontSize" Value="14" />
+                        <Setter Property="FontWeight" Value="Bold" />
+                    </Trigger>
+                    <Trigger Property="Tag" Value="CodeBlock">
+                        <Setter Property="FontFamily" Value="Cascadia Code, Consolas, Courier New" />
+                        <Setter Property="FontSize" Value="11.9" />
+                        <Setter Property="Background" Value="{DynamicResource MarkdownCodeBackground}" />
+                        <Setter Property="Padding" Value="20,10" />
+                    </Trigger>
+                    <Trigger Property="Tag" Value="Note">
+                        <Setter Property="Margin" Value="5,0,5,0" />
+                        <Setter Property="Padding" Value="10,5" />
+                        <Setter Property="BorderBrush" Value="{DynamicResource MarkdownNoteBorderBrush}" />
+                        <Setter Property="BorderThickness" Value="3,3,3,3" />
+                        <Setter Property="Background" Value="{DynamicResource MarkdownNoteBackground}" />
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+
+            <!-- Section: blockquotes -->
+            <Style TargetType="Section">
+                <Style.Triggers>
+                    <Trigger Property="Tag" Value="Blockquote">
+                        <Setter Property="Padding" Value="10,5" />
+                        <Setter Property="BorderBrush" Value="{DynamicResource MarkdownBlockquoteBorderBrush}" />
+                        <Setter Property="BorderThickness" Value="5,0,0,0" />
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+
+            <!-- Inline code (Run) -->
+            <Style TargetType="Run">
+                <Style.Triggers>
+                    <Trigger Property="Tag" Value="CodeSpan">
+                        <Setter Property="FontFamily" Value="Cascadia Code, Consolas, Courier New" />
+                        <Setter Property="FontSize" Value="11.9" />
+                        <Setter Property="Background" Value="{DynamicResource MarkdownCodeBackground}" />
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+
+            <!-- Inline code (Span) -->
+            <Style TargetType="Span">
+                <Style.Triggers>
+                    <Trigger Property="Tag" Value="CodeSpan">
+                        <Setter Property="FontFamily" Value="Cascadia Code, Consolas, Courier New" />
+                        <Setter Property="FontSize" Value="11.9" />
+                        <Setter Property="Background" Value="{DynamicResource MarkdownCodeBackground}" />
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+
+            <!-- Hyperlinks -->
+            <Style TargetType="Hyperlink">
+                <Setter Property="TextDecorations" Value="None" />
+                <Setter Property="Foreground" Value="{DynamicResource MarkdownLinkForeground}" />
+            </Style>
+
+            <!-- Images -->
+            <Style TargetType="Image">
+                <Setter Property="RenderOptions.BitmapScalingMode" Value="NearestNeighbor" />
+                <Style.Triggers>
+                    <Trigger Property="Tag" Value="imageright">
+                        <Setter Property="Margin" Value="20,0,0,0" />
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+
+            <!-- Tables -->
+            <Style TargetType="Table">
+                <Setter Property="CellSpacing" Value="0" />
+                <Setter Property="BorderThickness" Value="0.5" />
+                <Setter Property="BorderBrush" Value="{DynamicResource MarkdownTableBorderBrush}" />
+                <Style.Resources>
+                    <Style TargetType="TableCell">
+                        <Setter Property="BorderThickness" Value="0.5" />
+                        <Setter Property="BorderBrush" Value="{DynamicResource MarkdownTableBorderBrush}" />
+                        <Setter Property="Padding" Value="13,6" />
+                    </Style>
+                </Style.Resources>
+            </Style>
+
+            <!-- Table row groups: headers -->
+            <Style TargetType="TableRowGroup">
+                <Style.Triggers>
+                    <Trigger Property="Tag" Value="TableHeader">
+                        <Setter Property="FontWeight" Value="Bold" />
+                        <Setter Property="Background" Value="{DynamicResource MarkdownTableHeaderBackground}" />
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+
+            <!-- Table rows: alternating -->
+            <Style TargetType="TableRow">
+                <Style.Triggers>
+                    <Trigger Property="Tag" Value="EvenTableRow">
+                        <Setter Property="Background" Value="{DynamicResource MarkdownTableEvenRowBackground}" />
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+
+            <!-- Block UI: horizontal rules -->
+            <Style TargetType="BlockUIContainer">
+                <Style.Triggers>
+                    <Trigger Property="Tag" Value="RuleSingle">
+                        <Setter Property="Margin" Value="0,3" />
+                    </Trigger>
+                    <Trigger Property="Tag" Value="RuleDouble">
+                        <Setter Property="Margin" Value="0,3" />
+                    </Trigger>
+                    <Trigger Property="Tag" Value="RuleBold">
+                        <Setter Property="Margin" Value="0,3" />
+                    </Trigger>
+                    <Trigger Property="Tag" Value="RuleBoldWithSingle">
+                        <Setter Property="Margin" Value="0,3" />
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+
+        </Style.Resources>
+    </Style>
+
+</ResourceDictionary>
