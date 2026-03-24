@@ -110,6 +110,17 @@
     <SolidColorBrush x:Key="DiffRemovedBackground" Color="{StaticResource DiffRemovedColor}" />
     <SolidColorBrush x:Key="DiffHunkHeaderBackground" Color="{StaticResource DiffHunkHeaderColor}" />
 
+    <!-- Markdown rendering -->
+    <SolidColorBrush x:Key="MarkdownHeadingForeground" Color="#58A6FF" />
+    <SolidColorBrush x:Key="MarkdownCodeBackground" Color="#161B22" />
+    <SolidColorBrush x:Key="MarkdownTableBorderBrush" Color="#30363D" />
+    <SolidColorBrush x:Key="MarkdownTableHeaderBackground" Color="#161B22" />
+    <SolidColorBrush x:Key="MarkdownTableEvenRowBackground" Color="#1C2128" />
+    <SolidColorBrush x:Key="MarkdownBlockquoteBorderBrush" Color="#58A6FF" />
+    <SolidColorBrush x:Key="MarkdownNoteBackground" Color="#161B22" />
+    <SolidColorBrush x:Key="MarkdownNoteBorderBrush" Color="#30363D" />
+    <SolidColorBrush x:Key="MarkdownLinkForeground" Color="#79C0FF" />
+
     <!-- AI Chat panel -->
     <SolidColorBrush x:Key="ChatBackground" Color="#0D1117" />
     <SolidColorBrush x:Key="ChatTextForeground" Color="#C9D1D9" />

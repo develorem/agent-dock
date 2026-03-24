@@ -336,12 +336,14 @@ public partial class FileExplorerControl : UserControl
     {
         try
         {
+            // UseShellExecute = true ensures the launched process is fully
+            // independent — no parent-child window relationship that could
+            // steal foreground activation rights from AgentDock.
             Process.Start(new ProcessStartInfo
             {
-                FileName = "cmd.exe",
-                Arguments = $"/c {command} \"{path}\"",
-                UseShellExecute = false,
-                CreateNoWindow = true
+                FileName = command,
+                Arguments = $"\"{path}\"",
+                UseShellExecute = true
             });
         }
         catch { /* tool not available */ }

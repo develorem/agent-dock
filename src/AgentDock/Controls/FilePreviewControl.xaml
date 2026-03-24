@@ -9,9 +9,8 @@
              Background="{DynamicResource PreviewBackground}">
     <UserControl.Resources>
         <Style x:Key="ThemeMarkdownStyle" TargetType="FlowDocument"
-               BasedOn="{x:Static mdxaml:MarkdownStyle.GithubLike}">
+               BasedOn="{StaticResource BaseMarkdownStyle}">
             <Setter Property="Foreground" Value="{DynamicResource PreviewForeground}" />
-            <Setter Property="FontFamily" Value="Segoe UI, Segoe UI Emoji" />
             <Setter Property="FontSize" Value="14" />
         </Style>
     </UserControl.Resources>
@@ -69,25 +68,44 @@
                    FontSize="18"
                    Foreground="{DynamicResource PreviewNoPreviewForeground}" />
 
-        <!-- Markdown source/preview toggle button (floating top-right) -->
-        <Button x:Name="MarkdownToggleButton"
-                Visibility="Collapsed"
-                Click="MarkdownToggle_Click"
-                HorizontalAlignment="Right"
-                VerticalAlignment="Top"
-                Margin="0,6,6,0"
-                Padding="6,4"
-                Cursor="Hand"
-                ToolTip="Switch to source view"
-                Background="{DynamicResource PreviewBackground}"
-                BorderBrush="{DynamicResource PreviewLineNumberForeground}"
-                BorderThickness="1"
-                Opacity="0.85">
-            <TextBlock x:Name="MarkdownToggleIcon"
-                       Text="&#xE943;"
-                       FontFamily="Segoe MDL2 Assets"
-                       FontSize="14"
-                       Foreground="{DynamicResource PreviewForeground}" />
-        </Button>
+        <!-- Floating toolbar (top-right): markdown toggle + close -->
+        <StackPanel x:Name="FloatingToolbar"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Top"
+                    Margin="0,6,6,0">
+            <Button x:Name="MarkdownToggleButton"
+                    Visibility="Collapsed"
+                    Click="MarkdownToggle_Click"
+                    Padding="6,4"
+                    Cursor="Hand"
+                    ToolTip="Switch to source view"
+                    Background="{DynamicResource PreviewBackground}"
+                    BorderBrush="{DynamicResource PreviewLineNumberForeground}"
+                    BorderThickness="1"
+                    Opacity="0.85"
+                    Margin="0,0,4,0">
+                <TextBlock x:Name="MarkdownToggleIcon"
+                           Text="&#xE943;"
+                           FontFamily="Segoe MDL2 Assets"
+                           FontSize="14"
+                           Foreground="{DynamicResource PreviewForeground}" />
+            </Button>
+            <Button x:Name="ClosePreviewButton"
+                    Visibility="Collapsed"
+                    Click="ClosePreview_Click"
+                    Padding="6,4"
+                    Cursor="Hand"
+                    ToolTip="Close preview"
+                    Background="{DynamicResource PreviewBackground}"
+                    BorderBrush="{DynamicResource PreviewLineNumberForeground}"
+                    BorderThickness="1"
+                    Opacity="0.85">
+                <TextBlock Text="&#xE8BB;"
+                           FontFamily="Segoe MDL2 Assets"
+                           FontSize="14"
+                           Foreground="{DynamicResource PreviewForeground}" />
+            </Button>
+        </StackPanel>
     </Grid>
 </UserControl>
