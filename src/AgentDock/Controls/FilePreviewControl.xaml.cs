@@ -92,6 +92,7 @@ public partial class FilePreviewControl : UserControl
     public void ShowFile(string filePath)
     {
         HideAll();
+        ClosePreviewButton.Visibility = Visibility.Visible;
 
         if (!File.Exists(filePath))
         {
@@ -124,6 +125,7 @@ public partial class FilePreviewControl : UserControl
     public void ShowDiff(string diffContent)
     {
         HideAll();
+        ClosePreviewButton.Visibility = Visibility.Visible;
 
         // Remove any previous diff colorizer
         RemoveDiffColorizer();
@@ -272,12 +274,18 @@ public partial class FilePreviewControl : UserControl
         NoPreviewMessage.Visibility = Visibility.Visible;
     }
 
+    private void ClosePreview_Click(object sender, RoutedEventArgs e)
+    {
+        Clear();
+    }
+
     private void HideAll()
     {
         EmptyMessage.Visibility = Visibility.Collapsed;
         TextPreview.Visibility = Visibility.Collapsed;
         MarkdownPreview.Visibility = Visibility.Collapsed;
         MarkdownToggleButton.Visibility = Visibility.Collapsed;
+        ClosePreviewButton.Visibility = Visibility.Collapsed;
         ImageContainer.Visibility = Visibility.Collapsed;
         NoPreviewMessage.Visibility = Visibility.Collapsed;
         _isMarkdownRendered = false;
