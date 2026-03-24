@@ -146,7 +146,17 @@ public partial class MainWindow : Window
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
-        var source = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
+        var hwnd = new WindowInteropHelper(this).Handle;
+
+        // WindowStyle=None strips WS_SYSMENU, which can prevent the shell from
+        // activating the window via the taskbar (produces a "ding" instead).
+        // Re-adding it fixes taskbar activation while keeping custom chrome.
+        const int GWL_STYLE = -16;
+        const int WS_SYSMENU = 0x00080000;
+        var style = GetWindowLong(hwnd, GWL_STYLE);
+        SetWindowLong(hwnd, GWL_STYLE, style | WS_SYSMENU);
+
+        var source = HwndSource.FromHwnd(hwnd);
         source?.AddHook(WndProc);
     }
 
@@ -177,6 +187,12 @@ public partial class MainWindow : Window
 
     [DllImport("user32.dll")]
     private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+
+    [DllImport("user32.dll")]
+    private static extern int GetWindowLong(IntPtr hwnd, int nIndex);
+
+    [DllImport("user32.dll")]
+    private static extern int SetWindowLong(IntPtr hwnd, int nIndex, int dwNewLong);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct POINT { public int X, Y; }
