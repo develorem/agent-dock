@@ -1,8 +1,11 @@
 using System.IO;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Media.Imaging;
 using AgentDock.Services;
+using ICSharpCode.AvalonEdit;
 
 namespace AgentDock.Controls;
 
@@ -58,6 +61,7 @@ public partial class FilePreviewControl : UserControl
             var md = MarkdownPreview.Markdown;
             MarkdownPreview.Markdown = "";
             MarkdownPreview.Markdown = md;
+            PostProcessMarkdownCodeBlocks();
         }
     }
 
@@ -166,21 +170,34 @@ public partial class FilePreviewControl : UserControl
             var markdownText = File.ReadAllText(filePath);
             _currentExtension = extension;
 
-            // Load into AvalonEdit for source view (hidden initially)
+            // Load into AvalonEdit for source view
             TextPreview.Load(filePath);
             TextPreview.SyntaxHighlighting = ThemeManager.GetHighlighting(extension);
             ApplyMarkdownLinkColorizer(extension);
             TextPreview.ScrollToHome();
 
-            // Render markdown preview
-            MarkdownPreview.Markdown = markdownText;
-            MarkdownPreview.Visibility = Visibility.Visible;
+            // If the file is HTML-heavy (e.g. README with badges/alignment tags),
+            // MdXaml can't render it properly — default to source view instead.
+            if (IsHtmlHeavyMarkdown(markdownText))
+            {
+                TextPreview.Visibility = Visibility.Visible;
+                _isMarkdownRendered = false;
+                MarkdownToggleIcon.Text = "\uE890"; // Eye icon — click to see rendered
+                MarkdownToggleButton.ToolTip = "Switch to rendered view";
+                MarkdownToggleButton.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                // Render markdown preview
+                MarkdownPreview.Markdown = PreProcessMarkdown(markdownText);
+                PostProcessMarkdownCodeBlocks();
+                MarkdownPreview.Visibility = Visibility.Visible;
 
-            // Show toggle button in "rendered" state
-            _isMarkdownRendered = true;
-            MarkdownToggleIcon.Text = "\uE943"; // Code icon — click to see source
-            MarkdownToggleButton.ToolTip = "Switch to source view";
-            MarkdownToggleButton.Visibility = Visibility.Visible;
+                _isMarkdownRendered = true;
+                MarkdownToggleIcon.Text = "\uE943"; // Code icon — click to see source
+                MarkdownToggleButton.ToolTip = "Switch to source view";
+                MarkdownToggleButton.Visibility = Visibility.Visible;
+            }
         }
         catch (Exception ex)
         {
@@ -201,12 +218,100 @@ public partial class FilePreviewControl : UserControl
         }
         else
         {
-            // Switch to rendered view
+            // Switch to rendered view — render on demand if not yet loaded
+            if (string.IsNullOrEmpty(MarkdownPreview.Markdown))
+                MarkdownPreview.Markdown = PreProcessMarkdown(TextPreview.Text);
+            PostProcessMarkdownCodeBlocks();
             TextPreview.Visibility = Visibility.Collapsed;
             MarkdownPreview.Visibility = Visibility.Visible;
             _isMarkdownRendered = true;
             MarkdownToggleIcon.Text = "\uE943"; // Code icon — click to see source
             MarkdownToggleButton.ToolTip = "Switch to source view";
+        }
+    }
+
+    /// <summary>
+    /// Pre-processes markdown to fix patterns that MdXaml cannot parse.
+    /// MdXaml parses links before bold/italic, so <c>**[text](url)**</c> leaves
+    /// the asterisks as literal characters. Rewrite to <c>[**text**](url)</c>.
+    /// </summary>
+    private static partial class MarkdownFixups
+    {
+        // **[text](url)** → [**text**](url)
+        [GeneratedRegex(@"\*\*\[([^\]]+)\]\(([^)]+)\)\*\*")]
+        internal static partial Regex BoldLink();
+
+        // *[text](url)* → [*text*](url)  — negative lookbehind avoids matching **
+        [GeneratedRegex(@"(?<!\*)\*\[([^\]]+)\]\(([^)]+)\)\*(?!\*)")]
+        internal static partial Regex ItalicLink();
+    }
+
+    private static string PreProcessMarkdown(string markdown)
+    {
+        markdown = MarkdownFixups.BoldLink().Replace(markdown, "[**$1**]($2)");
+        markdown = MarkdownFixups.ItalicLink().Replace(markdown, "[*$1*]($2)");
+        return markdown;
+    }
+
+    /// <summary>
+    /// Detects markdown files that rely heavily on inline HTML (badge images, alignment
+    /// tags, etc.) which MdXaml cannot render. Returns true if the file should default
+    /// to source view.
+    /// </summary>
+    private static bool IsHtmlHeavyMarkdown(string markdown)
+    {
+        // Count lines that start with an HTML tag (ignoring leading whitespace)
+        int htmlLines = 0;
+        int totalNonBlank = 0;
+        foreach (var line in markdown.Split('\n'))
+        {
+            var trimmed = line.TrimStart();
+            if (trimmed.Length == 0) continue;
+            totalNonBlank++;
+            if (trimmed.StartsWith('<') && !trimmed.StartsWith("<http")) // don't count angle-bracket links
+                htmlLines++;
+        }
+
+        // If more than 40% of non-blank lines are HTML, default to source view
+        return totalNonBlank > 0 && (double)htmlLines / totalNonBlank > 0.4;
+    }
+
+    /// <summary>
+    /// MdXaml renders fenced code blocks as BlockUIContainer containing an AvalonEdit
+    /// TextEditor with default (white) colors. Walk the FlowDocument and apply theme colors.
+    /// </summary>
+    private void PostProcessMarkdownCodeBlocks()
+    {
+        var doc = MarkdownPreview.Document;
+        if (doc == null) return;
+
+        var codeBg = ThemeManager.GetBrush("MarkdownCodeBackground");
+        var codeFg = ThemeManager.GetBrush("PreviewForeground");
+
+        foreach (var block in doc.Blocks)
+            ApplyCodeBlockStyle(block, codeBg, codeFg);
+    }
+
+    private static void ApplyCodeBlockStyle(Block block, System.Windows.Media.Brush bg, System.Windows.Media.Brush fg)
+    {
+        if (block is BlockUIContainer container && container.Child is TextEditor editor)
+        {
+            editor.Background = bg;
+            editor.Foreground = fg;
+            return;
+        }
+
+        // Recurse into sections (blockquotes, list items, etc.)
+        if (block is Section section)
+        {
+            foreach (var child in section.Blocks)
+                ApplyCodeBlockStyle(child, bg, fg);
+        }
+        else if (block is List list)
+        {
+            foreach (var item in list.ListItems)
+                foreach (var child in item.Blocks)
+                    ApplyCodeBlockStyle(child, bg, fg);
         }
     }
 
