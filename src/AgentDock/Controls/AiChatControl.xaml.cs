@@ -1126,7 +1126,6 @@ public partial class AiChatControl : UserControl
         // Create the markdown rendered view
         var markdownViewer = new MarkdownScrollViewer
         {
-            Markdown = fullText,
             Background = Brushes.Transparent,
             Foreground = ThemeManager.GetBrush("ChatTextForeground"),
             MarkdownStyle = (Style)FindResource("ChatMarkdownStyle"),
@@ -1134,6 +1133,7 @@ public partial class AiChatControl : UserControl
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             Padding = new Thickness(0)
         };
+        MarkdownHelper.RenderTo(markdownViewer, fullText);
 
         var isRendered = true;
         contentBlock.Visibility = Visibility.Collapsed;

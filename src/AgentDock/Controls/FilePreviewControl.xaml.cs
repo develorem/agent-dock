@@ -1,11 +1,8 @@
 using System.IO;
-using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Documents;
 using System.Windows.Media.Imaging;
 using AgentDock.Services;
-using ICSharpCode.AvalonEdit;
 
 namespace AgentDock.Controls;
 
@@ -60,8 +57,7 @@ public partial class FilePreviewControl : UserControl
         {
             var md = MarkdownPreview.Markdown;
             MarkdownPreview.Markdown = "";
-            MarkdownPreview.Markdown = md;
-            PostProcessMarkdownCodeBlocks();
+            MarkdownHelper.RenderTo(MarkdownPreview, md);
         }
     }
 
@@ -189,8 +185,7 @@ public partial class FilePreviewControl : UserControl
             else
             {
                 // Render markdown preview
-                MarkdownPreview.Markdown = PreProcessMarkdown(markdownText);
-                PostProcessMarkdownCodeBlocks();
+                MarkdownHelper.RenderTo(MarkdownPreview, markdownText);
                 MarkdownPreview.Visibility = Visibility.Visible;
 
                 _isMarkdownRendered = true;
@@ -220,37 +215,15 @@ public partial class FilePreviewControl : UserControl
         {
             // Switch to rendered view — render on demand if not yet loaded
             if (string.IsNullOrEmpty(MarkdownPreview.Markdown))
-                MarkdownPreview.Markdown = PreProcessMarkdown(TextPreview.Text);
-            PostProcessMarkdownCodeBlocks();
+                MarkdownHelper.RenderTo(MarkdownPreview, TextPreview.Text);
+            else
+                MarkdownHelper.ApplyCodeBlockTheme(MarkdownPreview.Document);
             TextPreview.Visibility = Visibility.Collapsed;
             MarkdownPreview.Visibility = Visibility.Visible;
             _isMarkdownRendered = true;
             MarkdownToggleIcon.Text = "\uE943"; // Code icon — click to see source
             MarkdownToggleButton.ToolTip = "Switch to source view";
         }
-    }
-
-    /// <summary>
-    /// Pre-processes markdown to fix patterns that MdXaml cannot parse.
-    /// MdXaml parses links before bold/italic, so <c>**[text](url)**</c> leaves
-    /// the asterisks as literal characters. Rewrite to <c>[**text**](url)</c>.
-    /// </summary>
-    private static partial class MarkdownFixups
-    {
-        // **[text](url)** → [**text**](url)
-        [GeneratedRegex(@"\*\*\[([^\]]+)\]\(([^)]+)\)\*\*")]
-        internal static partial Regex BoldLink();
-
-        // *[text](url)* → [*text*](url)  — negative lookbehind avoids matching **
-        [GeneratedRegex(@"(?<!\*)\*\[([^\]]+)\]\(([^)]+)\)\*(?!\*)")]
-        internal static partial Regex ItalicLink();
-    }
-
-    private static string PreProcessMarkdown(string markdown)
-    {
-        markdown = MarkdownFixups.BoldLink().Replace(markdown, "[**$1**]($2)");
-        markdown = MarkdownFixups.ItalicLink().Replace(markdown, "[*$1*]($2)");
-        return markdown;
     }
 
     /// <summary>
@@ -276,44 +249,7 @@ public partial class FilePreviewControl : UserControl
         return totalNonBlank > 0 && (double)htmlLines / totalNonBlank > 0.4;
     }
 
-    /// <summary>
-    /// MdXaml renders fenced code blocks as BlockUIContainer containing an AvalonEdit
-    /// TextEditor with default (white) colors. Walk the FlowDocument and apply theme colors.
-    /// </summary>
-    private void PostProcessMarkdownCodeBlocks()
-    {
-        var doc = MarkdownPreview.Document;
-        if (doc == null) return;
 
-        var codeBg = ThemeManager.GetBrush("MarkdownCodeBackground");
-        var codeFg = ThemeManager.GetBrush("PreviewForeground");
-
-        foreach (var block in doc.Blocks)
-            ApplyCodeBlockStyle(block, codeBg, codeFg);
-    }
-
-    private static void ApplyCodeBlockStyle(Block block, System.Windows.Media.Brush bg, System.Windows.Media.Brush fg)
-    {
-        if (block is BlockUIContainer container && container.Child is TextEditor editor)
-        {
-            editor.Background = bg;
-            editor.Foreground = fg;
-            return;
-        }
-
-        // Recurse into sections (blockquotes, list items, etc.)
-        if (block is Section section)
-        {
-            foreach (var child in section.Blocks)
-                ApplyCodeBlockStyle(child, bg, fg);
-        }
-        else if (block is List list)
-        {
-            foreach (var item in list.ListItems)
-                foreach (var child in item.Blocks)
-                    ApplyCodeBlockStyle(child, bg, fg);
-        }
-    }
 
     private void ShowText(string filePath, string extension)
     {
