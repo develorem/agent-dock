@@ -187,15 +187,28 @@ public class SessionStats
 
     public long TotalTokens => InputTokens + OutputTokens + CacheReadInputTokens + CacheCreationInputTokens;
 
-    public void Add(ClaudeResultMessage result)
+    /// <summary>
+    /// Updates stats with cumulative values from Claude Code result.
+    /// Returns the delta (cost change, token change) for per-interaction display.
+    /// </summary>
+    public (double CostDelta, long TokenDelta) Update(ClaudeResultMessage result)
     {
+        double costDelta = 0;
         if (result.TotalCostUsd.HasValue)
-            TotalCostUsd += result.TotalCostUsd.Value;
-        InputTokens += result.InputTokens;
-        OutputTokens += result.OutputTokens;
-        CacheReadInputTokens += result.CacheReadInputTokens;
-        CacheCreationInputTokens += result.CacheCreationInputTokens;
+        {
+            costDelta = result.TotalCostUsd.Value - TotalCostUsd;
+            TotalCostUsd = result.TotalCostUsd.Value;
+        }
+
+        long prevTokens = TotalTokens;
+        InputTokens = result.InputTokens;
+        OutputTokens = result.OutputTokens;
+        CacheReadInputTokens = result.CacheReadInputTokens;
+        CacheCreationInputTokens = result.CacheCreationInputTokens;
+        long tokenDelta = TotalTokens - prevTokens;
+
         Interactions++;
+        return (costDelta, tokenDelta);
     }
 
     /// <summary>Formats token count as human-readable (e.g. "12.3k", "1.2M").</summary>

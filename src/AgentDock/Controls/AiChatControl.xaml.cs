@@ -567,19 +567,17 @@ public partial class AiChatControl : UserControl
             AddSystemMessage($"Error: {string.Join("; ", result.Errors)}", isWarning: true);
         }
 
-        // Accumulate session stats
-        Stats.Add(result);
+        // Update session stats (values from Claude Code are cumulative)
+        var (costDelta, tokenDelta) = Stats.Update(result);
 
-        // Build per-interaction summary line
+        // Build per-interaction summary line using deltas
         var parts = new List<string>();
-        if (result.TotalCostUsd.HasValue)
-            parts.Add($"${result.TotalCostUsd:F4}");
+        if (costDelta > 0)
+            parts.Add($"${costDelta:F4}");
         if (result.DurationMs.HasValue)
             parts.Add($"{result.DurationMs / 1000.0:F1}s");
-        var queryTokens = result.InputTokens + result.OutputTokens
-                        + result.CacheReadInputTokens + result.CacheCreationInputTokens;
-        if (queryTokens > 0)
-            parts.Add($"{SessionStats.FormatTokens(queryTokens)} tokens");
+        if (tokenDelta > 0)
+            parts.Add($"{SessionStats.FormatTokens(tokenDelta)} tokens");
         if (parts.Count > 0)
         {
             var costText = string.Join(" | ", parts);
