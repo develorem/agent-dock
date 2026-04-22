@@ -277,7 +277,50 @@
                              MaxHeight="76"
                              MinHeight="28"
                              KeyDown="InputBox_KeyDown"
+                             PreviewKeyDown="InputBox_PreviewKeyDown"
+                             TextChanged="InputBox_TextChanged"
                              VerticalContentAlignment="Top" />
+                    <Popup x:Name="SlashCommandPopup"
+                           PlacementTarget="{Binding ElementName=InputBox}"
+                           Placement="Top"
+                           StaysOpen="False"
+                           AllowsTransparency="True"
+                           PopupAnimation="None"
+                           IsOpen="False">
+                        <Border Background="{DynamicResource ChatInputBackground}"
+                                BorderBrush="{DynamicResource ChatInputBorderBrush}"
+                                BorderThickness="1"
+                                MinWidth="440"
+                                MaxHeight="260">
+                            <ListBox x:Name="SlashCommandList"
+                                     BorderThickness="0"
+                                     Background="Transparent"
+                                     Foreground="{DynamicResource ChatInputForeground}"
+                                     FontFamily="Cascadia Code, Consolas, Courier New"
+                                     FontSize="11"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     PreviewMouseLeftButtonUp="SlashCommandList_PreviewMouseLeftButtonUp">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="2,1">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="180" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0"
+                                                       Text="{Binding Command}"
+                                                       FontWeight="Bold" />
+                                            <TextBlock Grid.Column="1"
+                                                       Text="{Binding Description}"
+                                                       Foreground="{DynamicResource ChatMutedForeground}"
+                                                       TextTrimming="CharacterEllipsis" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </Border>
+                    </Popup>
                 </DockPanel>
             </Border>
 

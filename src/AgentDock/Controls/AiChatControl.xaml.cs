@@ -262,6 +262,96 @@ public partial class AiChatControl : UserControl
         }
     }
 
+    // --- Slash Command Autocomplete ---
+
+    private void InputBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        var text = InputBox.Text;
+
+        // Only show popup while typing the command word (starts with /, no whitespace yet)
+        if (!text.StartsWith('/') || text.Any(char.IsWhiteSpace))
+        {
+            SlashCommandPopup.IsOpen = false;
+            return;
+        }
+
+        var matches = ClaudeSlashCommands.Filter(text);
+        if (matches.Count == 0)
+        {
+            SlashCommandPopup.IsOpen = false;
+            return;
+        }
+
+        SlashCommandList.ItemsSource = matches;
+        SlashCommandList.SelectedIndex = 0;
+        SlashCommandPopup.IsOpen = true;
+    }
+
+    private void InputBox_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (!SlashCommandPopup.IsOpen)
+            return;
+
+        switch (e.Key)
+        {
+            case Key.Down:
+                if (SlashCommandList.Items.Count > 0)
+                {
+                    SlashCommandList.SelectedIndex = Math.Min(
+                        SlashCommandList.SelectedIndex + 1,
+                        SlashCommandList.Items.Count - 1);
+                    SlashCommandList.ScrollIntoView(SlashCommandList.SelectedItem);
+                }
+                e.Handled = true;
+                break;
+
+            case Key.Up:
+                if (SlashCommandList.Items.Count > 0)
+                {
+                    SlashCommandList.SelectedIndex = Math.Max(SlashCommandList.SelectedIndex - 1, 0);
+                    SlashCommandList.ScrollIntoView(SlashCommandList.SelectedItem);
+                }
+                e.Handled = true;
+                break;
+
+            case Key.Enter:
+            case Key.Tab:
+                if (SlashCommandList.SelectedItem is ClaudeSlashCommand cmd)
+                {
+                    CompleteSlashCommand(cmd);
+                    e.Handled = true;
+                }
+                break;
+
+            case Key.Escape:
+                SlashCommandPopup.IsOpen = false;
+                e.Handled = true;
+                break;
+        }
+    }
+
+    private void SlashCommandList_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        // Only complete if the click landed on a ListBoxItem (not the empty area or scrollbar)
+        var dep = e.OriginalSource as DependencyObject;
+        while (dep != null && dep is not ListBoxItem)
+            dep = VisualTreeHelper.GetParent(dep);
+
+        if (dep is ListBoxItem && SlashCommandList.SelectedItem is ClaudeSlashCommand cmd)
+        {
+            CompleteSlashCommand(cmd);
+            e.Handled = true;
+        }
+    }
+
+    private void CompleteSlashCommand(ClaudeSlashCommand cmd)
+    {
+        InputBox.Text = cmd.Command + " ";
+        InputBox.CaretIndex = InputBox.Text.Length;
+        SlashCommandPopup.IsOpen = false;
+        InputBox.Focus();
+    }
+
     // --- Prompt Menu (> button) ---
 
     private void PromptMenu_Click(object sender, RoutedEventArgs e)
