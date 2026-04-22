@@ -40,6 +40,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<ProjectInfo, GitStatusControl> _projectGitControls = [];
     private readonly Dictionary<ProjectInfo, Grid> _projectTabIcons = [];
     private readonly Dictionary<ProjectInfo, DispatcherTimer> _tabIconTimers = [];
+    private readonly Dictionary<ProjectInfo, ClaudeSessionState> _previousTabStates = [];
     private readonly Dictionary<ProjectInfo, DockingManager> _projectDockingManagers = [];
     private readonly Dictionary<ProjectInfo, ProjectDescriptionControl> _projectDescriptionControls = [];
     private readonly Dictionary<ProjectInfo, TodoListControl> _projectTodoListControls = [];
@@ -1793,6 +1794,23 @@ public partial class MainWindow : Window
     {
         if (!_projectTabIcons.TryGetValue(project, out var statusGrid))
             return;
+
+        // Play sounds on state transitions
+        _previousTabStates.TryGetValue(project, out var prevState);
+        _previousTabStates[project] = state;
+
+        switch (state)
+        {
+            case ClaudeSessionState.Initializing:
+                SoundService.PlayDeviceConnect();
+                break;
+            case ClaudeSessionState.Idle when prevState is ClaudeSessionState.Working or ClaudeSessionState.WaitingForPermission:
+                SoundService.PlayMessageNudge();
+                break;
+            case ClaudeSessionState.Exited:
+                SoundService.PlayDeviceDisconnect();
+                break;
+        }
 
         var diamondIcon = (TextBlock)statusGrid.Children[0];
         var statusBadge = (TextBlock)statusGrid.Children[1];
