@@ -139,6 +139,9 @@ public partial class MainWindow : Window
             await CheckForAppUpdateAsync();
         };
 
+        // Start fetching Claude Code plan usage for the title bar indicator
+        Loaded += (_, _) => InitializeUsageIndicator();
+
         Log.Info("MainWindow constructor complete");
     }
 
@@ -1283,17 +1286,11 @@ public partial class MainWindow : Window
                 gitStatusControl.RefreshStatus();
         };
 
-        // Update AI Chat panel title with cumulative session stats, and update total cost
-        aiChatControl.SessionStatsChanged += stats =>
+        // Update AI Chat panel title when model is reported or when stats change
+        aiChatControl.SessionModelChanged += _ => UpdateAiChatTitle(project, aiChatControl);
+        aiChatControl.SessionStatsChanged += _ =>
         {
-            if (_projectDockingManagers.TryGetValue(project, out var dm))
-            {
-                var anchorable = dm.Layout.Descendents().OfType<LayoutAnchorable>()
-                    .FirstOrDefault(a => a.ContentId == AiChatId);
-                if (anchorable != null)
-                    anchorable.Title = $"AI Chat — ${stats.TotalCostUsd:F4} · {SessionStats.FormatTokens(stats.TotalTokens)} tokens";
-            }
-
+            UpdateAiChatTitle(project, aiChatControl);
             UpdateTotalCost();
         };
 
@@ -1649,6 +1646,57 @@ public partial class MainWindow : Window
         {
             TotalCostText.Text = "";
         }
+    }
+
+    private void UpdateAiChatTitle(ProjectInfo project, AiChatControl ctrl)
+    {
+        if (!_projectDockingManagers.TryGetValue(project, out var dm))
+            return;
+
+        var anchorable = dm.Layout.Descendents().OfType<LayoutAnchorable>()
+            .FirstOrDefault(a => a.ContentId == AiChatId);
+        if (anchorable == null)
+            return;
+
+        var modelLabel = FormatModelName(ctrl.Model);
+        var prefix = modelLabel ?? "AI Chat";
+
+        var stats = ctrl.Stats;
+        if (stats.TotalCostUsd > 0 || stats.TotalTokens > 0)
+            anchorable.Title = $"{prefix} — ${stats.TotalCostUsd:F4} · {SessionStats.FormatTokens(stats.TotalTokens)} tokens";
+        else
+            anchorable.Title = prefix;
+    }
+
+    /// <summary>
+    /// Pretty-prints a raw Claude model id (e.g. "claude-sonnet-4-5-20250929") as "Sonnet 4.5".
+    /// Returns null if <paramref name="model"/> is null/empty.
+    /// </summary>
+    private static string? FormatModelName(string? model)
+    {
+        if (string.IsNullOrWhiteSpace(model))
+            return null;
+
+        // Strip "claude-" prefix
+        var s = model.StartsWith("claude-", StringComparison.OrdinalIgnoreCase)
+            ? model["claude-".Length..]
+            : model;
+
+        // Drop trailing 8-digit date suffix (e.g. "-20250929")
+        var parts = s.Split('-');
+        if (parts.Length > 1 && parts[^1].Length == 8 && parts[^1].All(char.IsDigit))
+            parts = parts[..^1];
+
+        if (parts.Length == 0)
+            return model;
+
+        // Title-case the family (first segment); join version segments with dots.
+        var family = char.ToUpperInvariant(parts[0][0]) + parts[0][1..].ToLowerInvariant();
+        if (parts.Length == 1)
+            return family;
+
+        var version = string.Join('.', parts[1..]);
+        return $"{family} {version}";
     }
 
     private static void SetTabButtonActive(Button button, bool active)
@@ -2369,5 +2417,231 @@ public partial class MainWindow : Window
             if (item.Tag is string themeId)
                 item.IsChecked = ThemeManager.CurrentTheme.Id == themeId;
         }
+    }
+
+    // --- Claude Code plan usage (/status Usage) ---
+
+    private DispatcherTimer? _usageTimer;
+    private UsageService.FetchResult? _lastUsageResult;
+    private DateTime? _lastUsageFetchTime;
+
+    private void InitializeUsageIndicator()
+    {
+        // Initial fetch, then poll every 60s
+        _ = RefreshUsageAsync();
+
+        _usageTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
+        _usageTimer.Tick += async (_, _) => await RefreshUsageAsync();
+        _usageTimer.Start();
+
+        Closed += (_, _) => _usageTimer?.Stop();
+    }
+
+    private async Task RefreshUsageAsync()
+    {
+        var result = await UsageService.FetchAsync();
+        _lastUsageResult = result;
+        _lastUsageFetchTime = DateTime.Now;
+        UpdateUsageTitleText();
+        if (UsagePopup.IsOpen)
+            RenderUsageDetails();
+    }
+
+    private void UpdateUsageTitleText()
+    {
+        var result = _lastUsageResult;
+        if (result == null)
+        {
+            UsageText.Text = "Session: —";
+            return;
+        }
+
+        UsageText.Text = result.Status switch
+        {
+            UsageService.FetchStatus.AuthMissing => "Session: sign in to Claude",
+            UsageService.FetchStatus.AuthExpired => "Session: auth expired",
+            UsageService.FetchStatus.NetworkError => "Session: offline",
+            UsageService.FetchStatus.ServerError => "Session: error",
+            UsageService.FetchStatus.Success => FormatSessionHeader(result.Summary),
+            _ => "Session: —",
+        };
+    }
+
+    private static string FormatSessionHeader(UsageSummary? summary)
+    {
+        var fh = summary?.FiveHour;
+        if (fh?.Utilization == null || fh.ResetsAt == null)
+            return "Session not started";
+
+        var pct = Math.Round(fh.Utilization.Value);
+        var reset = FormatTimeUntilReset(fh.ResetsAt.Value);
+        return $"5h: {pct:0}% · resets in {reset}";
+    }
+
+    private static string FormatTimeUntilReset(DateTimeOffset resetsAt)
+    {
+        var delta = resetsAt - DateTimeOffset.Now;
+        if (delta <= TimeSpan.Zero)
+            return "now";
+        if (delta.TotalDays >= 1)
+            return $"{(int)delta.TotalDays}d {delta.Hours}h";
+        if (delta.TotalHours >= 1)
+            return $"{(int)delta.TotalHours}h {delta.Minutes}m";
+        return $"{Math.Max(1, (int)delta.TotalMinutes)}m";
+    }
+
+    private async void UsageButton_Click(object sender, RoutedEventArgs e)
+    {
+        // Show popup immediately with cached data, then refresh in background.
+        // RefreshUsageAsync re-renders the popup when it completes.
+        RenderUsageDetails();
+        UsagePopup.IsOpen = true;
+        await RefreshUsageAsync();
+    }
+
+    private async void UsageRefresh_Click(object sender, RoutedEventArgs e)
+    {
+        UsageRefreshButton.IsEnabled = false;
+        UsageRefreshButton.Content = "Refreshing…";
+        try
+        {
+            await RefreshUsageAsync();
+        }
+        finally
+        {
+            UsageRefreshButton.IsEnabled = true;
+            UsageRefreshButton.Content = "Refresh";
+        }
+    }
+
+    private void RenderUsageDetails()
+    {
+        UsageDetailPanel.Children.Clear();
+
+        var result = _lastUsageResult;
+        if (result == null)
+        {
+            UsageDetailPanel.Children.Add(new TextBlock
+            {
+                Text = "Loading…",
+                FontSize = 11,
+                Foreground = (Brush)FindResource("TitleBarForeground"),
+                Opacity = 0.7,
+            });
+            UsageFooterText.Text = "";
+            return;
+        }
+
+        if (result.Status != UsageService.FetchStatus.Success || result.Summary == null)
+        {
+            var msg = result.Status switch
+            {
+                UsageService.FetchStatus.AuthMissing => "Claude Code credentials not found. Sign in via Claude Code first.",
+                UsageService.FetchStatus.AuthExpired => "OAuth token expired. Open Claude Code to refresh sign-in.",
+                UsageService.FetchStatus.NetworkError => "Could not reach api.anthropic.com. Check your connection.",
+                _ => $"Could not fetch usage ({result.ErrorMessage})",
+            };
+            UsageDetailPanel.Children.Add(new TextBlock
+            {
+                Text = msg,
+                FontSize = 11,
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = (Brush)FindResource("TitleBarForeground"),
+                Opacity = 0.7,
+            });
+            UsageFooterText.Text = _lastUsageFetchTime is DateTime t
+                ? $"Last attempt: {t:HH:mm:ss}"
+                : "";
+            return;
+        }
+
+        var s = result.Summary;
+        AddUsageRow("5-hour session", s.FiveHour, isPrimary: true);
+        AddUsageRow("7-day weekly", s.SevenDay);
+
+        // Per-model breakdown (show only if populated)
+        if (s.SevenDayOpus?.Utilization != null)
+            AddUsageRow("7-day Opus", s.SevenDayOpus);
+        if (s.SevenDaySonnet?.Utilization != null)
+            AddUsageRow("7-day Sonnet", s.SevenDaySonnet);
+
+        // Extra usage (if on)
+        if (s.ExtraUsage?.IsEnabled == true && (s.ExtraUsage.UsedCredits ?? 0) > 0)
+        {
+            var currency = s.ExtraUsage.Currency ?? "";
+            var credits = s.ExtraUsage.UsedCredits ?? 0;
+            UsageDetailPanel.Children.Add(new TextBlock
+            {
+                Text = $"Extra usage: {credits:0} {currency} credits used",
+                FontSize = 11,
+                Margin = new Thickness(0, 8, 0, 0),
+                Foreground = (Brush)FindResource("TitleBarForeground"),
+                Opacity = 0.7,
+            });
+        }
+
+        UsageFooterText.Text = _lastUsageFetchTime is DateTime time
+            ? $"Last updated: {time:HH:mm:ss}"
+            : "";
+    }
+
+    private void AddUsageRow(string label, UsageWindow? window, bool isPrimary = false)
+    {
+        var container = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
+
+        var header = new Grid();
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        var labelBlock = new TextBlock
+        {
+            Text = label,
+            FontSize = isPrimary ? 12 : 11,
+            FontWeight = isPrimary ? FontWeights.SemiBold : FontWeights.Normal,
+            Foreground = (Brush)FindResource("TitleBarForeground"),
+        };
+        Grid.SetColumn(labelBlock, 0);
+        header.Children.Add(labelBlock);
+
+        var resetText = window?.ResetsAt != null
+            ? $"resets in {FormatTimeUntilReset(window.ResetsAt.Value)}"
+            : "";
+        var resetBlock = new TextBlock
+        {
+            Text = resetText,
+            FontSize = 10,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = (Brush)FindResource("TitleBarForeground"),
+            Opacity = 0.6,
+        };
+        Grid.SetColumn(resetBlock, 1);
+        header.Children.Add(resetBlock);
+
+        container.Children.Add(header);
+
+        // Progress bar
+        var pct = window?.Utilization ?? 0;
+        var bar = new ProgressBar
+        {
+            Minimum = 0,
+            Maximum = 100,
+            Value = Math.Min(pct, 100),
+            Height = 6,
+            Margin = new Thickness(0, 3, 0, 0),
+        };
+        container.Children.Add(bar);
+
+        var pctBlock = new TextBlock
+        {
+            Text = window?.Utilization != null ? $"{pct:0}%" : "—",
+            FontSize = 10,
+            Margin = new Thickness(0, 2, 0, 0),
+            Foreground = (Brush)FindResource("TitleBarForeground"),
+            Opacity = 0.7,
+        };
+        container.Children.Add(pctBlock);
+
+        UsageDetailPanel.Children.Add(container);
     }
 }
