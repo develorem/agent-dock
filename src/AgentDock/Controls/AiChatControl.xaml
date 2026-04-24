@@ -262,24 +262,6 @@
                             Style="{StaticResource ChatButtonStyle}"
                             Width="60" Height="28"
                             Margin="6,0,0,0" />
-                    <TextBox x:Name="InputBox"
-                             FontFamily="Cascadia Code, Consolas, Courier New"
-                             FontSize="12"
-                             Foreground="{DynamicResource ChatInputForeground}"
-                             Background="{DynamicResource ChatInputBackground}"
-                             CaretBrush="{DynamicResource ChatInputForeground}"
-                             BorderBrush="{DynamicResource ChatInputBorderBrush}"
-                             BorderThickness="1"
-                             Padding="6,4"
-                             AcceptsReturn="True"
-                             TextWrapping="Wrap"
-                             VerticalScrollBarVisibility="Auto"
-                             MaxHeight="76"
-                             MinHeight="28"
-                             KeyDown="InputBox_KeyDown"
-                             PreviewKeyDown="InputBox_PreviewKeyDown"
-                             TextChanged="InputBox_TextChanged"
-                             VerticalContentAlignment="Top" />
                     <Popup x:Name="SlashCommandPopup"
                            PlacementTarget="{Binding ElementName=InputBox}"
                            Placement="Top"
@@ -321,6 +303,24 @@
                             </ListBox>
                         </Border>
                     </Popup>
+                    <TextBox x:Name="InputBox"
+                             FontFamily="Cascadia Code, Consolas, Courier New"
+                             FontSize="12"
+                             Foreground="{DynamicResource ChatInputForeground}"
+                             Background="{DynamicResource ChatInputBackground}"
+                             CaretBrush="{DynamicResource ChatInputForeground}"
+                             BorderBrush="{DynamicResource ChatInputBorderBrush}"
+                             BorderThickness="1"
+                             Padding="6,4"
+                             AcceptsReturn="True"
+                             TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto"
+                             MaxHeight="76"
+                             MinHeight="28"
+                             KeyDown="InputBox_KeyDown"
+                             PreviewKeyDown="InputBox_PreviewKeyDown"
+                             TextChanged="InputBox_TextChanged"
+                             VerticalContentAlignment="Top" />
                 </DockPanel>
             </Border>
 

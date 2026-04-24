@@ -59,9 +59,19 @@ public partial class AiChatControl : UserControl
     public event Action<SessionStats>? SessionStatsChanged;
 
     /// <summary>
+    /// Raised when the session init arrives and the model is known.
+    /// </summary>
+    public event Action<string>? SessionModelChanged;
+
+    /// <summary>
     /// Cumulative stats for the current session.
     /// </summary>
     public SessionStats Stats { get; } = new();
+
+    /// <summary>
+    /// Current model reported by the Claude Code session (e.g. "claude-sonnet-4-5"), or null if unknown.
+    /// </summary>
+    public string? Model => _session?.Model;
 
     /// <summary>Shortcut for backwards compat.</summary>
     public double SessionCostUsd => Stats.TotalCostUsd;
@@ -217,6 +227,10 @@ public partial class AiChatControl : UserControl
         AddSystemMessage("Session ready — type a message to begin");
         if (_session?.IsDangerousMode == true)
             AddSystemMessage("WARNING: Dangerous mode — all permissions auto-approved", isWarning: true);
+
+        // Skip the synthetic "(pending first message)" init fired before the subprocess starts
+        if (!string.IsNullOrEmpty(init.Model) && !init.Model.StartsWith("("))
+            SessionModelChanged?.Invoke(init.Model);
     }
 
     // --- Sending Messages ---
