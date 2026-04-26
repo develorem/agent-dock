@@ -14,6 +14,12 @@ public class TodoItem
 public class ProjectSettings
 {
     /// <summary>
+    /// Optional display name override for the project. When null or empty, the folder
+    /// name is used as the display name in tabs, panel titles, and the window title.
+    /// </summary>
+    public string? Name { get; set; }
+
+    /// <summary>
     /// The project icon. Can be:
     /// - A built-in icon name (e.g. "folder", "code", "python", "csharp")
     /// - A file path relative to the project root (e.g. "assets/logo.png")
@@ -45,4 +51,21 @@ public class ProjectSettings
     /// Null means no items have been created yet.
     /// </summary>
     public List<TodoItem>? TodoItems { get; set; }
+
+    /// <summary>
+    /// Play the Windows "device connect" sound when a session starts.
+    /// Defaults to true so existing users keep current behaviour.
+    /// </summary>
+    public bool SoundOnSessionStart { get; set; } = true;
+
+    /// <summary>
+    /// Play the Windows "message nudge" sound when the agent finishes a turn
+    /// and is waiting for the user's input.
+    /// </summary>
+    public bool SoundOnAgentWaiting { get; set; } = true;
+
+    /// <summary>
+    /// Play the Windows "device disconnect" sound when a session ends.
+    /// </summary>
+    public bool SoundOnSessionEnd { get; set; } = true;
 }

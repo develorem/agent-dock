@@ -59,9 +59,19 @@ public partial class AiChatControl : UserControl
     public event Action<SessionStats>? SessionStatsChanged;
 
     /// <summary>
+    /// Raised when the session init arrives and the model is known.
+    /// </summary>
+    public event Action<string>? SessionModelChanged;
+
+    /// <summary>
     /// Cumulative stats for the current session.
     /// </summary>
     public SessionStats Stats { get; } = new();
+
+    /// <summary>
+    /// Current model reported by the Claude Code session (e.g. "claude-sonnet-4-5"), or null if unknown.
+    /// </summary>
+    public string? Model => _session?.Model;
 
     /// <summary>Shortcut for backwards compat.</summary>
     public double SessionCostUsd => Stats.TotalCostUsd;
@@ -217,6 +227,10 @@ public partial class AiChatControl : UserControl
         AddSystemMessage("Session ready — type a message to begin");
         if (_session?.IsDangerousMode == true)
             AddSystemMessage("WARNING: Dangerous mode — all permissions auto-approved", isWarning: true);
+
+        // Skip the synthetic "(pending first message)" init fired before the subprocess starts
+        if (!string.IsNullOrEmpty(init.Model) && !init.Model.StartsWith("("))
+            SessionModelChanged?.Invoke(init.Model);
     }
 
     // --- Sending Messages ---
@@ -260,6 +274,96 @@ public partial class AiChatControl : UserControl
             e.Handled = true;
             SendCurrentMessage();
         }
+    }
+
+    // --- Slash Command Autocomplete ---
+
+    private void InputBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        var text = InputBox.Text;
+
+        // Only show popup while typing the command word (starts with /, no whitespace yet)
+        if (!text.StartsWith('/') || text.Any(char.IsWhiteSpace))
+        {
+            SlashCommandPopup.IsOpen = false;
+            return;
+        }
+
+        var matches = ClaudeSlashCommands.Filter(text);
+        if (matches.Count == 0)
+        {
+            SlashCommandPopup.IsOpen = false;
+            return;
+        }
+
+        SlashCommandList.ItemsSource = matches;
+        SlashCommandList.SelectedIndex = 0;
+        SlashCommandPopup.IsOpen = true;
+    }
+
+    private void InputBox_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (!SlashCommandPopup.IsOpen)
+            return;
+
+        switch (e.Key)
+        {
+            case Key.Down:
+                if (SlashCommandList.Items.Count > 0)
+                {
+                    SlashCommandList.SelectedIndex = Math.Min(
+                        SlashCommandList.SelectedIndex + 1,
+                        SlashCommandList.Items.Count - 1);
+                    SlashCommandList.ScrollIntoView(SlashCommandList.SelectedItem);
+                }
+                e.Handled = true;
+                break;
+
+            case Key.Up:
+                if (SlashCommandList.Items.Count > 0)
+                {
+                    SlashCommandList.SelectedIndex = Math.Max(SlashCommandList.SelectedIndex - 1, 0);
+                    SlashCommandList.ScrollIntoView(SlashCommandList.SelectedItem);
+                }
+                e.Handled = true;
+                break;
+
+            case Key.Enter:
+            case Key.Tab:
+                if (SlashCommandList.SelectedItem is ClaudeSlashCommand cmd)
+                {
+                    CompleteSlashCommand(cmd);
+                    e.Handled = true;
+                }
+                break;
+
+            case Key.Escape:
+                SlashCommandPopup.IsOpen = false;
+                e.Handled = true;
+                break;
+        }
+    }
+
+    private void SlashCommandList_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        // Only complete if the click landed on a ListBoxItem (not the empty area or scrollbar)
+        var dep = e.OriginalSource as DependencyObject;
+        while (dep != null && dep is not ListBoxItem)
+            dep = VisualTreeHelper.GetParent(dep);
+
+        if (dep is ListBoxItem && SlashCommandList.SelectedItem is ClaudeSlashCommand cmd)
+        {
+            CompleteSlashCommand(cmd);
+            e.Handled = true;
+        }
+    }
+
+    private void CompleteSlashCommand(ClaudeSlashCommand cmd)
+    {
+        InputBox.Text = cmd.Command + " ";
+        InputBox.CaretIndex = InputBox.Text.Length;
+        SlashCommandPopup.IsOpen = false;
+        InputBox.Focus();
     }
 
     // --- Prompt Menu (> button) ---
@@ -567,19 +671,17 @@ public partial class AiChatControl : UserControl
             AddSystemMessage($"Error: {string.Join("; ", result.Errors)}", isWarning: true);
         }
 
-        // Accumulate session stats
-        Stats.Add(result);
+        // Update session stats (values from Claude Code are cumulative)
+        var (costDelta, tokenDelta) = Stats.Update(result);
 
-        // Build per-interaction summary line
+        // Build per-interaction summary line using deltas
         var parts = new List<string>();
-        if (result.TotalCostUsd.HasValue)
-            parts.Add($"${result.TotalCostUsd:F4}");
+        if (costDelta > 0)
+            parts.Add($"${costDelta:F4}");
         if (result.DurationMs.HasValue)
             parts.Add($"{result.DurationMs / 1000.0:F1}s");
-        var queryTokens = result.InputTokens + result.OutputTokens
-                        + result.CacheReadInputTokens + result.CacheCreationInputTokens;
-        if (queryTokens > 0)
-            parts.Add($"{SessionStats.FormatTokens(queryTokens)} tokens");
+        if (tokenDelta > 0)
+            parts.Add($"{SessionStats.FormatTokens(tokenDelta)} tokens");
         if (parts.Count > 0)
         {
             var costText = string.Join(" | ", parts);
@@ -1128,7 +1230,6 @@ public partial class AiChatControl : UserControl
         // Create the markdown rendered view
         var markdownViewer = new MarkdownScrollViewer
         {
-            Markdown = fullText,
             Background = Brushes.Transparent,
             Foreground = ThemeManager.GetBrush("ChatTextForeground"),
             MarkdownStyle = (Style)FindResource("ChatMarkdownStyle"),
@@ -1136,6 +1237,7 @@ public partial class AiChatControl : UserControl
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             Padding = new Thickness(0)
         };
+        MarkdownHelper.RenderTo(markdownViewer, fullText);
 
         var isRendered = true;
         contentBlock.Visibility = Visibility.Collapsed;

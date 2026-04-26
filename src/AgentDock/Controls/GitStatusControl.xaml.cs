@@ -25,6 +25,7 @@ public partial class GitStatusControl : UserControl
     private FileSystemWatcher? _watcher;
     private DispatcherTimer? _debounceTimer;
     private List<string> _allBranches = [];
+    private bool _isGitRepository;
 
     public GitStatusControl()
     {
@@ -35,8 +36,9 @@ public partial class GitStatusControl : UserControl
     public void LoadRepository(string projectPath)
     {
         _gitService = new GitService(projectPath);
+        _isGitRepository = _gitService.IsGitRepository();
 
-        if (!_gitService.IsGitRepository())
+        if (!_isGitRepository)
         {
             NotGitMessage.Visibility = Visibility.Visible;
             StatusPanel.Visibility = Visibility.Collapsed;
@@ -294,7 +296,7 @@ public partial class GitStatusControl : UserControl
 
     public void RefreshStatus()
     {
-        if (_gitService == null)
+        if (_gitService == null || !_isGitRepository)
             return;
 
         RefreshBranch();

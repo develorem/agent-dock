@@ -40,6 +40,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<ProjectInfo, GitStatusControl> _projectGitControls = [];
     private readonly Dictionary<ProjectInfo, Grid> _projectTabIcons = [];
     private readonly Dictionary<ProjectInfo, DispatcherTimer> _tabIconTimers = [];
+    private readonly Dictionary<ProjectInfo, ClaudeSessionState> _previousTabStates = [];
     private readonly Dictionary<ProjectInfo, DockingManager> _projectDockingManagers = [];
     private readonly Dictionary<ProjectInfo, ProjectDescriptionControl> _projectDescriptionControls = [];
     private readonly Dictionary<ProjectInfo, TodoListControl> _projectTodoListControls = [];
@@ -137,6 +138,9 @@ public partial class MainWindow : Window
             await RunStartupPrerequisiteChecks();
             await CheckForAppUpdateAsync();
         };
+
+        // Start fetching Claude Code plan usage for the title bar indicator
+        Loaded += (_, _) => InitializeUsageIndicator();
 
         Log.Info("MainWindow constructor complete");
     }
@@ -695,6 +699,7 @@ public partial class MainWindow : Window
         }
 
         var project = new ProjectInfo { FolderPath = folderPath };
+        project.CustomName = ProjectSettingsManager.Load(folderPath).Name;
         _projects.Add(project);
         Log.Info($"AddProjectFromPath: created ProjectInfo for '{project.FolderName}'");
 
@@ -942,7 +947,7 @@ public partial class MainWindow : Window
                     iconElement,
                     new TextBlock
                     {
-                        Text = project.FolderName,
+                        Text = project.DisplayName,
                         FontSize = 12,
                         VerticalAlignment = VerticalAlignment.Center,
                         Foreground = ThemeManager.GetBrush("TabButtonForeground")
@@ -1229,6 +1234,9 @@ public partial class MainWindow : Window
         {
             var settings = ProjectSettingsManager.Load(project.FolderPath);
 
+            // Update in-memory display name and refresh every UI surface that shows it
+            project.CustomName = settings.Name;
+
             if (_projectTabButtons.TryGetValue(project, out var tabBtn) &&
                 tabBtn.Content is StackPanel sp && sp.Children.Count > 0)
             {
@@ -1236,7 +1244,24 @@ public partial class MainWindow : Window
                 sp.Children.Insert(0, CreateIconElement(
                     settings.Icon ?? "folder", project.FolderPath,
                     settings.IconColor));
+
+                // TextBlock is at index 1 (between icon at 0 and status grid at 2)
+                if (sp.Children.Count > 1 && sp.Children[1] is TextBlock tabText)
+                    tabText.Text = project.DisplayName;
             }
+
+            // Update file explorer panel title in the docking layout
+            if (_projectDockingManagers.TryGetValue(project, out var dm))
+            {
+                var fileExplorerPanel = dm.Layout.Descendents().OfType<LayoutAnchorable>()
+                    .FirstOrDefault(a => a.ContentId == FileExplorerId);
+                if (fileExplorerPanel != null)
+                    fileExplorerPanel.Title = $"{project.DisplayName} — File Explorer";
+            }
+
+            // If this is the active project, refresh the window title bar
+            if (project == _activeProject)
+                UpdateTitleBar();
 
             descriptionControl.SetDescription(settings.Description);
         }
@@ -1247,7 +1272,16 @@ public partial class MainWindow : Window
             var result = ProjectSettingsDialog.Show(this, project.FolderPath);
             if (result != null)
             {
-                ProjectSettingsManager.Save(project.FolderPath, result);
+                ProjectSettingsManager.Update(project.FolderPath, s =>
+                {
+                    s.Name = result.Name;
+                    s.Icon = result.Icon;
+                    s.IconColor = result.IconColor;
+                    s.Description = result.Description;
+                    s.SoundOnSessionStart = result.SoundOnSessionStart;
+                    s.SoundOnAgentWaiting = result.SoundOnAgentWaiting;
+                    s.SoundOnSessionEnd = result.SoundOnSessionEnd;
+                });
                 OnProjectSettingsChanged();
             }
         };
@@ -1282,18 +1316,16 @@ public partial class MainWindow : Window
                 gitStatusControl.RefreshStatus();
         };
 
-        // Update AI Chat panel title with cumulative session stats, and update total cost
-        aiChatControl.SessionStatsChanged += stats =>
+        // Update AI Chat panel title when model is reported or when stats change
+        aiChatControl.SessionModelChanged += _ => UpdateAiChatTitle(project, aiChatControl);
+        aiChatControl.SessionStatsChanged += _ =>
         {
-            if (_projectDockingManagers.TryGetValue(project, out var dm))
-            {
-                var anchorable = dm.Layout.Descendents().OfType<LayoutAnchorable>()
-                    .FirstOrDefault(a => a.ContentId == AiChatId);
-                if (anchorable != null)
-                    anchorable.Title = $"AI Chat — ${stats.TotalCostUsd:F4} · {SessionStats.FormatTokens(stats.TotalTokens)} tokens";
-            }
-
+            UpdateAiChatTitle(project, aiChatControl);
             UpdateTotalCost();
+            // A real session round-trip consumed plan usage — the title-bar
+            // indicator's cached /api/oauth/usage data is now stale. The timer
+            // will pick this up on its next tick.
+            _usageDirty = true;
         };
 
         // Map ContentId → control for layout serialization callback
@@ -1310,7 +1342,7 @@ public partial class MainWindow : Window
         // Title map for restored anchorables
         var titleMap = new Dictionary<string, string>
         {
-            [FileExplorerId] = $"{project.FolderName} — File Explorer",
+            [FileExplorerId] = $"{project.DisplayName} — File Explorer",
             [GitStatusId] = "Git Status",
             [FilePreviewId] = "File Preview",
             [AiChatId] = "AI Chat",
@@ -1465,7 +1497,7 @@ public partial class MainWindow : Window
         // --- Right column: File Explorer (top) + Git Status (bottom) ---
         var fileExplorer = new LayoutAnchorable
         {
-            Title = $"{project.FolderName} — File Explorer",
+            Title = $"{project.DisplayName} — File Explorer",
             ContentId = FileExplorerId,
             CanClose = false,
             CanHide = false,
@@ -1583,6 +1615,9 @@ public partial class MainWindow : Window
         if (_projectTabButtons.TryGetValue(project, out var newButton))
             SetTabButtonActive(newButton, true);
 
+        // User is now viewing this tab — clear any attention flash on its diamond.
+        StopAttentionPulseIfAny(project);
+
         // Show the project's content
         if (_projectContents.TryGetValue(project, out var content))
         {
@@ -1616,13 +1651,13 @@ public partial class MainWindow : Window
 
         if (workspaceName != null)
         {
-            Title = $"Agent Dock — {workspaceName}{dirtyMarker} — {_activeProject.FolderName}";
-            TitleBarText.Text = $"{workspaceName}{dirtyMarker} — {_activeProject.FolderName}";
+            Title = $"Agent Dock — {workspaceName}{dirtyMarker} — {_activeProject.DisplayName}";
+            TitleBarText.Text = $"{workspaceName}{dirtyMarker} — {_activeProject.DisplayName}";
         }
         else
         {
-            Title = $"Agent Dock — {_activeProject.FolderName}{dirtyMarker}";
-            TitleBarText.Text = $"{_activeProject.FolderName}{dirtyMarker}";
+            Title = $"Agent Dock — {_activeProject.DisplayName}{dirtyMarker}";
+            TitleBarText.Text = $"{_activeProject.DisplayName}{dirtyMarker}";
         }
     }
 
@@ -1648,6 +1683,57 @@ public partial class MainWindow : Window
         {
             TotalCostText.Text = "";
         }
+    }
+
+    private void UpdateAiChatTitle(ProjectInfo project, AiChatControl ctrl)
+    {
+        if (!_projectDockingManagers.TryGetValue(project, out var dm))
+            return;
+
+        var anchorable = dm.Layout.Descendents().OfType<LayoutAnchorable>()
+            .FirstOrDefault(a => a.ContentId == AiChatId);
+        if (anchorable == null)
+            return;
+
+        var modelLabel = FormatModelName(ctrl.Model);
+        var prefix = modelLabel ?? "AI Chat";
+
+        var stats = ctrl.Stats;
+        if (stats.TotalCostUsd > 0 || stats.TotalTokens > 0)
+            anchorable.Title = $"{prefix} — ${stats.TotalCostUsd:F4} · {SessionStats.FormatTokens(stats.TotalTokens)} tokens";
+        else
+            anchorable.Title = prefix;
+    }
+
+    /// <summary>
+    /// Pretty-prints a raw Claude model id (e.g. "claude-sonnet-4-5-20250929") as "Sonnet 4.5".
+    /// Returns null if <paramref name="model"/> is null/empty.
+    /// </summary>
+    private static string? FormatModelName(string? model)
+    {
+        if (string.IsNullOrWhiteSpace(model))
+            return null;
+
+        // Strip "claude-" prefix
+        var s = model.StartsWith("claude-", StringComparison.OrdinalIgnoreCase)
+            ? model["claude-".Length..]
+            : model;
+
+        // Drop trailing 8-digit date suffix (e.g. "-20250929")
+        var parts = s.Split('-');
+        if (parts.Length > 1 && parts[^1].Length == 8 && parts[^1].All(char.IsDigit))
+            parts = parts[..^1];
+
+        if (parts.Length == 0)
+            return model;
+
+        // Title-case the family (first segment); join version segments with dots.
+        var family = char.ToUpperInvariant(parts[0][0]) + parts[0][1..].ToLowerInvariant();
+        if (parts.Length == 1)
+            return family;
+
+        var version = string.Join('.', parts[1..]);
+        return $"{family} {version}";
     }
 
     private static void SetTabButtonActive(Button button, bool active)
@@ -1794,6 +1880,26 @@ public partial class MainWindow : Window
         if (!_projectTabIcons.TryGetValue(project, out var statusGrid))
             return;
 
+        // Play sounds on state transitions (gated by per-project settings)
+        _previousTabStates.TryGetValue(project, out var prevState);
+        _previousTabStates[project] = state;
+
+        var soundSettings = ProjectSettingsManager.Load(project.FolderPath);
+        switch (state)
+        {
+            case ClaudeSessionState.Initializing when soundSettings.SoundOnSessionStart:
+                SoundService.PlayDeviceConnect();
+                break;
+            case ClaudeSessionState.Idle
+                when soundSettings.SoundOnAgentWaiting
+                     && prevState is ClaudeSessionState.Working or ClaudeSessionState.WaitingForPermission:
+                SoundService.PlayMessageNudge();
+                break;
+            case ClaudeSessionState.Exited when soundSettings.SoundOnSessionEnd:
+                SoundService.PlayDeviceDisconnect();
+                break;
+        }
+
         var diamondIcon = (TextBlock)statusGrid.Children[0];
         var statusBadge = (TextBlock)statusGrid.Children[1];
 
@@ -1825,6 +1931,14 @@ public partial class MainWindow : Window
             case ClaudeSessionState.Idle:
                 diamondIcon.Text = "\u25C6"; // ◆
                 diamondIcon.Foreground = ThemeManager.GetBrush("TabIconIdleForeground");
+                // Flash the diamond when a background tab just finished a turn so the
+                // user notices there's a completion waiting. Stops as soon as the tab
+                // is switched to (see SwitchToProject).
+                if (project != _activeProject &&
+                    prevState is ClaudeSessionState.Working or ClaudeSessionState.WaitingForPermission)
+                {
+                    StartAttentionPulse(project, diamondIcon);
+                }
                 break;
 
             case ClaudeSessionState.Working:
@@ -1860,6 +1974,48 @@ public partial class MainWindow : Window
         };
         timer.Start();
         _tabIconTimers[project] = timer;
+    }
+
+    /// <summary>
+    /// Subtle flash on the Idle (green) diamond so the user notices a completion
+    /// on a background tab. Slower and shallower than the Working pulse.
+    /// Cleared by <see cref="SwitchToProject"/> once the user views the tab.
+    /// </summary>
+    private void StartAttentionPulse(ProjectInfo project, TextBlock diamondIcon)
+    {
+        var bright = true;
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
+        timer.Tick += (_, _) =>
+        {
+            bright = !bright;
+            diamondIcon.Opacity = bright ? 1.0 : 0.55;
+        };
+        timer.Start();
+        _tabIconTimers[project] = timer;
+    }
+
+    /// <summary>
+    /// Stops the attention flash on an Idle tab when the user has now viewed it.
+    /// No-op if the tab is flashing for a different reason (e.g. Working pulse).
+    /// </summary>
+    private void StopAttentionPulseIfAny(ProjectInfo project)
+    {
+        if (!_projectChatControls.TryGetValue(project, out var chat) ||
+            chat.CurrentState != ClaudeSessionState.Idle)
+            return;
+
+        if (!_tabIconTimers.TryGetValue(project, out var timer))
+            return;
+
+        timer.Stop();
+        _tabIconTimers.Remove(project);
+
+        if (_projectTabIcons.TryGetValue(project, out var grid) &&
+            grid.Children.Count > 0 &&
+            grid.Children[0] is TextBlock diamond)
+        {
+            diamond.Opacity = 1.0;
+        }
     }
 
     // --- Workspace Save/Load ---
@@ -2351,5 +2507,282 @@ public partial class MainWindow : Window
             if (item.Tag is string themeId)
                 item.IsChecked = ThemeManager.CurrentTheme.Id == themeId;
         }
+    }
+
+    // --- Claude Code plan usage (/status Usage) ---
+
+    private DispatcherTimer? _usageTimer;
+    private UsageService.FetchResult? _lastUsageResult;
+    private DateTime? _lastUsageFetchTime;
+
+    // Last successful fetch kept separately so the popup can fall back to cached
+    // data when the most recent fetch failed (e.g. 429, offline).
+    private UsageSummary? _lastSuccessfulUsage;
+    private DateTime? _lastSuccessfulFetchTime;
+
+    /// <summary>
+    /// True when a session has consumed API usage since the last fetch, meaning
+    /// the /api/oauth/usage response would be stale. When false, the timer tick
+    /// just re-renders the countdown text without hitting the endpoint —
+    /// avoiding 429s while AgentDock is idle.
+    /// </summary>
+    private bool _usageDirty;
+
+    private void InitializeUsageIndicator()
+    {
+        // Initial fetch primes the indicator; subsequent fetches are demand-driven.
+        _ = RefreshUsageAsync();
+
+        // Tick at 90s. On each tick: fetch only if a session has been active
+        // since the last fetch; otherwise just re-render the countdown text.
+        _usageTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(90) };
+        _usageTimer.Tick += async (_, _) =>
+        {
+            if (_usageDirty)
+                await RefreshUsageAsync();
+            else
+                UpdateUsageTitleText();
+        };
+        _usageTimer.Start();
+
+        Closed += (_, _) => _usageTimer?.Stop();
+    }
+
+    private async Task RefreshUsageAsync()
+    {
+        // Clear dirty on attempt (not success). If we got 429/error, don't retry
+        // immediately — wait for the next real session message to mark it dirty again.
+        _usageDirty = false;
+
+        var result = await UsageService.FetchAsync();
+        _lastUsageResult = result;
+        _lastUsageFetchTime = DateTime.Now;
+
+        if (result.Status == UsageService.FetchStatus.Success && result.Summary != null)
+        {
+            _lastSuccessfulUsage = result.Summary;
+            _lastSuccessfulFetchTime = _lastUsageFetchTime;
+        }
+
+        UpdateUsageTitleText();
+        if (UsagePopup.IsOpen)
+            RenderUsageDetails();
+    }
+
+    private void UpdateUsageTitleText()
+    {
+        var result = _lastUsageResult;
+        if (result == null)
+        {
+            UsageText.Text = "Session: —";
+            return;
+        }
+
+        UsageText.Text = result.Status switch
+        {
+            UsageService.FetchStatus.AuthMissing => "Session: sign in to Claude",
+            UsageService.FetchStatus.AuthExpired => "Session: auth expired",
+            UsageService.FetchStatus.NetworkError => "Session: offline",
+            UsageService.FetchStatus.ServerError => "Session: error",
+            UsageService.FetchStatus.Success => FormatSessionHeader(result.Summary),
+            _ => "Session: —",
+        };
+    }
+
+    private static string FormatSessionHeader(UsageSummary? summary)
+    {
+        var fh = summary?.FiveHour;
+        if (fh?.Utilization == null || fh.ResetsAt == null)
+            return "Session not started";
+
+        var pct = Math.Round(fh.Utilization.Value);
+        var reset = FormatTimeUntilReset(fh.ResetsAt.Value);
+        return $"5h: {pct:0}% · resets in {reset}";
+    }
+
+    private static string FormatTimeUntilReset(DateTimeOffset resetsAt)
+    {
+        var delta = resetsAt - DateTimeOffset.Now;
+        if (delta <= TimeSpan.Zero)
+            return "now";
+        if (delta.TotalDays >= 1)
+            return $"{(int)delta.TotalDays}d {delta.Hours}h";
+        if (delta.TotalHours >= 1)
+            return $"{(int)delta.TotalHours}h {delta.Minutes}m";
+        return $"{Math.Max(1, (int)delta.TotalMinutes)}m";
+    }
+
+    private async void UsageButton_Click(object sender, RoutedEventArgs e)
+    {
+        // Show popup immediately with cached data, then refresh in background.
+        // RefreshUsageAsync re-renders the popup when it completes.
+        RenderUsageDetails();
+        UsagePopup.IsOpen = true;
+        await RefreshUsageAsync();
+    }
+
+    private async void UsageRefresh_Click(object sender, RoutedEventArgs e)
+    {
+        UsageRefreshButton.IsEnabled = false;
+        UsageRefreshButton.Content = "Refreshing…";
+        try
+        {
+            await RefreshUsageAsync();
+        }
+        finally
+        {
+            UsageRefreshButton.IsEnabled = true;
+            UsageRefreshButton.Content = "Refresh";
+        }
+    }
+
+    private void RenderUsageDetails()
+    {
+        UsageDetailPanel.Children.Clear();
+
+        var result = _lastUsageResult;
+        if (result == null)
+        {
+            UsageDetailPanel.Children.Add(new TextBlock
+            {
+                Text = "Loading…",
+                FontSize = 11,
+                Foreground = (Brush)FindResource("TitleBarForeground"),
+                Opacity = 0.7,
+            });
+            UsageFooterText.Text = "";
+            return;
+        }
+
+        // If the latest fetch failed, fall back to the last successful summary
+        // (if any) so the user can still see cached data with an error banner above.
+        var isError = result.Status != UsageService.FetchStatus.Success || result.Summary == null;
+        var summary = isError ? _lastSuccessfulUsage : result.Summary;
+
+        if (isError)
+        {
+            var msg = result.Status switch
+            {
+                UsageService.FetchStatus.AuthMissing => "Claude Code credentials not found. Sign in via Claude Code first.",
+                UsageService.FetchStatus.AuthExpired => "OAuth token expired. Open Claude Code to refresh sign-in.",
+                UsageService.FetchStatus.NetworkError => "Could not reach api.anthropic.com. Check your connection.",
+                _ => $"Could not fetch usage ({result.ErrorMessage})",
+            };
+            UsageDetailPanel.Children.Add(new TextBlock
+            {
+                Text = msg,
+                FontSize = 11,
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = (Brush)FindResource("TitleBarForeground"),
+                Opacity = 0.7,
+                Margin = new Thickness(0, 0, 0, summary != null ? 10 : 0),
+            });
+        }
+
+        if (summary == null)
+        {
+            UsageFooterText.Text = _lastUsageFetchTime is DateTime t
+                ? $"Last attempt: {t:HH:mm:ss}"
+                : "";
+            return;
+        }
+
+        var s = summary;
+        AddUsageRow("5-hour session", s.FiveHour, isPrimary: true);
+        AddUsageRow("7-day weekly", s.SevenDay);
+
+        // Per-model breakdown (show only if populated)
+        if (s.SevenDayOpus?.Utilization != null)
+            AddUsageRow("7-day Opus", s.SevenDayOpus);
+        if (s.SevenDaySonnet?.Utilization != null)
+            AddUsageRow("7-day Sonnet", s.SevenDaySonnet);
+
+        // Extra usage (if on)
+        if (s.ExtraUsage?.IsEnabled == true && (s.ExtraUsage.UsedCredits ?? 0) > 0)
+        {
+            var currency = s.ExtraUsage.Currency ?? "";
+            var credits = s.ExtraUsage.UsedCredits ?? 0;
+            UsageDetailPanel.Children.Add(new TextBlock
+            {
+                Text = $"Extra usage: {credits:0} {currency} credits used",
+                FontSize = 11,
+                Margin = new Thickness(0, 8, 0, 0),
+                Foreground = (Brush)FindResource("TitleBarForeground"),
+                Opacity = 0.7,
+            });
+        }
+
+        // Footer: when showing cached data after an error, tell the user how old it is.
+        if (isError && _lastSuccessfulFetchTime is DateTime cachedTime)
+        {
+            var attempt = _lastUsageFetchTime is DateTime at ? $" · retried {at:HH:mm:ss}" : "";
+            UsageFooterText.Text = $"Showing cached data from {cachedTime:HH:mm:ss}{attempt}";
+        }
+        else
+        {
+            UsageFooterText.Text = _lastUsageFetchTime is DateTime time
+                ? $"Last updated: {time:HH:mm:ss}"
+                : "";
+        }
+    }
+
+    private void AddUsageRow(string label, UsageWindow? window, bool isPrimary = false)
+    {
+        var container = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
+
+        var header = new Grid();
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        var labelBlock = new TextBlock
+        {
+            Text = label,
+            FontSize = isPrimary ? 12 : 11,
+            FontWeight = isPrimary ? FontWeights.SemiBold : FontWeights.Normal,
+            Foreground = (Brush)FindResource("TitleBarForeground"),
+        };
+        Grid.SetColumn(labelBlock, 0);
+        header.Children.Add(labelBlock);
+
+        var resetText = window?.ResetsAt != null
+            ? $"resets in {FormatTimeUntilReset(window.ResetsAt.Value)}"
+            : "";
+        var resetBlock = new TextBlock
+        {
+            Text = resetText,
+            FontSize = 10,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = (Brush)FindResource("TitleBarForeground"),
+            Opacity = 0.6,
+        };
+        Grid.SetColumn(resetBlock, 1);
+        header.Children.Add(resetBlock);
+
+        container.Children.Add(header);
+
+        // Progress bar
+        var pct = window?.Utilization ?? 0;
+        var bar = new ProgressBar
+        {
+            Minimum = 0,
+            Maximum = 100,
+            Value = Math.Min(pct, 100),
+            Height = 6,
+            Margin = new Thickness(0, 3, 0, 0),
+        };
+        container.Children.Add(bar);
+
+        var pctBlock = new TextBlock
+        {
+            Text = window?.Utilization != null ? $"{pct:0}%" : "—",
+            FontSize = 10,
+            Margin = new Thickness(0, 2, 0, 0),
+            Foreground = (Brush)FindResource("TitleBarForeground"),
+            Opacity = 0.7,
+        };
+        container.Children.Add(pctBlock);
+
+        UsageDetailPanel.Children.Add(container);
     }
 }

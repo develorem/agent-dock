@@ -313,7 +313,16 @@ public partial class FileExplorerControl : UserControl
 
         if (result != null)
         {
-            ProjectSettingsManager.Save(_rootPath, result);
+            ProjectSettingsManager.Update(_rootPath, s =>
+            {
+                s.Name = result.Name;
+                s.Icon = result.Icon;
+                s.IconColor = result.IconColor;
+                s.Description = result.Description;
+                s.SoundOnSessionStart = result.SoundOnSessionStart;
+                s.SoundOnAgentWaiting = result.SoundOnAgentWaiting;
+                s.SoundOnSessionEnd = result.SoundOnSessionEnd;
+            });
             ProjectSettingsChanged?.Invoke();
         }
     }

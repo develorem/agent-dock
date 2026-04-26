@@ -49,10 +49,51 @@ public partial class ProjectSettingsDialog : Window
 
         InitializeComponent();
 
+        NameTextBox.Text = settings.Name ?? "";
+        var folderName = System.IO.Path.GetFileName(projectFolder) ?? projectFolder;
+        NameHintText.Text = $"Leave blank to use folder name: {folderName}";
+
         DescriptionTextBox.Text = _selectedDescription ?? "";
+        SoundOnStartCheckBox.IsChecked = settings.SoundOnSessionStart;
+        SoundOnWaitingCheckBox.IsChecked = settings.SoundOnAgentWaiting;
+        SoundOnEndCheckBox.IsChecked = settings.SoundOnSessionEnd;
+        SoundOnStartCheckBox.Checked += SoundCheckBox_Changed;
+        SoundOnStartCheckBox.Unchecked += SoundCheckBox_Changed;
+        SoundOnWaitingCheckBox.Checked += SoundCheckBox_Changed;
+        SoundOnWaitingCheckBox.Unchecked += SoundCheckBox_Changed;
+        SoundOnEndCheckBox.Checked += SoundCheckBox_Changed;
+        SoundOnEndCheckBox.Unchecked += SoundCheckBox_Changed;
+        UpdateSoundsSummary();
+
         PopulateIconGrid(settings.Icon);
         PopulateSwatches();
         UpdatePreview();
+    }
+
+    private void ConfigureSounds_Click(object sender, RoutedEventArgs e)
+    {
+        SoundsSection.Visibility = SoundsSection.Visibility == Visibility.Visible
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+    }
+
+    private void SoundCheckBox_Changed(object sender, RoutedEventArgs e) => UpdateSoundsSummary();
+
+    private void UpdateSoundsSummary()
+    {
+        var on = new[]
+        {
+            SoundOnStartCheckBox.IsChecked == true,
+            SoundOnWaitingCheckBox.IsChecked == true,
+            SoundOnEndCheckBox.IsChecked == true,
+        }.Count(x => x);
+
+        SoundsSummaryLabel.Text = on switch
+        {
+            3 => "All enabled",
+            0 => "All disabled",
+            _ => $"{on} of 3 enabled",
+        };
     }
 
     /// <summary>
@@ -365,11 +406,22 @@ public partial class ProjectSettingsDialog : Window
 
     private void OkButton_Click(object sender, RoutedEventArgs e)
     {
+        var folderName = System.IO.Path.GetFileName(_projectFolder) ?? _projectFolder;
+        var typedName = NameTextBox.Text?.Trim();
+        // Treat blank or a name matching the folder as "no override"
+        var name = string.IsNullOrWhiteSpace(typedName) || string.Equals(typedName, folderName, StringComparison.Ordinal)
+            ? null
+            : typedName;
+
         Result = new ProjectSettings
         {
+            Name = name,
             Icon = _selectedIcon,
             IconColor = _selectedIconColor,
-            Description = string.IsNullOrWhiteSpace(DescriptionTextBox.Text) ? null : DescriptionTextBox.Text.Trim()
+            Description = string.IsNullOrWhiteSpace(DescriptionTextBox.Text) ? null : DescriptionTextBox.Text.Trim(),
+            SoundOnSessionStart = SoundOnStartCheckBox.IsChecked == true,
+            SoundOnAgentWaiting = SoundOnWaitingCheckBox.IsChecked == true,
+            SoundOnSessionEnd = SoundOnEndCheckBox.IsChecked == true,
         };
         DialogResult = true;
     }
