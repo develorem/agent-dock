@@ -699,6 +699,7 @@ public partial class MainWindow : Window
         }
 
         var project = new ProjectInfo { FolderPath = folderPath };
+        project.CustomName = ProjectSettingsManager.Load(folderPath).Name;
         _projects.Add(project);
         Log.Info($"AddProjectFromPath: created ProjectInfo for '{project.FolderName}'");
 
@@ -946,7 +947,7 @@ public partial class MainWindow : Window
                     iconElement,
                     new TextBlock
                     {
-                        Text = project.FolderName,
+                        Text = project.DisplayName,
                         FontSize = 12,
                         VerticalAlignment = VerticalAlignment.Center,
                         Foreground = ThemeManager.GetBrush("TabButtonForeground")
@@ -1233,6 +1234,9 @@ public partial class MainWindow : Window
         {
             var settings = ProjectSettingsManager.Load(project.FolderPath);
 
+            // Update in-memory display name and refresh every UI surface that shows it
+            project.CustomName = settings.Name;
+
             if (_projectTabButtons.TryGetValue(project, out var tabBtn) &&
                 tabBtn.Content is StackPanel sp && sp.Children.Count > 0)
             {
@@ -1240,7 +1244,24 @@ public partial class MainWindow : Window
                 sp.Children.Insert(0, CreateIconElement(
                     settings.Icon ?? "folder", project.FolderPath,
                     settings.IconColor));
+
+                // TextBlock is at index 1 (between icon at 0 and status grid at 2)
+                if (sp.Children.Count > 1 && sp.Children[1] is TextBlock tabText)
+                    tabText.Text = project.DisplayName;
             }
+
+            // Update file explorer panel title in the docking layout
+            if (_projectDockingManagers.TryGetValue(project, out var dm))
+            {
+                var fileExplorerPanel = dm.Layout.Descendents().OfType<LayoutAnchorable>()
+                    .FirstOrDefault(a => a.ContentId == FileExplorerId);
+                if (fileExplorerPanel != null)
+                    fileExplorerPanel.Title = $"{project.DisplayName} — File Explorer";
+            }
+
+            // If this is the active project, refresh the window title bar
+            if (project == _activeProject)
+                UpdateTitleBar();
 
             descriptionControl.SetDescription(settings.Description);
         }
@@ -1251,7 +1272,16 @@ public partial class MainWindow : Window
             var result = ProjectSettingsDialog.Show(this, project.FolderPath);
             if (result != null)
             {
-                ProjectSettingsManager.Save(project.FolderPath, result);
+                ProjectSettingsManager.Update(project.FolderPath, s =>
+                {
+                    s.Name = result.Name;
+                    s.Icon = result.Icon;
+                    s.IconColor = result.IconColor;
+                    s.Description = result.Description;
+                    s.SoundOnSessionStart = result.SoundOnSessionStart;
+                    s.SoundOnAgentWaiting = result.SoundOnAgentWaiting;
+                    s.SoundOnSessionEnd = result.SoundOnSessionEnd;
+                });
                 OnProjectSettingsChanged();
             }
         };
@@ -1292,6 +1322,10 @@ public partial class MainWindow : Window
         {
             UpdateAiChatTitle(project, aiChatControl);
             UpdateTotalCost();
+            // A real session round-trip consumed plan usage — the title-bar
+            // indicator's cached /api/oauth/usage data is now stale. The timer
+            // will pick this up on its next tick.
+            _usageDirty = true;
         };
 
         // Map ContentId → control for layout serialization callback
@@ -1308,7 +1342,7 @@ public partial class MainWindow : Window
         // Title map for restored anchorables
         var titleMap = new Dictionary<string, string>
         {
-            [FileExplorerId] = $"{project.FolderName} — File Explorer",
+            [FileExplorerId] = $"{project.DisplayName} — File Explorer",
             [GitStatusId] = "Git Status",
             [FilePreviewId] = "File Preview",
             [AiChatId] = "AI Chat",
@@ -1463,7 +1497,7 @@ public partial class MainWindow : Window
         // --- Right column: File Explorer (top) + Git Status (bottom) ---
         var fileExplorer = new LayoutAnchorable
         {
-            Title = $"{project.FolderName} — File Explorer",
+            Title = $"{project.DisplayName} — File Explorer",
             ContentId = FileExplorerId,
             CanClose = false,
             CanHide = false,
@@ -1581,6 +1615,9 @@ public partial class MainWindow : Window
         if (_projectTabButtons.TryGetValue(project, out var newButton))
             SetTabButtonActive(newButton, true);
 
+        // User is now viewing this tab — clear any attention flash on its diamond.
+        StopAttentionPulseIfAny(project);
+
         // Show the project's content
         if (_projectContents.TryGetValue(project, out var content))
         {
@@ -1614,13 +1651,13 @@ public partial class MainWindow : Window
 
         if (workspaceName != null)
         {
-            Title = $"Agent Dock — {workspaceName}{dirtyMarker} — {_activeProject.FolderName}";
-            TitleBarText.Text = $"{workspaceName}{dirtyMarker} — {_activeProject.FolderName}";
+            Title = $"Agent Dock — {workspaceName}{dirtyMarker} — {_activeProject.DisplayName}";
+            TitleBarText.Text = $"{workspaceName}{dirtyMarker} — {_activeProject.DisplayName}";
         }
         else
         {
-            Title = $"Agent Dock — {_activeProject.FolderName}{dirtyMarker}";
-            TitleBarText.Text = $"{_activeProject.FolderName}{dirtyMarker}";
+            Title = $"Agent Dock — {_activeProject.DisplayName}{dirtyMarker}";
+            TitleBarText.Text = $"{_activeProject.DisplayName}{dirtyMarker}";
         }
     }
 
@@ -1843,19 +1880,22 @@ public partial class MainWindow : Window
         if (!_projectTabIcons.TryGetValue(project, out var statusGrid))
             return;
 
-        // Play sounds on state transitions
+        // Play sounds on state transitions (gated by per-project settings)
         _previousTabStates.TryGetValue(project, out var prevState);
         _previousTabStates[project] = state;
 
+        var soundSettings = ProjectSettingsManager.Load(project.FolderPath);
         switch (state)
         {
-            case ClaudeSessionState.Initializing:
+            case ClaudeSessionState.Initializing when soundSettings.SoundOnSessionStart:
                 SoundService.PlayDeviceConnect();
                 break;
-            case ClaudeSessionState.Idle when prevState is ClaudeSessionState.Working or ClaudeSessionState.WaitingForPermission:
+            case ClaudeSessionState.Idle
+                when soundSettings.SoundOnAgentWaiting
+                     && prevState is ClaudeSessionState.Working or ClaudeSessionState.WaitingForPermission:
                 SoundService.PlayMessageNudge();
                 break;
-            case ClaudeSessionState.Exited:
+            case ClaudeSessionState.Exited when soundSettings.SoundOnSessionEnd:
                 SoundService.PlayDeviceDisconnect();
                 break;
         }
@@ -1891,6 +1931,14 @@ public partial class MainWindow : Window
             case ClaudeSessionState.Idle:
                 diamondIcon.Text = "\u25C6"; // ◆
                 diamondIcon.Foreground = ThemeManager.GetBrush("TabIconIdleForeground");
+                // Flash the diamond when a background tab just finished a turn so the
+                // user notices there's a completion waiting. Stops as soon as the tab
+                // is switched to (see SwitchToProject).
+                if (project != _activeProject &&
+                    prevState is ClaudeSessionState.Working or ClaudeSessionState.WaitingForPermission)
+                {
+                    StartAttentionPulse(project, diamondIcon);
+                }
                 break;
 
             case ClaudeSessionState.Working:
@@ -1926,6 +1974,48 @@ public partial class MainWindow : Window
         };
         timer.Start();
         _tabIconTimers[project] = timer;
+    }
+
+    /// <summary>
+    /// Subtle flash on the Idle (green) diamond so the user notices a completion
+    /// on a background tab. Slower and shallower than the Working pulse.
+    /// Cleared by <see cref="SwitchToProject"/> once the user views the tab.
+    /// </summary>
+    private void StartAttentionPulse(ProjectInfo project, TextBlock diamondIcon)
+    {
+        var bright = true;
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
+        timer.Tick += (_, _) =>
+        {
+            bright = !bright;
+            diamondIcon.Opacity = bright ? 1.0 : 0.55;
+        };
+        timer.Start();
+        _tabIconTimers[project] = timer;
+    }
+
+    /// <summary>
+    /// Stops the attention flash on an Idle tab when the user has now viewed it.
+    /// No-op if the tab is flashing for a different reason (e.g. Working pulse).
+    /// </summary>
+    private void StopAttentionPulseIfAny(ProjectInfo project)
+    {
+        if (!_projectChatControls.TryGetValue(project, out var chat) ||
+            chat.CurrentState != ClaudeSessionState.Idle)
+            return;
+
+        if (!_tabIconTimers.TryGetValue(project, out var timer))
+            return;
+
+        timer.Stop();
+        _tabIconTimers.Remove(project);
+
+        if (_projectTabIcons.TryGetValue(project, out var grid) &&
+            grid.Children.Count > 0 &&
+            grid.Children[0] is TextBlock diamond)
+        {
+            diamond.Opacity = 1.0;
+        }
     }
 
     // --- Workspace Save/Load ---
@@ -2425,13 +2515,34 @@ public partial class MainWindow : Window
     private UsageService.FetchResult? _lastUsageResult;
     private DateTime? _lastUsageFetchTime;
 
+    // Last successful fetch kept separately so the popup can fall back to cached
+    // data when the most recent fetch failed (e.g. 429, offline).
+    private UsageSummary? _lastSuccessfulUsage;
+    private DateTime? _lastSuccessfulFetchTime;
+
+    /// <summary>
+    /// True when a session has consumed API usage since the last fetch, meaning
+    /// the /api/oauth/usage response would be stale. When false, the timer tick
+    /// just re-renders the countdown text without hitting the endpoint —
+    /// avoiding 429s while AgentDock is idle.
+    /// </summary>
+    private bool _usageDirty;
+
     private void InitializeUsageIndicator()
     {
-        // Initial fetch, then poll every 60s
+        // Initial fetch primes the indicator; subsequent fetches are demand-driven.
         _ = RefreshUsageAsync();
 
-        _usageTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
-        _usageTimer.Tick += async (_, _) => await RefreshUsageAsync();
+        // Tick at 90s. On each tick: fetch only if a session has been active
+        // since the last fetch; otherwise just re-render the countdown text.
+        _usageTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(90) };
+        _usageTimer.Tick += async (_, _) =>
+        {
+            if (_usageDirty)
+                await RefreshUsageAsync();
+            else
+                UpdateUsageTitleText();
+        };
         _usageTimer.Start();
 
         Closed += (_, _) => _usageTimer?.Stop();
@@ -2439,9 +2550,20 @@ public partial class MainWindow : Window
 
     private async Task RefreshUsageAsync()
     {
+        // Clear dirty on attempt (not success). If we got 429/error, don't retry
+        // immediately — wait for the next real session message to mark it dirty again.
+        _usageDirty = false;
+
         var result = await UsageService.FetchAsync();
         _lastUsageResult = result;
         _lastUsageFetchTime = DateTime.Now;
+
+        if (result.Status == UsageService.FetchStatus.Success && result.Summary != null)
+        {
+            _lastSuccessfulUsage = result.Summary;
+            _lastSuccessfulFetchTime = _lastUsageFetchTime;
+        }
+
         UpdateUsageTitleText();
         if (UsagePopup.IsOpen)
             RenderUsageDetails();
@@ -2532,7 +2654,12 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (result.Status != UsageService.FetchStatus.Success || result.Summary == null)
+        // If the latest fetch failed, fall back to the last successful summary
+        // (if any) so the user can still see cached data with an error banner above.
+        var isError = result.Status != UsageService.FetchStatus.Success || result.Summary == null;
+        var summary = isError ? _lastSuccessfulUsage : result.Summary;
+
+        if (isError)
         {
             var msg = result.Status switch
             {
@@ -2548,14 +2675,19 @@ public partial class MainWindow : Window
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = (Brush)FindResource("TitleBarForeground"),
                 Opacity = 0.7,
+                Margin = new Thickness(0, 0, 0, summary != null ? 10 : 0),
             });
+        }
+
+        if (summary == null)
+        {
             UsageFooterText.Text = _lastUsageFetchTime is DateTime t
                 ? $"Last attempt: {t:HH:mm:ss}"
                 : "";
             return;
         }
 
-        var s = result.Summary;
+        var s = summary;
         AddUsageRow("5-hour session", s.FiveHour, isPrimary: true);
         AddUsageRow("7-day weekly", s.SevenDay);
 
@@ -2580,9 +2712,18 @@ public partial class MainWindow : Window
             });
         }
 
-        UsageFooterText.Text = _lastUsageFetchTime is DateTime time
-            ? $"Last updated: {time:HH:mm:ss}"
-            : "";
+        // Footer: when showing cached data after an error, tell the user how old it is.
+        if (isError && _lastSuccessfulFetchTime is DateTime cachedTime)
+        {
+            var attempt = _lastUsageFetchTime is DateTime at ? $" · retried {at:HH:mm:ss}" : "";
+            UsageFooterText.Text = $"Showing cached data from {cachedTime:HH:mm:ss}{attempt}";
+        }
+        else
+        {
+            UsageFooterText.Text = _lastUsageFetchTime is DateTime time
+                ? $"Last updated: {time:HH:mm:ss}"
+                : "";
+        }
     }
 
     private void AddUsageRow(string label, UsageWindow? window, bool isPrimary = false)
