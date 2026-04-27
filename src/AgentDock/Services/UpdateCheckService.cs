@@ -8,7 +8,7 @@ namespace AgentDock.Services;
 /// <summary>
 /// Checks GitHub releases for newer versions and orchestrates the update process.
 /// </summary>
-public record UpdateInfo(string Version, string DownloadUrl, string ReleaseName);
+public record UpdateInfo(string Version, string DownloadUrl, string ReleaseName, string Notes);
 
 public static class UpdateCheckService
 {
@@ -106,9 +106,12 @@ public static class UpdateCheckService
             }
 
             var releaseName = root.GetProperty("name").GetString() ?? tagName;
+            var notes = root.TryGetProperty("body", out var bodyProp)
+                ? bodyProp.GetString() ?? ""
+                : "";
 
             Log.Info($"UpdateCheck: update available — {remoteVersionStr} (current: {App.Version})");
-            return new UpdateInfo(remoteVersionStr, downloadUrl, releaseName);
+            return new UpdateInfo(remoteVersionStr, downloadUrl, releaseName, notes);
         }
         catch (TaskCanceledException)
         {

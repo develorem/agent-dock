@@ -79,6 +79,8 @@ public partial class MainWindow : Window
         Log.Info("MainWindow constructor starting");
         InitializeComponent();
 
+        ProductNameText.Text = $"Agent Dock v{App.Version}";
+
         _toolbarPositionMenuItems = [ToolbarTopMenu, ToolbarLeftMenu, ToolbarRightMenu, ToolbarBottomMenu];
 
         // Create the + button for the project tab bar
@@ -136,6 +138,7 @@ public partial class MainWindow : Window
         Loaded += async (_, _) =>
         {
             await RunStartupPrerequisiteChecks();
+            ShowWhatsNewIfNewVersion();
             await CheckForAppUpdateAsync();
         };
 
@@ -629,6 +632,50 @@ public partial class MainWindow : Window
 
         UpdateTitleBar(); // restore normal title
         Log.Info("Startup prerequisite check: complete");
+    }
+
+    private const string LastWhatsNewVersionKey = "LastWhatsNewVersionShown";
+
+    /// <summary>
+    /// If the app version has changed since the last time we showed the "What's New" popup,
+    /// show release notes for the new version. On first install (no prior key), records the
+    /// current version silently without showing the popup.
+    /// </summary>
+    private void ShowWhatsNewIfNewVersion()
+    {
+        try
+        {
+            var currentVersion = App.Version;
+            var lastShown = AppSettings.GetString(LastWhatsNewVersionKey, "");
+
+            if (string.IsNullOrEmpty(lastShown))
+            {
+                Log.Info($"WhatsNew: first install, recording v{currentVersion} silently");
+                AppSettings.SetString(LastWhatsNewVersionKey, currentVersion);
+                return;
+            }
+
+            if (lastShown == currentVersion)
+                return;
+
+            var notes = ReleaseNotesService.GetNotesForVersion(currentVersion);
+            if (string.IsNullOrWhiteSpace(notes))
+            {
+                Log.Info($"WhatsNew: no embedded notes for v{currentVersion}, skipping popup");
+                AppSettings.SetString(LastWhatsNewVersionKey, currentVersion);
+                return;
+            }
+
+            Log.Info($"WhatsNew: showing release notes for v{currentVersion} (was v{lastShown})");
+            var window = new WhatsNewWindow(this, currentVersion, notes);
+            window.ShowDialog();
+
+            AppSettings.SetString(LastWhatsNewVersionKey, currentVersion);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"WhatsNew: failed to show popup — {ex.Message}");
+        }
     }
 
     private async System.Threading.Tasks.Task CheckForAppUpdateAsync()

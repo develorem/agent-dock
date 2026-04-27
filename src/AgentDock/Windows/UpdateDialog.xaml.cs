@@ -17,6 +17,13 @@ public partial class UpdateDialog : Window
 
         CurrentVersionText.Text = $"v{App.Version}";
         NewVersionText.Text = $"v{updateInfo.Version}";
+
+        if (!string.IsNullOrWhiteSpace(updateInfo.Notes))
+        {
+            var notes = MarkdownHelper.StripLeadingVersionHeading(updateInfo.Notes);
+            MarkdownHelper.RenderTo(NotesViewer, notes);
+            NotesPanel.Visibility = Visibility.Visible;
+        }
     }
 
     private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)

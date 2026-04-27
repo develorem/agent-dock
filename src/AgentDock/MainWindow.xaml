@@ -48,8 +48,8 @@
                        Margin="10,0,6,0"
                        WindowChrome.IsHitTestVisibleInChrome="True" />
 
-                <!-- Product name -->
-                <TextBlock Grid.Column="1"
+                <!-- Product name + version -->
+                <TextBlock x:Name="ProductNameText" Grid.Column="1"
                            Text="Agent Dock"
                            FontSize="12"
                            FontWeight="SemiBold"
