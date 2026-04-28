@@ -105,6 +105,18 @@ public partial class AiChatControl : UserControl
             Dispatcher.BeginInvoke(() => InputBox.Focus(), System.Windows.Threading.DispatcherPriority.Input);
     }
 
+    // Clicks on the prompt border (outside the textbox itself, e.g. between the > and
+    // the text) should land focus in the textbox so the chrome behaves like one widget.
+    private void InputBorder_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource == InputBorder && InputBox.IsEnabled)
+        {
+            InputBox.Focus();
+            InputBox.CaretIndex = InputBox.Text.Length;
+            e.Handled = true;
+        }
+    }
+
     public void Shutdown()
     {
         _session?.Dispose();

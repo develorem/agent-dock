@@ -110,6 +110,14 @@
     <SolidColorBrush x:Key="DiffRemovedBackground" Color="{StaticResource DiffRemovedColor}" />
     <SolidColorBrush x:Key="DiffHunkHeaderBackground" Color="{StaticResource DiffHunkHeaderColor}" />
 
+    <!-- JSON syntax -->
+    <SolidColorBrush x:Key="JsonKeyForeground" Color="#79C0FF" />
+    <SolidColorBrush x:Key="JsonStringForeground" Color="#A5D6FF" />
+    <SolidColorBrush x:Key="JsonNumberForeground" Color="#FFA657" />
+    <SolidColorBrush x:Key="JsonBooleanForeground" Color="#FF7B72" />
+    <SolidColorBrush x:Key="JsonNullForeground" Color="#FF7B72" />
+    <SolidColorBrush x:Key="JsonPunctuationForeground" Color="#8B949E" />
+
     <!-- Markdown rendering -->
     <SolidColorBrush x:Key="MarkdownHeadingForeground" Color="#58A6FF" />
     <SolidColorBrush x:Key="MarkdownCodeBackground" Color="#161B22" />

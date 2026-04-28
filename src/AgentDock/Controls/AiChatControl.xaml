@@ -239,21 +239,6 @@
                     BorderThickness="0,1,0,0"
                     Padding="8,6">
                 <DockPanel>
-                    <Button x:Name="PromptMenuButton"
-                            DockPanel.Dock="Left"
-                            Click="PromptMenu_Click"
-                            Background="Transparent"
-                            BorderThickness="0"
-                            Cursor="Hand"
-                            Padding="0"
-                            VerticalAlignment="Bottom"
-                            Margin="0,0,6,3"
-                            ToolTip="Commands">
-                        <TextBlock Text=">"
-                                   FontFamily="Cascadia Code, Consolas, Courier New"
-                                   FontSize="14" FontWeight="Bold"
-                                   Foreground="{DynamicResource ChatInputPromptForeground}" />
-                    </Button>
                     <Button x:Name="SendButton"
                             Content="Send"
                             Click="Send_Click"
@@ -303,24 +288,47 @@
                             </ListBox>
                         </Border>
                     </Popup>
-                    <TextBox x:Name="InputBox"
-                             FontFamily="Cascadia Code, Consolas, Courier New"
-                             FontSize="12"
-                             Foreground="{DynamicResource ChatInputForeground}"
-                             Background="{DynamicResource ChatInputBackground}"
-                             CaretBrush="{DynamicResource ChatInputForeground}"
-                             BorderBrush="{DynamicResource ChatInputBorderBrush}"
-                             BorderThickness="1"
-                             Padding="6,4"
-                             AcceptsReturn="True"
-                             TextWrapping="Wrap"
-                             VerticalScrollBarVisibility="Auto"
-                             MaxHeight="76"
-                             MinHeight="28"
-                             KeyDown="InputBox_KeyDown"
-                             PreviewKeyDown="InputBox_PreviewKeyDown"
-                             TextChanged="InputBox_TextChanged"
-                             VerticalContentAlignment="Top" />
+                    <Border x:Name="InputBorder"
+                            Background="{DynamicResource ChatInputBackground}"
+                            BorderBrush="{DynamicResource ChatInputBorderBrush}"
+                            BorderThickness="1"
+                            VerticalAlignment="Bottom"
+                            MouseLeftButtonDown="InputBorder_MouseLeftButtonDown">
+                        <DockPanel LastChildFill="True">
+                            <Button x:Name="PromptMenuButton"
+                                    DockPanel.Dock="Left"
+                                    Click="PromptMenu_Click"
+                                    Background="Transparent"
+                                    BorderThickness="0"
+                                    Cursor="Hand"
+                                    Padding="0"
+                                    VerticalAlignment="Top"
+                                    Margin="6,4,4,0"
+                                    ToolTip="Commands">
+                                <TextBlock Text=">"
+                                           FontFamily="Cascadia Code, Consolas, Courier New"
+                                           FontSize="12" FontWeight="Bold"
+                                           Foreground="{DynamicResource ChatInputPromptForeground}" />
+                            </Button>
+                            <TextBox x:Name="InputBox"
+                                     FontFamily="Cascadia Code, Consolas, Courier New"
+                                     FontSize="12"
+                                     Foreground="{DynamicResource ChatInputForeground}"
+                                     Background="Transparent"
+                                     CaretBrush="{DynamicResource ChatInputForeground}"
+                                     BorderThickness="0"
+                                     Padding="0,4,6,4"
+                                     AcceptsReturn="True"
+                                     TextWrapping="Wrap"
+                                     VerticalScrollBarVisibility="Auto"
+                                     MaxHeight="76"
+                                     MinHeight="20"
+                                     KeyDown="InputBox_KeyDown"
+                                     PreviewKeyDown="InputBox_PreviewKeyDown"
+                                     TextChanged="InputBox_TextChanged"
+                                     VerticalContentAlignment="Top" />
+                        </DockPanel>
+                    </Border>
                 </DockPanel>
             </Border>
 
