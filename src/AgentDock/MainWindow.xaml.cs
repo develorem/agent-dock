@@ -413,6 +413,11 @@ public partial class MainWindow : Window
     {
         // Log environment info for diagnostics
         Log.Info($"Prereq: OS={Environment.OSVersion}, .NET={Environment.Version}, 64-bit={Environment.Is64BitProcess}");
+        Log.Info($"Prereq: OSDescription='{System.Runtime.InteropServices.RuntimeInformation.OSDescription}', " +
+                 $"Framework='{System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}', " +
+                 $"Arch={System.Runtime.InteropServices.RuntimeInformation.OSArchitecture}");
+        Log.Info($"Prereq: DictationSupported={Services.DictationService.IsSupportedOnThisOS} " +
+                 $"(requires Win10 build 19041+)");
         Log.Info($"Prereq: User={Environment.UserName}, Machine={Environment.MachineName}");
 
         var results = new List<(string Name, bool Found, string Detail)>();

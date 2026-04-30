@@ -97,6 +97,11 @@ public partial class AiChatControl : UserControl
         Log.Info("AiChatControl: constructor");
         InitializeComponent();
         Log.Info("AiChatControl: InitializeComponent complete");
+
+        // Older Win10 builds don't ship the WinRT dictation recognizer — hide the
+        // mic button rather than show one that would always error.
+        if (!DictationService.IsSupportedOnThisOS)
+            MicButton.Visibility = Visibility.Collapsed;
     }
 
     public void Initialize(string projectPath)
@@ -127,6 +132,73 @@ public partial class AiChatControl : UserControl
     {
         _session?.Dispose();
         _session = null;
+        _dictation?.Dispose();
+        _dictation = null;
+    }
+
+    // --- Dictation ---
+
+    private DictationService? _dictation;
+
+    private async void MicButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_dictation == null)
+        {
+            _dictation = new DictationService();
+            _dictation.TextRecognized += text => Dispatcher.BeginInvoke(() => InsertDictatedText(text));
+            _dictation.StateChanged += state => Dispatcher.BeginInvoke(() => UpdateMicVisual(state));
+            _dictation.ErrorOccurred += msg => Dispatcher.BeginInvoke(() => SetMicErrorTooltip(msg));
+        }
+        try
+        {
+            await _dictation.ToggleAsync();
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Dictation toggle failed", ex);
+            SetMicErrorTooltip(ex.Message);
+        }
+    }
+
+    private void InsertDictatedText(string text)
+    {
+        var caret = InputBox.CaretIndex;
+        var existing = InputBox.Text;
+        var needsLeadingSpace = caret > 0 && caret <= existing.Length
+            && !char.IsWhiteSpace(existing[caret - 1]);
+        var insert = (needsLeadingSpace ? " " : "") + text;
+        InputBox.Text = existing.Insert(caret, insert);
+        InputBox.CaretIndex = caret + insert.Length;
+    }
+
+    private void UpdateMicVisual(DictationState state)
+    {
+        switch (state)
+        {
+            case DictationState.Idle:
+                MicIcon.Foreground = ThemeManager.GetBrush("ChatMutedForeground");
+                MicButton.ToolTip = "Start dictation";
+                break;
+            case DictationState.Starting:
+                MicIcon.Foreground = ThemeManager.GetBrush("ChatMutedForeground");
+                MicButton.ToolTip = "Starting…";
+                break;
+            case DictationState.Listening:
+                MicIcon.Foreground = ThemeManager.GetBrush("ChatDangerForeground");
+                MicButton.ToolTip = "Listening — click to stop";
+                break;
+            case DictationState.Stopping:
+                MicButton.ToolTip = "Stopping…";
+                break;
+            case DictationState.Error:
+                MicIcon.Foreground = ThemeManager.GetBrush("ChatMutedForeground");
+                break;
+        }
+    }
+
+    private void SetMicErrorTooltip(string message)
+    {
+        MicButton.ToolTip = $"Dictation error: {message}";
     }
 
     // --- Start Session ---
@@ -214,6 +286,9 @@ public partial class AiChatControl : UserControl
         var canSend = state == ClaudeSessionState.Idle;
         InputBox.IsEnabled = canSend;
         SendButton.IsEnabled = canSend;
+        MicButton.IsEnabled = canSend;
+        if (!canSend && _dictation?.IsActive == true)
+            _ = _dictation.StopAsync();
 
         if (canSend)
             FocusInput();

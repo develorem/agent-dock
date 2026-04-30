@@ -310,6 +310,22 @@
                                            FontSize="12" FontWeight="Bold"
                                            Foreground="{DynamicResource ChatInputPromptForeground}" />
                             </Button>
+                            <Button x:Name="MicButton"
+                                    DockPanel.Dock="Right"
+                                    Click="MicButton_Click"
+                                    Background="Transparent"
+                                    BorderThickness="0"
+                                    Cursor="Hand"
+                                    Padding="0"
+                                    VerticalAlignment="Bottom"
+                                    Margin="4,0,6,4"
+                                    ToolTip="Start dictation">
+                                <TextBlock x:Name="MicIcon"
+                                           Text="&#xE720;"
+                                           FontFamily="Segoe MDL2 Assets"
+                                           FontSize="14"
+                                           Foreground="{DynamicResource ChatMutedForeground}" />
+                            </Button>
                             <TextBox x:Name="InputBox"
                                      FontFamily="Cascadia Code, Consolas, Courier New"
                                      FontSize="12"
