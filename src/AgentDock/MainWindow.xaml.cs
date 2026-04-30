@@ -30,7 +30,6 @@ public partial class MainWindow : Window
     public static readonly RoutedUICommand CloseProjectCommand =
         new("Close Project", nameof(CloseProjectCommand), typeof(MainWindow));
 
-    private readonly MenuItem[] _toolbarPositionMenuItems;
     private string _currentToolbarPosition = "Top";
 
     private readonly List<ProjectInfo> _projects = [];
@@ -81,8 +80,6 @@ public partial class MainWindow : Window
 
         ProductNameText.Text = $"Agent Dock v{App.Version}";
 
-        _toolbarPositionMenuItems = [ToolbarTopMenu, ToolbarLeftMenu, ToolbarRightMenu, ToolbarBottomMenu];
-
         // Create the + button for the project tab bar
         _toolbarAddButton = CreateToolbarAddButton();
         ToolbarPanel.Children.Add(_toolbarAddButton);
@@ -97,8 +94,7 @@ public partial class MainWindow : Window
         CommandBindings.Add(new CommandBinding(SaveWorkspaceCommand, (_, _) => SaveWorkspace()));
         CommandBindings.Add(new CommandBinding(CloseProjectCommand, (_, _) => CloseActiveProject()));
 
-        // Build theme menu and subscribe to changes
-        PopulateThemeMenu();
+        // Subscribe to theme changes
         ThemeManager.ThemeChanged += OnThemeChanged;
         UpdateTaskbarIcon();
 
@@ -291,78 +287,53 @@ public partial class MainWindow : Window
 
     // --- Settings Menu ---
 
-    private void ThemeMenuItem_Click(object sender, RoutedEventArgs e)
+    private void WorkspaceSettings_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is MenuItem { Tag: string themeId })
-            ThemeManager.ApplyTheme(themeId);
-    }
-
-    private void ToolbarPosition_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is not MenuItem clicked || clicked.Tag is not string position)
-            return;
-
-        SetToolbarPosition(position);
-        AppSettings.SetString("ToolbarPosition", position);
-    }
-
-    private void ClaudePathOverride_Click(object sender, RoutedEventArgs e)
-    {
-        var currentPath = ClaudeSession.ClaudeBinaryPath;
-        var result = ThemedMessageBox.Show(
+        var result = Windows.WorkspaceSettingsDialog.Show(
             this,
-            $"Current Claude path: {currentPath}\n\n" +
-            "Do you want to select a custom Claude binary?\n" +
-            "Click Yes to browse, No to reset to default (\"claude\" from PATH).",
-            "Claude Path Override",
-            MessageBoxButton.YesNoCancel,
-            MessageBoxImage.Question);
+            ThemeManager.CurrentTheme.Id,
+            _currentToolbarPosition);
 
-        if (result == MessageBoxResult.Cancel)
-            return;
+        if (result == null) return;
 
-        if (result == MessageBoxResult.No)
+        if (result.ThemeId != ThemeManager.CurrentTheme.Id)
+            ThemeManager.ApplyTheme(result.ThemeId);
+
+        if (result.ToolbarPosition != _currentToolbarPosition)
         {
-            ClaudeSession.ClaudeBinaryPath = "claude";
-            AppSettings.SetString("ClaudePath", "");
-            Log.Info("ClaudePathOverride: reset to default");
-            return;
+            SetToolbarPosition(result.ToolbarPosition);
+            AppSettings.SetString("ToolbarPosition", result.ToolbarPosition);
         }
-
-        var dialog = new OpenFileDialog
-        {
-            Title = "Select Claude Binary",
-            Filter = "Executable (*.exe)|*.exe|All Files (*.*)|*.*",
-            FileName = currentPath == "claude" ? "" : currentPath
-        };
-
-        if (dialog.ShowDialog() != true)
-            return;
-
-        ClaudeSession.ClaudeBinaryPath = dialog.FileName;
-        AppSettings.SetString("ClaudePath", dialog.FileName);
-        Log.Info($"ClaudePathOverride: set to '{dialog.FileName}'");
     }
 
-    private void OpenLogsFolder_Click(object sender, RoutedEventArgs e)
+    private void AppSettings_Click(object sender, RoutedEventArgs e)
     {
-        var logPath = Log.LogFilePath;
-        var folder = !string.IsNullOrEmpty(logPath)
-            ? Path.GetDirectoryName(logPath)
-            : null;
+        var currentClaudePath = AppSettings.GetString("ClaudePath");
 
-        if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder))
+        var result = Windows.AppSettingsDialog.Show(
+            this,
+            ThemeManager.CurrentTheme.Id,
+            _currentToolbarPosition,
+            currentClaudePath);
+
+        if (result == null) return;
+
+        if (result.ThemeId != ThemeManager.CurrentTheme.Id)
+            ThemeManager.ApplyTheme(result.ThemeId);
+
+        if (result.ToolbarPosition != _currentToolbarPosition)
         {
-            ThemedMessageBox.Show(this, "Logs folder not found.", "Open Logs",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
+            SetToolbarPosition(result.ToolbarPosition);
+            AppSettings.SetString("ToolbarPosition", result.ToolbarPosition);
         }
 
-        Process.Start(new ProcessStartInfo
+        var newClaudePath = string.IsNullOrEmpty(result.ClaudePath) ? "claude" : result.ClaudePath;
+        if (newClaudePath != ClaudeSession.ClaudeBinaryPath)
         {
-            FileName = folder,
-            UseShellExecute = true
-        });
+            ClaudeSession.ClaudeBinaryPath = newClaudePath;
+            AppSettings.SetString("ClaudePath", string.IsNullOrEmpty(result.ClaudePath) ? "" : result.ClaudePath);
+            Log.Info($"AppSettings: ClaudePath set to '{newClaudePath}'");
+        }
     }
 
     // --- Help Menu ---
@@ -2372,9 +2343,6 @@ public partial class MainWindow : Window
         if (position == _currentToolbarPosition)
             return;
 
-        foreach (var item in _toolbarPositionMenuItems)
-            item.IsChecked = false;
-
         Dock dock;
         Thickness borderThickness;
         Orientation orientation;
@@ -2385,25 +2353,21 @@ public partial class MainWindow : Window
                 dock = Dock.Top;
                 borderThickness = new Thickness(0, 0, 0, 1);
                 orientation = Orientation.Horizontal;
-                ToolbarTopMenu.IsChecked = true;
                 break;
             case "Bottom":
                 dock = Dock.Bottom;
                 borderThickness = new Thickness(0, 1, 0, 0);
                 orientation = Orientation.Horizontal;
-                ToolbarBottomMenu.IsChecked = true;
                 break;
             case "Left":
                 dock = Dock.Left;
                 borderThickness = new Thickness(0, 0, 1, 0);
                 orientation = Orientation.Vertical;
-                ToolbarLeftMenu.IsChecked = true;
                 break;
             case "Right":
                 dock = Dock.Right;
                 borderThickness = new Thickness(1, 0, 0, 0);
                 orientation = Orientation.Vertical;
-                ToolbarRightMenu.IsChecked = true;
                 break;
             default:
                 return;
@@ -2474,8 +2438,6 @@ public partial class MainWindow : Window
 
     private void OnThemeChanged(ThemeDescriptor theme)
     {
-        UpdateThemeMenuCheckmarks();
-
         // Update AvalonDock theme on all DockingManagers
         var dockTheme = theme.BaseVariant == ThemeBaseVariant.Dark
             ? (Theme)new Vs2013DarkTheme()
@@ -2520,64 +2482,6 @@ public partial class MainWindow : Window
 
         // Update taskbar icon with new theme accent bar
         UpdateTaskbarIcon();
-    }
-
-    private void PopulateThemeMenu()
-    {
-        ThemeMenu.Items.Clear();
-
-        // Dark themes group
-        ThemeMenu.Items.Add(new MenuItem
-        {
-            Header = "Dark Themes",
-            IsEnabled = false,
-            FontStyle = FontStyles.Italic
-        });
-
-        foreach (var theme in ThemeRegistry.All.Where(t => t.BaseVariant == ThemeBaseVariant.Dark))
-        {
-            var item = new MenuItem
-            {
-                Header = theme.DisplayName,
-                IsCheckable = true,
-                IsChecked = ThemeManager.CurrentTheme.Id == theme.Id,
-                Tag = theme.Id
-            };
-            item.Click += ThemeMenuItem_Click;
-            ThemeMenu.Items.Add(item);
-        }
-
-        ThemeMenu.Items.Add(new Separator());
-
-        // Light themes group
-        ThemeMenu.Items.Add(new MenuItem
-        {
-            Header = "Light Themes",
-            IsEnabled = false,
-            FontStyle = FontStyles.Italic
-        });
-
-        foreach (var theme in ThemeRegistry.All.Where(t => t.BaseVariant == ThemeBaseVariant.Light))
-        {
-            var item = new MenuItem
-            {
-                Header = theme.DisplayName,
-                IsCheckable = true,
-                IsChecked = ThemeManager.CurrentTheme.Id == theme.Id,
-                Tag = theme.Id
-            };
-            item.Click += ThemeMenuItem_Click;
-            ThemeMenu.Items.Add(item);
-        }
-    }
-
-    private void UpdateThemeMenuCheckmarks()
-    {
-        foreach (var item in ThemeMenu.Items.OfType<MenuItem>())
-        {
-            if (item.Tag is string themeId)
-                item.IsChecked = ThemeManager.CurrentTheme.Id == themeId;
-        }
     }
 
     // --- Claude Code plan usage (/status Usage) ---
