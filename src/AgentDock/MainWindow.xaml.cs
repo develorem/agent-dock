@@ -1347,7 +1347,18 @@ public partial class MainWindow : Window
         gitStatusControl.DiffRequested += (filePath, diffContent) =>
         {
             Log.Info($"DiffRequested: {filePath}");
-            filePreviewControl.ShowDiff(diffContent);
+            var absolutePath = Path.IsPathRooted(filePath)
+                ? filePath
+                : Path.Combine(project.FolderPath, filePath);
+            filePreviewControl.ShowDiff(absolutePath, diffContent);
+        };
+
+        // From the diff preview, reveal the underlying file in the explorer; the
+        // existing FileSelected wiring then swaps the preview from diff to full file.
+        filePreviewControl.RevealInExplorerRequested += path =>
+        {
+            Log.Info($"RevealInExplorerRequested: {path}");
+            fileExplorerControl.RevealAndSelect(path);
         };
 
         // Refresh file explorer when file system changes (reuses git status watcher)

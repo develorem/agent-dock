@@ -37,6 +37,13 @@ public partial class FilePreviewControl : UserControl
 
     private string? _currentExtension;
     private bool _isMarkdownRendered;
+    private string? _diffFilePath;
+
+    /// <summary>
+    /// Raised when the user clicks the "show full file" button while a diff is being
+    /// previewed. Payload is the absolute file path passed to <see cref="ShowDiff"/>.
+    /// </summary>
+    public event Action<string>? RevealInExplorerRequested;
 
     public FilePreviewControl()
     {
@@ -152,7 +159,7 @@ public partial class FilePreviewControl : UserControl
 
     private DiffLineColorizer? _diffColorizer;
 
-    public void ShowDiff(string diffContent)
+    public void ShowDiff(string filePath, string diffContent)
     {
         HideAll();
         ClosePreviewButton.Visibility = Visibility.Visible;
@@ -167,7 +174,18 @@ public partial class FilePreviewControl : UserControl
         _diffColorizer = new DiffLineColorizer();
         TextPreview.TextArea.TextView.LineTransformers.Add(_diffColorizer);
 
+        _diffFilePath = filePath;
+        RevealInExplorerButton.Visibility = File.Exists(filePath)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
         TextPreview.Visibility = Visibility.Visible;
+    }
+
+    private void RevealInExplorer_Click(object sender, RoutedEventArgs e)
+    {
+        if (!string.IsNullOrEmpty(_diffFilePath))
+            RevealInExplorerRequested?.Invoke(_diffFilePath);
     }
 
     public void Clear()
@@ -361,10 +379,12 @@ public partial class FilePreviewControl : UserControl
         TextPreview.Visibility = Visibility.Collapsed;
         MarkdownPreview.Visibility = Visibility.Collapsed;
         MarkdownToggleButton.Visibility = Visibility.Collapsed;
+        RevealInExplorerButton.Visibility = Visibility.Collapsed;
         ClosePreviewButton.Visibility = Visibility.Collapsed;
         ImageContainer.Visibility = Visibility.Collapsed;
         NoPreviewMessage.Visibility = Visibility.Collapsed;
         _isMarkdownRendered = false;
+        _diffFilePath = null;
         RemoveDiffColorizer();
         RemoveMarkdownLinkColorizer();
         RemoveJsonColorizer();
