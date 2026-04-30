@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using AgentDock.Models;
 using AgentDock.Services;
 
@@ -72,6 +73,97 @@ public partial class FileExplorerControl : UserControl
     /// Gets the folder name for use in panel titles.
     /// </summary>
     public string FolderName => Path.GetFileName(_rootPath) ?? _rootPath;
+
+    /// <summary>
+    /// Expands the tree to <paramref name="absolutePath"/>, selects the matching node,
+    /// and raises <see cref="FileSelected"/> if it's a file. The path must be inside
+    /// the loaded root and exist on disk; otherwise this is a no-op.
+    /// </summary>
+    public void RevealAndSelect(string absolutePath)
+    {
+        if (string.IsNullOrEmpty(_rootPath) || string.IsNullOrEmpty(absolutePath))
+            return;
+
+        string rootFull, targetFull;
+        try
+        {
+            rootFull = Path.GetFullPath(_rootPath);
+            targetFull = Path.GetFullPath(absolutePath);
+        }
+        catch { return; }
+
+        if (!File.Exists(targetFull) && !Directory.Exists(targetFull))
+            return;
+
+        if (!targetFull.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase))
+            return;
+        if (targetFull.Length == rootFull.Length)
+            return; // path is the root itself
+
+        var relative = Path.GetRelativePath(rootFull, targetFull);
+        var segments = relative.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 0) return;
+
+        IEnumerable<FileNode> currentLevel = FileTree.Items.OfType<FileNode>();
+        FileNode? targetNode = null;
+
+        for (var i = 0; i < segments.Length; i++)
+        {
+            var match = currentLevel.FirstOrDefault(n =>
+                string.Equals(n.Name, segments[i], StringComparison.OrdinalIgnoreCase));
+            if (match == null) return;
+
+            var isLast = i == segments.Length - 1;
+            if (!isLast)
+            {
+                if (!match.IsDirectory) return;
+                if (match.Children.Count == 1 && match.Children[0].FullPath == null)
+                    LoadChildren(match);
+                match.IsExpanded = true;
+                match.Icon = "📂"; // open folder
+                currentLevel = match.Children;
+            }
+            else
+            {
+                targetNode = match;
+            }
+        }
+
+        if (targetNode == null) return;
+
+        targetNode.IsSelected = true;
+
+        // Scroll the materialized container into view once the TreeView has caught up.
+        var captured = targetNode;
+        Dispatcher.BeginInvoke(() => BringNodeIntoView(captured), DispatcherPriority.Background);
+
+        if (!targetNode.IsDirectory && targetNode.FullPath != null)
+            FileSelected?.Invoke(targetNode.FullPath);
+    }
+
+    private void BringNodeIntoView(FileNode node)
+    {
+        var tvi = FindContainer(FileTree, FileTree.Items, node);
+        tvi?.BringIntoView();
+    }
+
+    private static TreeViewItem? FindContainer(ItemsControl parent, ItemCollection items, FileNode target)
+    {
+        foreach (var obj in items)
+        {
+            if (parent.ItemContainerGenerator.ContainerFromItem(obj) is not TreeViewItem tvi)
+                continue;
+            if (ReferenceEquals(obj, target))
+                return tvi;
+            if (obj is FileNode n && n.IsDirectory && n.IsExpanded)
+            {
+                var found = FindContainer(tvi, tvi.Items, target);
+                if (found != null) return found;
+            }
+        }
+        return null;
+    }
 
     /// <summary>
     /// Refreshes the file tree while preserving expanded folder state.
@@ -427,6 +519,7 @@ public class FileNode : INotifyPropertyChanged
     private string _icon = "";
     private string _name = "";
     private bool _isExpanded;
+    private bool _isSelected;
 
     public string Name
     {
@@ -455,6 +548,12 @@ public class FileNode : INotifyPropertyChanged
     {
         get => _isExpanded;
         set { _isExpanded = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsExpanded))); }
+    }
+
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set { _isSelected = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsSelected))); }
     }
 
     public ObservableCollection<FileNode> Children { get; } = [];

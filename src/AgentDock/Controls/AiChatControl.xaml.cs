@@ -64,6 +64,12 @@ public partial class AiChatControl : UserControl
     public event Action<string>? SessionModelChanged;
 
     /// <summary>
+    /// Raised when the user clicks a file-path reference rendered inside an
+    /// assistant markdown bubble. Payload is the absolute path.
+    /// </summary>
+    public event Action<string>? FileReferenceClicked;
+
+    /// <summary>
     /// Cumulative stats for the current session.
     /// </summary>
     public SessionStats Stats { get; } = new();
@@ -1249,7 +1255,10 @@ public partial class AiChatControl : UserControl
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             Padding = new Thickness(0)
         };
-        MarkdownHelper.RenderTo(markdownViewer, fullText);
+        var linkified = MarkdownHelper.LinkifyPaths(fullText, _projectPath);
+        MarkdownHelper.RenderTo(markdownViewer, linkified);
+        MarkdownHelper.WireFileLinks(markdownViewer.Document,
+            path => FileReferenceClicked?.Invoke(path));
 
         var isRendered = true;
         contentBlock.Visibility = Visibility.Collapsed;

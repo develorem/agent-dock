@@ -1363,6 +1363,14 @@ public partial class MainWindow : Window
                 gitStatusControl.RefreshStatus();
         };
 
+        // Clicking a file-path reference in the chat reveals + selects the file
+        // in the explorer; the existing FileSelected handler shows the preview.
+        aiChatControl.FileReferenceClicked += path =>
+        {
+            Log.Info($"FileReferenceClicked: {path}");
+            fileExplorerControl.RevealAndSelect(path);
+        };
+
         // Update AI Chat panel title when model is reported or when stats change
         aiChatControl.SessionModelChanged += _ => UpdateAiChatTitle(project, aiChatControl);
         aiChatControl.SessionStatsChanged += _ =>
