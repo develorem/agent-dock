@@ -129,6 +129,44 @@ public static partial class MarkdownHelper
         ApplyCodeBlockTheme(viewer.Document);
     }
 
+    /// <summary>
+    /// Builds a standalone <see cref="FlowDocument"/> from markdown source.
+    /// Used by the chat to cache a per-message rendered document at finalize
+    /// time, so scrolling past and back doesn't re-parse markdown.
+    ///
+    /// Internally instantiates a throwaway <see cref="MarkdownScrollViewer"/>
+    /// to drive MdXaml's parser, then detaches the document so it can be
+    /// attached to a real viewer later. The temp viewer is GC-eligible on return.
+    /// </summary>
+    /// <param name="markdown">Raw markdown source — preprocessing is handled internally.</param>
+    /// <param name="markdownStyle">Optional <see cref="FlowDocument"/> style (foreground, font, etc.).
+    /// Pass the same style the live viewer uses so the cached document renders identically.</param>
+    /// <param name="projectPath">Project root for path-link resolution. Pass empty to skip.</param>
+    /// <param name="onFileLinkClicked">Click handler for resolved file references in the rendered document.</param>
+    public static FlowDocument BuildDocument(
+        string markdown,
+        System.Windows.Style? markdownStyle,
+        string projectPath,
+        Action<string>? onFileLinkClicked)
+    {
+        var linkified = string.IsNullOrEmpty(projectPath) ? markdown : LinkifyPaths(markdown, projectPath);
+        var preProcessed = PreProcess(linkified);
+
+        var tmp = new MarkdownScrollViewer { MarkdownStyle = markdownStyle };
+        tmp.Markdown = preProcessed;
+        var doc = tmp.Document ?? new FlowDocument();
+
+        ApplyCodeBlockTheme(doc);
+        if (onFileLinkClicked != null)
+            WireFileLinks(doc, onFileLinkClicked);
+
+        // Detach from the temp viewer so the document can be re-parented to a
+        // real viewer when the chat container materializes.
+        tmp.Document = null;
+
+        return doc;
+    }
+
     private static void ApplyCodeBlockStyle(
         Block block, System.Windows.Media.Brush bg, System.Windows.Media.Brush fg)
     {

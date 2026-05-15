@@ -3,6 +3,8 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:models="clr-namespace:AgentDock.Models"
+             xmlns:mdxaml="clr-namespace:MdXaml;assembly=MdXaml"
              mc:Ignorable="d"
              Background="{DynamicResource ChatBackground}">
     <UserControl.Resources>
@@ -21,6 +23,75 @@
             <Setter Property="Foreground" Value="{DynamicResource ChatTextForeground}" />
             <Setter Property="FontSize" Value="13" />
         </Style>
+
+        <!-- Read-only selectable text used inside message bubbles. Borderless,
+             transparent background, no focus chrome — looks like a TextBlock
+             but allows text selection. -->
+        <Style x:Key="ChatSelectableText" TargetType="TextBox">
+            <Setter Property="FontFamily" Value="Cascadia Code, Consolas, Courier New" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="IsReadOnly" Value="True" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="VerticalScrollBarVisibility" Value="Disabled" />
+        </Style>
+
+        <!-- Chevron used to expand/collapse thinking/execution bubbles. -->
+        <Style x:Key="ChatChevron" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Cascadia Code, Consolas, Courier New" />
+            <Setter Property="FontSize" Value="10" />
+            <Setter Property="Foreground" Value="{DynamicResource ChatMutedForeground}" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Margin" Value="0,0,4,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Text" Value="▶" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsExpanded}" Value="True">
+                    <Setter Property="Text" Value="▼" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Each ToolEntry inside an execution bubble. -->
+        <DataTemplate DataType="{x:Type models:ToolEntry}">
+            <StackPanel Margin="0,0,0,6">
+                <TextBlock Text="{Binding Name, StringFormat='[Tool: {0}]'}"
+                           FontFamily="Cascadia Code, Consolas, Courier New"
+                           FontSize="10"
+                           Foreground="{DynamicResource ChatExecutionForeground}" />
+                <TextBox Text="{Binding FormattedInput, Mode=OneTime}"
+                         Style="{StaticResource ChatSelectableText}"
+                         FontSize="10"
+                         Foreground="{DynamicResource ChatExecutionForeground}"
+                         Margin="0,2,0,0" />
+            </StackPanel>
+        </DataTemplate>
+
+        <!-- AssistantMessage: plain-source view. Used when IsMarkdownView=False
+             or when the message has no markdown to render. -->
+        <DataTemplate x:Key="AssistantTextTemplate">
+            <TextBox Text="{Binding Text, Mode=OneTime}"
+                     Style="{StaticResource ChatSelectableText}"
+                     FontSize="12"
+                     Foreground="{DynamicResource ChatTextForeground}" />
+        </DataTemplate>
+
+        <!-- AssistantMessage: rendered-markdown view. The MarkdownScrollViewer's
+             content is set in code-behind on DataContextChanged so it survives
+             container recycling without leaking handlers. -->
+        <DataTemplate x:Key="AssistantMarkdownTemplate">
+            <mdxaml:MarkdownScrollViewer x:Name="MdViewer"
+                                         Background="Transparent"
+                                         Foreground="{DynamicResource ChatTextForeground}"
+                                         MarkdownStyle="{StaticResource ChatMarkdownStyle}"
+                                         VerticalScrollBarVisibility="Disabled"
+                                         HorizontalScrollBarVisibility="Disabled"
+                                         Padding="0"
+                                         DataContextChanged="AssistantMarkdown_DataContextChanged"
+                                         Loaded="AssistantMarkdown_Loaded" />
+        </DataTemplate>
     </UserControl.Resources>
     <Grid>
         <!-- Start session overlay (shown when no session is active) -->
@@ -348,15 +419,376 @@
                 </DockPanel>
             </Border>
 
-            <!-- Message list -->
-            <ScrollViewer x:Name="MessageScroller"
-                          VerticalScrollBarVisibility="Auto"
-                          HorizontalScrollBarVisibility="Disabled"
+            <!-- Message list — virtualized. Past messages are immutable record-ish
+                 VMs; only the currently-streaming / currently-building entries
+                 carry INPC. The ItemsControl template wraps the items panel in
+                 a ScrollViewer so VirtualizingStackPanel can implement IScrollInfo
+                 and only realize containers for visible items. -->
+            <ItemsControl x:Name="MessageList"
                           Background="{DynamicResource ChatBackground}"
-                          PreviewMouseWheel="MessageScroller_PreviewMouseWheel">
-                <StackPanel x:Name="MessageList"
-                            Margin="8,8,8,8" />
-            </ScrollViewer>
+                          Padding="8"
+                          ScrollViewer.CanContentScroll="True"
+                          VirtualizingPanel.IsVirtualizing="True"
+                          VirtualizingPanel.VirtualizationMode="Recycling"
+                          VirtualizingPanel.ScrollUnit="Pixel"
+                          PreviewMouseWheel="MessageList_PreviewMouseWheel">
+                <ItemsControl.Template>
+                    <ControlTemplate TargetType="ItemsControl">
+                        <ScrollViewer x:Name="MessageScroller"
+                                      Padding="{TemplateBinding Padding}"
+                                      Background="{TemplateBinding Background}"
+                                      VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      CanContentScroll="True">
+                            <ItemsPresenter />
+                        </ScrollViewer>
+                    </ControlTemplate>
+                </ItemsControl.Template>
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <VirtualizingStackPanel />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.Resources>
+
+                    <!-- UserMessage: right-aligned bubble, "You" label, selectable text. -->
+                    <DataTemplate DataType="{x:Type models:UserMessage}">
+                        <Border Background="{DynamicResource ChatUserBubbleBackground}"
+                                CornerRadius="8,8,2,8"
+                                Padding="10,6"
+                                Margin="40,4,8,4"
+                                HorizontalAlignment="Right">
+                            <StackPanel>
+                                <TextBlock Text="You"
+                                           FontFamily="Cascadia Code, Consolas, Courier New"
+                                           FontSize="10"
+                                           Foreground="{DynamicResource ChatUserLabelForeground}"
+                                           Margin="0,0,0,2" />
+                                <TextBox Text="{Binding Text, Mode=OneTime}"
+                                         Style="{StaticResource ChatSelectableText}"
+                                         FontSize="12"
+                                         Foreground="{DynamicResource ChatTextForeground}" />
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+
+                    <!-- SystemMessage: centered subtle text, danger color when IsWarning. -->
+                    <DataTemplate DataType="{x:Type models:SystemMessage}">
+                        <TextBlock Text="{Binding Text, Mode=OneTime}"
+                                   FontFamily="Cascadia Code, Consolas, Courier New"
+                                   FontSize="10"
+                                   HorizontalAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   Margin="8,6">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Foreground" Value="{DynamicResource ChatSubtleForeground}" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsWarning}" Value="True">
+                                            <Setter Property="Foreground" Value="{DynamicResource ChatDangerForeground}" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </DataTemplate>
+
+                    <!-- WaitingMessage: transient "Thinking..." placeholder shown after
+                         the user sends, until the first delta arrives. -->
+                    <DataTemplate DataType="{x:Type models:WaitingMessage}">
+                        <Border Background="{DynamicResource ChatThinkingBackground}"
+                                CornerRadius="6"
+                                Padding="8,4"
+                                Margin="8,2,40,2"
+                                HorizontalAlignment="Left"
+                                BorderBrush="{DynamicResource ChatThinkingBorderBrush}"
+                                BorderThickness="1">
+                            <TextBlock Text="Thinking..."
+                                       FontFamily="Cascadia Code, Consolas, Courier New"
+                                       FontSize="11"
+                                       Foreground="{DynamicResource ChatMutedForeground}"
+                                       FontStyle="Italic" />
+                        </Border>
+                    </DataTemplate>
+
+                    <!-- StreamingThinkingMessage: live thinking text being appended. -->
+                    <DataTemplate DataType="{x:Type models:StreamingThinkingMessage}">
+                        <Border Background="{DynamicResource ChatThinkingBackground}"
+                                CornerRadius="6"
+                                Padding="8,4"
+                                Margin="8,2,40,2"
+                                HorizontalAlignment="Left"
+                                BorderBrush="{DynamicResource ChatThinkingBorderBrush}"
+                                BorderThickness="1">
+                            <StackPanel>
+                                <TextBlock Text="Thinking"
+                                           FontFamily="Cascadia Code, Consolas, Courier New"
+                                           FontSize="10"
+                                           Foreground="{DynamicResource ChatSubtleForeground}"
+                                           FontStyle="Italic"
+                                           Margin="0,0,0,2" />
+                                <TextBox Text="{Binding Text, Mode=OneWay}"
+                                         Style="{StaticResource ChatSelectableText}"
+                                         FontSize="11"
+                                         Foreground="{DynamicResource ChatMutedForeground}"
+                                         FontStyle="Italic" />
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+
+                    <!-- ThinkingMessage (finalized): collapsible, body hidden by default. -->
+                    <DataTemplate DataType="{x:Type models:ThinkingMessage}">
+                        <Border Background="{DynamicResource ChatThinkingBackground}"
+                                CornerRadius="6"
+                                Padding="8,4"
+                                Margin="8,2,40,2"
+                                HorizontalAlignment="Left"
+                                BorderBrush="{DynamicResource ChatThinkingBorderBrush}"
+                                BorderThickness="1">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal"
+                                            Background="Transparent"
+                                            Cursor="Hand"
+                                            MouseLeftButtonUp="ThinkingHeader_Click"
+                                            Tag="{Binding}">
+                                    <TextBlock Style="{StaticResource ChatChevron}" />
+                                    <TextBlock Text="Thinking"
+                                               FontFamily="Cascadia Code, Consolas, Courier New"
+                                               FontSize="10"
+                                               Foreground="{DynamicResource ChatSubtleForeground}"
+                                               FontStyle="Italic" />
+                                </StackPanel>
+                                <TextBox Text="{Binding Text, Mode=OneTime}"
+                                         Style="{StaticResource ChatSelectableText}"
+                                         FontSize="11"
+                                         Foreground="{DynamicResource ChatMutedForeground}"
+                                         FontStyle="Italic"
+                                         Margin="0,2,0,0">
+                                    <TextBox.Visibility>
+                                        <Binding Path="IsExpanded">
+                                            <Binding.Converter>
+                                                <BooleanToVisibilityConverter />
+                                            </Binding.Converter>
+                                        </Binding>
+                                    </TextBox.Visibility>
+                                </TextBox>
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+
+                    <!-- BuildingExecutionMessage: live tool-call list for the current turn. -->
+                    <DataTemplate DataType="{x:Type models:BuildingExecutionMessage}">
+                        <Border Background="{DynamicResource ChatExecutionBackground}"
+                                CornerRadius="6"
+                                Padding="8,4"
+                                Margin="8,2,40,2"
+                                HorizontalAlignment="Left"
+                                BorderBrush="{DynamicResource ChatExecutionBorderBrush}"
+                                BorderThickness="1">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal"
+                                            Background="Transparent"
+                                            Cursor="Hand"
+                                            MouseLeftButtonUp="BuildingExecutionHeader_Click"
+                                            Tag="{Binding}">
+                                    <TextBlock Style="{StaticResource ChatChevron}" />
+                                    <TextBlock Text="Execution"
+                                               FontFamily="Cascadia Code, Consolas, Courier New"
+                                               FontSize="10"
+                                               Foreground="{DynamicResource ChatExecutionForeground}"
+                                               FontStyle="Italic" />
+                                </StackPanel>
+                                <ItemsControl ItemsSource="{Binding Tools}" Margin="0,2,0,0">
+                                    <ItemsControl.Visibility>
+                                        <Binding Path="IsExpanded">
+                                            <Binding.Converter>
+                                                <BooleanToVisibilityConverter />
+                                            </Binding.Converter>
+                                        </Binding>
+                                    </ItemsControl.Visibility>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+
+                    <!-- ExecutionMessage (finalized): same look, immutable Tools list. -->
+                    <DataTemplate DataType="{x:Type models:ExecutionMessage}">
+                        <Border Background="{DynamicResource ChatExecutionBackground}"
+                                CornerRadius="6"
+                                Padding="8,4"
+                                Margin="8,2,40,2"
+                                HorizontalAlignment="Left"
+                                BorderBrush="{DynamicResource ChatExecutionBorderBrush}"
+                                BorderThickness="1">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal"
+                                            Background="Transparent"
+                                            Cursor="Hand"
+                                            MouseLeftButtonUp="ExecutionHeader_Click"
+                                            Tag="{Binding}">
+                                    <TextBlock Style="{StaticResource ChatChevron}" />
+                                    <TextBlock Text="Execution"
+                                               FontFamily="Cascadia Code, Consolas, Courier New"
+                                               FontSize="10"
+                                               Foreground="{DynamicResource ChatExecutionForeground}"
+                                               FontStyle="Italic" />
+                                </StackPanel>
+                                <ItemsControl ItemsSource="{Binding Tools}" Margin="0,2,0,0">
+                                    <ItemsControl.Visibility>
+                                        <Binding Path="IsExpanded">
+                                            <Binding.Converter>
+                                                <BooleanToVisibilityConverter />
+                                            </Binding.Converter>
+                                        </Binding>
+                                    </ItemsControl.Visibility>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+
+                    <!-- StreamingAssistantMessage: live text being appended. Plain text only
+                         during streaming — markdown rendering happens on finalize. -->
+                    <DataTemplate DataType="{x:Type models:StreamingAssistantMessage}">
+                        <Border Background="{DynamicResource ChatAssistantBubbleBackground}"
+                                CornerRadius="8,8,8,2"
+                                Padding="10,6"
+                                Margin="8,4,40,4"
+                                HorizontalAlignment="Left">
+                            <StackPanel>
+                                <TextBlock Text="Claude"
+                                           FontFamily="Cascadia Code, Consolas, Courier New"
+                                           FontSize="10"
+                                           Foreground="{DynamicResource ChatAssistantLabelForeground}"
+                                           Margin="0,0,0,2" />
+                                <TextBox Text="{Binding Text, Mode=OneWay}"
+                                         Style="{StaticResource ChatSelectableText}"
+                                         FontSize="12"
+                                         Foreground="{DynamicResource ChatTextForeground}" />
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+
+                    <!-- AssistantMessage (finalized): switches between source and rendered
+                         markdown via a Style/DataTrigger on the ContentControl so only the
+                         active template is realized. -->
+                    <DataTemplate DataType="{x:Type models:AssistantMessage}">
+                        <Border Background="{DynamicResource ChatAssistantBubbleBackground}"
+                                CornerRadius="8,8,8,2"
+                                Padding="10,6"
+                                Margin="8,4,40,4"
+                                HorizontalAlignment="Left">
+                            <StackPanel>
+                                <DockPanel>
+                                    <Button DockPanel.Dock="Right"
+                                            Click="MarkdownToggle_Click"
+                                            Tag="{Binding}"
+                                            Cursor="Hand"
+                                            Background="Transparent"
+                                            BorderBrush="{DynamicResource ChatThinkingBorderBrush}"
+                                            BorderThickness="1"
+                                            Padding="4,2"
+                                            Opacity="0.7">
+                                        <Button.Style>
+                                            <Style TargetType="Button">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Setter Property="ToolTip" Value="Switch to source view" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding HasMarkdownToggle}" Value="True">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding IsMarkdownView}" Value="False">
+                                                        <Setter Property="ToolTip" Value="Switch to rendered view" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Button.Style>
+                                        <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                                   Foreground="{DynamicResource ChatMutedForeground}">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Text" Value="&#xE943;" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsMarkdownView}" Value="False">
+                                                            <Setter Property="Text" Value="&#xE890;" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </Button>
+                                    <TextBlock Text="Claude"
+                                               FontFamily="Cascadia Code, Consolas, Courier New"
+                                               FontSize="10"
+                                               Foreground="{DynamicResource ChatAssistantLabelForeground}"
+                                               Margin="0,0,0,2" />
+                                </DockPanel>
+                                <ContentControl Content="{Binding}">
+                                    <ContentControl.Style>
+                                        <Style TargetType="ContentControl">
+                                            <Setter Property="ContentTemplate" Value="{StaticResource AssistantTextTemplate}" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsMarkdownView}" Value="True">
+                                                    <Setter Property="ContentTemplate" Value="{StaticResource AssistantMarkdownTemplate}" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </ContentControl.Style>
+                                </ContentControl>
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+
+                    <!-- InactivityWarning: warning bubble with ticking elapsed text and two buttons. -->
+                    <DataTemplate DataType="{x:Type models:InactivityWarning}">
+                        <Border Background="{DynamicResource ChatWarningBackground}"
+                                CornerRadius="6"
+                                Padding="10,8"
+                                Margin="8,4"
+                                BorderBrush="{DynamicResource ChatWarningBorderBrush}"
+                                BorderThickness="1">
+                            <StackPanel>
+                                <TextBlock Text="Claude hasn't responded for a while — it may be stuck."
+                                           FontFamily="Cascadia Code, Consolas, Courier New"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource ChatStatusWarningForeground}"
+                                           TextWrapping="Wrap"
+                                           Margin="0,0,0,4" />
+                                <TextBlock Text="{Binding ElapsedText}"
+                                           FontFamily="Cascadia Code, Consolas, Courier New"
+                                           FontSize="10"
+                                           Foreground="{DynamicResource ChatMutedForeground}"
+                                           Margin="0,0,0,6" />
+                                <StackPanel Orientation="Horizontal">
+                                    <Button Content="Wait longer"
+                                            Click="InactivityWait_Click"
+                                            Tag="{Binding}"
+                                            Cursor="Hand"
+                                            FontFamily="Cascadia Code, Consolas, Courier New"
+                                            FontSize="11"
+                                            Background="{DynamicResource ChatButtonBackground}"
+                                            Foreground="{DynamicResource ChatButtonForeground}"
+                                            BorderBrush="{DynamicResource ChatButtonBorderBrush}"
+                                            BorderThickness="1"
+                                            Padding="10,4"
+                                            Margin="0,0,8,0" />
+                                    <Button Content="Kill process"
+                                            Click="InactivityKill_Click"
+                                            Tag="{Binding}"
+                                            Cursor="Hand"
+                                            FontFamily="Cascadia Code, Consolas, Courier New"
+                                            FontSize="11"
+                                            Background="{DynamicResource ChatKillButtonBackground}"
+                                            Foreground="{DynamicResource ChatDangerForeground}"
+                                            BorderBrush="{DynamicResource ChatKillButtonBorderBrush}"
+                                            BorderThickness="1"
+                                            Padding="10,4" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+
+                </ItemsControl.Resources>
+            </ItemsControl>
         </DockPanel>
     </Grid>
 </UserControl>
