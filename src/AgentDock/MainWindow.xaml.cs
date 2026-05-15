@@ -322,12 +322,17 @@ public partial class MainWindow : Window
     private void AppSettings_Click(object sender, RoutedEventArgs e)
     {
         var currentClaudePath = AppSettings.GetString("ClaudePath");
+        var currentChannelStr = AppSettings.GetString("UpdateChannel", "Stable");
+        var currentChannel = Enum.TryParse<UpdateChannel>(currentChannelStr, ignoreCase: true, out var c)
+            ? c
+            : UpdateChannel.Stable;
 
         var result = Windows.AppSettingsDialog.Show(
             this,
             ThemeManager.CurrentTheme.Id,
             _currentToolbarPosition,
-            currentClaudePath);
+            currentClaudePath,
+            currentChannel);
 
         if (result == null) return;
 
@@ -346,6 +351,12 @@ public partial class MainWindow : Window
             ClaudeSession.ClaudeBinaryPath = newClaudePath;
             AppSettings.SetString("ClaudePath", string.IsNullOrEmpty(result.ClaudePath) ? "" : result.ClaudePath);
             Log.Info($"AppSettings: ClaudePath set to '{newClaudePath}'");
+        }
+
+        if (result.UpdateChannel != currentChannel)
+        {
+            AppSettings.SetString("UpdateChannel", result.UpdateChannel.ToString());
+            Log.Info($"AppSettings: UpdateChannel set to '{result.UpdateChannel}'");
         }
     }
 
@@ -673,7 +684,11 @@ public partial class MainWindow : Window
         Log.Info("UpdateCheck: skipping update check in Debug build");
         return;
 #else
-        var updateInfo = await System.Threading.Tasks.Task.Run(UpdateCheckService.CheckForUpdateAsync);
+        var channelStr = AppSettings.GetString("UpdateChannel", "Stable");
+        var channel = Enum.TryParse<UpdateChannel>(channelStr, ignoreCase: true, out var c)
+            ? c
+            : UpdateChannel.Stable;
+        var updateInfo = await System.Threading.Tasks.Task.Run(() => UpdateCheckService.CheckForUpdateAsync(channel));
         if (updateInfo == null)
             return;
 

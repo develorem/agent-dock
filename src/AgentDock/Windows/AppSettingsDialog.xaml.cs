@@ -16,16 +16,21 @@ public partial class AppSettingsDialog : Window
         public string ThemeId { get; set; } = "";
         public string ToolbarPosition { get; set; } = "Top";
         public string ClaudePath { get; set; } = "";
+        public UpdateChannel UpdateChannel { get; set; } = UpdateChannel.Stable;
     }
 
     public Result? Outcome { get; private set; }
 
     private readonly StackPanel[] _sections;
 
-    private AppSettingsDialog(string currentThemeId, string currentToolbarPosition, string currentClaudePath)
+    private AppSettingsDialog(
+        string currentThemeId,
+        string currentToolbarPosition,
+        string currentClaudePath,
+        UpdateChannel currentChannel)
     {
         InitializeComponent();
-        _sections = [AppearanceSection, IntegrationsSection, DiagnosticsSection];
+        _sections = [AppearanceSection, IntegrationsSection, UpdatesSection, DiagnosticsSection];
 
         ThemeCombo.ItemsSource = ThemeRegistry.All;
         ThemeCombo.SelectedItem =
@@ -45,15 +50,32 @@ public partial class AppSettingsDialog : Window
         // Empty / "claude" means default — show empty so the user knows it's the default.
         ClaudePathTextBox.Text = currentClaudePath is "" or "claude" ? "" : currentClaudePath;
 
+        var channelTag = currentChannel.ToString();
+        foreach (ComboBoxItem item in UpdateChannelCombo.Items)
+        {
+            if ((string)item.Tag == channelTag)
+            {
+                UpdateChannelCombo.SelectedItem = item;
+                break;
+            }
+        }
+        if (UpdateChannelCombo.SelectedItem == null)
+            UpdateChannelCombo.SelectedIndex = 0;
+
         var logFile = Log.LogFilePath;
         LogsPathText.Text = !string.IsNullOrEmpty(logFile) && Path.GetDirectoryName(logFile) is { } dir
             ? $"Folder: {dir}"
             : "Log folder not yet created.";
     }
 
-    public static Result? Show(Window owner, string currentThemeId, string currentToolbarPosition, string currentClaudePath)
+    public static Result? Show(
+        Window owner,
+        string currentThemeId,
+        string currentToolbarPosition,
+        string currentClaudePath,
+        UpdateChannel currentChannel)
     {
-        var dlg = new AppSettingsDialog(currentThemeId, currentToolbarPosition, currentClaudePath) { Owner = owner };
+        var dlg = new AppSettingsDialog(currentThemeId, currentToolbarPosition, currentClaudePath, currentChannel) { Owner = owner };
         return dlg.ShowDialog() == true ? dlg.Outcome : null;
     }
 
@@ -68,6 +90,7 @@ public partial class AppSettingsDialog : Window
         var target = tag switch
         {
             "integrations" => IntegrationsSection,
+            "updates" => UpdatesSection,
             "diagnostics" => DiagnosticsSection,
             _ => AppearanceSection
         };
@@ -117,12 +140,17 @@ public partial class AppSettingsDialog : Window
     {
         var theme = ThemeCombo.SelectedItem as ThemeDescriptor ?? ThemeRegistry.Default;
         var toolbar = (ToolbarPositionCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "Top";
+        var channelTag = (UpdateChannelCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "Stable";
+        var channel = Enum.TryParse<UpdateChannel>(channelTag, ignoreCase: true, out var c)
+            ? c
+            : UpdateChannel.Stable;
 
         Outcome = new Result
         {
             ThemeId = theme.Id,
             ToolbarPosition = toolbar,
-            ClaudePath = ClaudePathTextBox.Text.Trim()
+            ClaudePath = ClaudePathTextBox.Text.Trim(),
+            UpdateChannel = channel
         };
         DialogResult = true;
     }

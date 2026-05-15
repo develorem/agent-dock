@@ -22,6 +22,11 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # Strip any prerelease suffix (e.g. -beta.1, -rc.2) so all prereleases
+          # of a target version share one release-notes file
+          # (v0.10.0-beta.1 → docs/release-notes/v0.10.0.md).
+          BASE_VERSION="${VERSION%%-*}"
+          echo "base_version=$BASE_VERSION" >> "$GITHUB_OUTPUT"
           if [[ "$VERSION" == *-* ]]; then
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           else
@@ -70,7 +75,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          body_path: docs/release-notes/v${{ steps.version.outputs.version }}.md
+          body_path: docs/release-notes/v${{ steps.version.outputs.base_version }}.md
           fail_on_unmatched_files: true
           prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
           files: |

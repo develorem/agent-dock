@@ -141,6 +141,7 @@
                              SelectionChanged="NavList_SelectionChanged">
                         <ListBoxItem Tag="appearance" IsSelected="True">Appearance</ListBoxItem>
                         <ListBoxItem Tag="integrations">Integrations</ListBoxItem>
+                        <ListBoxItem Tag="updates">Updates</ListBoxItem>
                         <ListBoxItem Tag="diagnostics">Diagnostics</ListBoxItem>
                     </ListBox>
                 </Border>
@@ -211,6 +212,24 @@
                             </DockPanel>
                             <TextBlock Text="Leave blank to use 'claude' from your system PATH. Set this if you've installed Claude Code in a custom location."
                                        Style="{StaticResource FieldHint}" />
+                        </StackPanel>
+
+                        <!-- Updates -->
+                        <StackPanel x:Name="UpdatesSection" Visibility="Collapsed">
+                            <TextBlock Text="Updates" Style="{StaticResource SectionHeader}" />
+
+                            <TextBlock Text="Release Channel" Style="{StaticResource FieldLabel}" />
+                            <ComboBox x:Name="UpdateChannelCombo"
+                                      Height="28"
+                                      FontSize="13"
+                                      VerticalContentAlignment="Center"
+                                      Margin="0,0,0,4">
+                                <ComboBoxItem Content="Stable" Tag="Stable" />
+                                <ComboBoxItem Content="Beta (pre-releases)" Tag="Beta" />
+                            </ComboBox>
+                            <TextBlock Style="{StaticResource FieldHint}"
+                                       TextWrapping="Wrap"
+                                       Text="Stable only auto-updates to official releases. Beta opts in to test builds tagged like v0.10.0-beta.1 — use this on machines you've volunteered to test pre-releases with. Beta still auto-updates to the final stable release when it ships." />
                         </StackPanel>
 
                         <!-- Diagnostics -->
