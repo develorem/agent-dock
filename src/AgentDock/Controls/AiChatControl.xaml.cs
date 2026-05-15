@@ -638,17 +638,12 @@ public partial class AiChatControl : UserControl
     {
         RemoveWaitingBubble();
 
-        if (evt.BlockType == "thinking")
-        {
-            // Start a new thinking bubble
-            _thinkingText = "";
-            _thinkingBlock = CreateSelectableText(11,
-                ThemeManager.GetBrush("ChatMutedForeground"),
-                FontStyles.Italic);
-            _thinkingBubble = CreateThinkingBubble(_thinkingBlock);
-            _thinkingExpanded = true;
-            MessageList.Children.Add(_thinkingBubble);
-        }
+        // Don't create the thinking bubble eagerly here. claude-opus-4-7 returns
+        // *redacted* thinking blocks — content_block_start fires with type=thinking
+        // but no thinking_delta events ever arrive (only a signature_delta), so an
+        // eagerly-created bubble would stay empty forever. OnThinkingDelta creates
+        // the bubble lazily on the first real delta, so models that do stream
+        // thinking text still get a populated bubble.
     }
 
     private void OnContentBlockStopped(ClaudeContentBlockEvent evt)

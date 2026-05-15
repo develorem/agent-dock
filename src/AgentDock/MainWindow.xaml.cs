@@ -98,8 +98,16 @@ public partial class MainWindow : Window
         ThemeManager.ThemeChanged += OnThemeChanged;
         UpdateTaskbarIcon();
 
-        // Sync maximize/restore icon whenever window state changes (button click, double-click, aero snap, etc.)
-        StateChanged += (_, _) => UpdateMaximizeIcon();
+        // Sync maximize/restore icon whenever window state changes (button click, double-click, aero snap, etc.).
+        // Also grant any process permission to bring us back when we minimize — without this,
+        // a long-idle instance whose foreground privilege has expired can't be restored from
+        // the taskbar (the click plays a ding and the window stays minimized).
+        StateChanged += (_, _) =>
+        {
+            UpdateMaximizeIcon();
+            if (WindowState == WindowState.Minimized)
+                AllowSetForegroundWindow(ASFW_ANY);
+        };
         UpdateMaximizeIcon();
 
         // Restore saved toolbar position
@@ -196,6 +204,11 @@ public partial class MainWindow : Window
 
     [DllImport("user32.dll")]
     private static extern int SetWindowLong(IntPtr hwnd, int nIndex, int dwNewLong);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool AllowSetForegroundWindow(int dwProcessId);
+
+    private const int ASFW_ANY = -1;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct POINT { public int X, Y; }

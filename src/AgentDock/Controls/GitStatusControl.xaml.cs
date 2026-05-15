@@ -73,6 +73,10 @@ public partial class GitStatusControl : UserControl
                              | NotifyFilters.DirectoryName
                              | NotifyFilters.LastWrite
                              | NotifyFilters.Size,
+                // Default is 8 KB, which overflows on busy repos (node_modules installs,
+                // build output) and drops events with "Too many changes at once". 64 KB
+                // is the practical ceiling for non-paged pool usage on most systems.
+                InternalBufferSize = 64 * 1024,
                 EnableRaisingEvents = true
             };
 

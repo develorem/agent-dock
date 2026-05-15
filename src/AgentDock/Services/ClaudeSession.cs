@@ -468,7 +468,11 @@ public class ClaudeSession : IDisposable
                 // Reset inactivity watchdog on each line of output
                 ResetInactivityTimer();
 
-                Log.Info($"ClaudeSession STDOUT: {(line.Length > 500 ? line[..500] + "..." : line)}");
+                // Skip logging streaming-token deltas — they fire dozens of times per second
+                // during a long response and were producing 100+ MB log files. The events are
+                // still parsed and dispatched to the UI; we just don't write them to disk.
+                if (!line.StartsWith("{\"type\":\"stream_event\"", StringComparison.Ordinal))
+                    Log.Info($"ClaudeSession STDOUT: {(line.Length > 500 ? line[..500] + "..." : line)}");
 
                 try
                 {
