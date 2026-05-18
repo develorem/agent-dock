@@ -45,6 +45,10 @@ public partial class MainWindow : Window
     private readonly Dictionary<ProjectInfo, TodoListControl> _projectTodoListControls = [];
     private ProjectInfo? _activeProject;
 
+    // Tab grouping state (meta tabs)
+    private readonly List<ProjectGroup> _groups = [];
+    private string? _activeGroupId;
+
     // Workspace state
     private string? _currentWorkspacePath;
     private bool _workspaceDirty;
@@ -89,6 +93,10 @@ public partial class MainWindow : Window
         ToolbarPanel.DragOver += ToolbarPanel_DragOver;
         ToolbarPanel.Drop += ToolbarPanel_Drop;
         ToolbarPanel.DragLeave += (_, _) => RemoveTabDragIndicator();
+
+        // MetaTabPanel is the drop target for moving a project tab into a different group.
+        // Each meta tab element also accepts drop individually (set on creation).
+        MetaTabPanel.AllowDrop = true;
 
         CommandBindings.Add(new CommandBinding(AddProjectCommand, (_, _) => AddProject()));
         CommandBindings.Add(new CommandBinding(SaveWorkspaceCommand, (_, _) => SaveWorkspace()));
@@ -751,6 +759,11 @@ public partial class MainWindow : Window
 
         var project = new ProjectInfo { FolderPath = folderPath };
         project.CustomName = ProjectSettingsManager.Load(folderPath).Name;
+
+        // If groups are active, the new project joins whichever group is currently visible
+        if (_groups.Count > 0 && _activeGroupId != null)
+            project.GroupId = _activeGroupId;
+
         _projects.Add(project);
         Log.Info($"AddProjectFromPath: created ProjectInfo for '{project.FolderName}'");
 
@@ -963,13 +976,13 @@ public partial class MainWindow : Window
 
         _projectTabIcons[project] = statusGrid;
 
-        // Custom template: border only, no default button chrome
+        // VS Code-like tab: flat rectangle, transparent bottom-accent on inactive,
+        // themed bottom-accent on active. No corner radius, no top/left/right borders.
         var tabTemplate = new ControlTemplate(typeof(Button));
         var borderFactory = new FrameworkElementFactory(typeof(Border), "Bd");
         borderFactory.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(BackgroundProperty));
         borderFactory.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(BorderBrushProperty));
         borderFactory.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(BorderThicknessProperty));
-        borderFactory.SetValue(Border.CornerRadiusProperty, new CornerRadius(3));
         borderFactory.SetValue(Border.PaddingProperty, new TemplateBindingExtension(PaddingProperty));
         var contentPresenter = new FrameworkElementFactory(typeof(ContentPresenter));
         contentPresenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
@@ -979,12 +992,12 @@ public partial class MainWindow : Window
         var button = new Button
         {
             MinWidth = 44,
-            Height = 36,
-            Margin = new Thickness(2),
-            Padding = new Thickness(8, 4, 8, 4),
-            Background = Brushes.Transparent,
-            BorderBrush = ThemeManager.GetBrush("TabButtonBorderBrush"),
-            BorderThickness = new Thickness(1),
+            Height = 32,
+            Margin = new Thickness(0),
+            Padding = new Thickness(12, 0, 12, 0),
+            Background = ThemeManager.GetBrush("TabButtonInactiveBackground"),
+            BorderBrush = Brushes.Transparent,
+            BorderThickness = new Thickness(0, 0, 0, 2),
             Cursor = Cursors.Hand,
             HorizontalContentAlignment = HorizontalAlignment.Left,
             Tag = project,
@@ -1014,18 +1027,15 @@ public partial class MainWindow : Window
                 SwitchToProject(project);
         };
 
-        // Hover: highlight border only (no background fill)
         button.MouseEnter += (_, _) =>
         {
             if (project != _activeProject)
-                button.BorderBrush = ThemeManager.GetBrush("TabButtonHoverBorderBrush");
+                button.Background = MakeTabHoverBrush();
         };
         button.MouseLeave += (_, _) =>
         {
             if (project != _activeProject)
-                button.BorderBrush = ThemeManager.GetBrush("TabButtonBorderBrush");
-            else
-                button.BorderBrush = ThemeManager.GetBrush("TabButtonActiveBorderBrush");
+                button.Background = ThemeManager.GetBrush("TabButtonInactiveBackground");
         };
 
         // Drag initiation (DragOver/Drop handled at ToolbarPanel level)
@@ -1057,6 +1067,8 @@ public partial class MainWindow : Window
         {
             Items =
             {
+                CreateMenuItem("Add to new group", () => AddProjectToNewGroup(project)),
+                new Separator(),
                 CreateMenuItem("Close Project", () => CloseProject(project)),
                 CreateMenuItem("Open in Explorer", () => OpenInExplorer(project))
             }
@@ -1083,9 +1095,9 @@ public partial class MainWindow : Window
 
         var button = new Button
         {
-            Width = 36,
-            Height = 36,
-            Margin = new Thickness(2),
+            Width = 32,
+            Height = 32,
+            Margin = new Thickness(6, 0, 0, 0),
             Background = Brushes.Transparent,
             BorderBrush = ThemeManager.GetBrush("AddButtonBorderBrush"),
             BorderThickness = new Thickness(1),
@@ -1122,16 +1134,20 @@ public partial class MainWindow : Window
     /// <summary>
     /// Finds the insertion index among tab buttons for the given mouse position.
     /// Returns the index in _projects where the dragged tab should be inserted.
+    /// Hidden (group-filtered) tabs are skipped so reordering operates only on what's visible.
     /// </summary>
     private int GetTabInsertionIndex(DragEventArgs e)
     {
         var isHorizontal = ToolbarPanel.Orientation == Orientation.Horizontal;
+        ProjectInfo? lastVisibleBefore = null;
 
         for (int i = 0; i < ToolbarPanel.Children.Count; i++)
         {
             if (ToolbarPanel.Children[i] is not FrameworkElement child)
                 continue;
-            if (child == _toolbarAddButton || child == _tabDragIndicator || child.Tag is not ProjectInfo)
+            if (child == _toolbarAddButton || child == _tabDragIndicator || child.Tag is not ProjectInfo proj)
+                continue;
+            if (child.Visibility != Visibility.Visible)
                 continue;
 
             var pos = e.GetPosition(child);
@@ -1139,15 +1155,16 @@ public partial class MainWindow : Window
             var coord = isHorizontal ? pos.X : pos.Y;
 
             if (coord < midpoint)
-            {
-                // Before this tab — find its project index
-                var proj = (ProjectInfo)child.Tag;
                 return _projects.IndexOf(proj);
-            }
+
+            lastVisibleBefore = proj;
         }
 
-        // After all tabs
-        return _projects.Count;
+        // After all visible tabs — insert immediately after the last one so hidden tabs
+        // keep their relative position in the underlying list.
+        return lastVisibleBefore != null
+            ? _projects.IndexOf(lastVisibleBefore) + 1
+            : _projects.Count;
     }
 
     private void ToolbarPanel_DragOver(object sender, DragEventArgs e)
@@ -1253,6 +1270,383 @@ public partial class MainWindow : Window
         var item = new MenuItem { Header = header };
         item.Click += (_, _) => action();
         return item;
+    }
+
+    // --- Tab groups (meta tabs) ---
+
+    /// <summary>
+    /// Right-click "Add to new group" action. On first use, splits all existing tabs
+    /// into an implicit "Ungrouped" group plus a new group containing the right-clicked tab.
+    /// On subsequent uses, just creates the next numbered group.
+    /// </summary>
+    private void AddProjectToNewGroup(ProjectInfo project)
+    {
+        // First-time: also create the "Ungrouped" bucket for everything else
+        if (_groups.Count == 0)
+        {
+            var ungrouped = new ProjectGroup
+            {
+                Id = Guid.NewGuid().ToString(),
+                Name = "Ungrouped",
+                Order = 0
+            };
+            _groups.Add(ungrouped);
+            foreach (var p in _projects)
+                p.GroupId = ungrouped.Id;
+        }
+
+        // Create the new group with an auto-name
+        var newGroup = new ProjectGroup
+        {
+            Id = Guid.NewGuid().ToString(),
+            Name = NextGroupName(),
+            Order = _groups.Count == 0 ? 1 : _groups.Max(g => g.Order) + 1
+        };
+        _groups.Add(newGroup);
+        project.GroupId = newGroup.Id;
+
+        _activeGroupId = newGroup.Id;
+        RefreshMetaTabBar();
+        RefreshProjectTabVisibility();
+
+        // Ensure the active project is one that's visible in the new group
+        if (_activeProject != project)
+            SwitchToProject(project);
+
+        SetWorkspaceDirty();
+    }
+
+    private string NextGroupName()
+    {
+        // Find the smallest unused "Group N"
+        var existing = new HashSet<string>(_groups.Select(g => g.Name), StringComparer.OrdinalIgnoreCase);
+        for (int n = 1; n < 1000; n++)
+        {
+            var candidate = $"Group {n}";
+            if (!existing.Contains(candidate))
+                return candidate;
+        }
+        return "Group";
+    }
+
+    /// <summary>
+    /// Rebuilds <see cref="MetaTabPanel"/> from <see cref="_groups"/>.
+    /// Hides the meta bar when fewer than two groups exist.
+    /// </summary>
+    private void RefreshMetaTabBar()
+    {
+        MetaTabPanel.Children.Clear();
+
+        if (_groups.Count < 2)
+        {
+            MetaTabBorder.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        MetaTabBorder.Visibility = Visibility.Visible;
+
+        foreach (var group in _groups.OrderBy(g => g.Order))
+            MetaTabPanel.Children.Add(CreateMetaTabElement(group));
+    }
+
+    /// <summary>
+    /// Hides project tabs that aren't in the active group when grouping is in use.
+    /// Shows every tab otherwise.
+    /// </summary>
+    private void RefreshProjectTabVisibility()
+    {
+        var filtering = _groups.Count >= 2 && _activeGroupId != null;
+
+        foreach (var (project, button) in _projectTabButtons)
+        {
+            button.Visibility = !filtering || project.GroupId == _activeGroupId
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
+    }
+
+    private Button CreateMetaTabElement(ProjectGroup group)
+    {
+        // Flat template (matches project tab visual language)
+        var template = new ControlTemplate(typeof(Button));
+        var borderFactory = new FrameworkElementFactory(typeof(Border), "Bd");
+        borderFactory.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(BackgroundProperty));
+        borderFactory.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(BorderBrushProperty));
+        borderFactory.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(BorderThicknessProperty));
+        borderFactory.SetValue(Border.PaddingProperty, new TemplateBindingExtension(PaddingProperty));
+        var contentPresenter = new FrameworkElementFactory(typeof(ContentPresenter));
+        contentPresenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+        borderFactory.AppendChild(contentPresenter);
+        template.VisualTree = borderFactory;
+
+        var label = new TextBlock
+        {
+            Text = group.Name,
+            FontSize = 11,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = ThemeManager.GetBrush("TabButtonForeground"),
+        };
+
+        var isActive = group.Id == _activeGroupId;
+
+        var button = new Button
+        {
+            Tag = group,
+            MinWidth = 32,
+            Height = 22,
+            Margin = new Thickness(0),
+            Padding = new Thickness(10, 0, 10, 0),
+            Background = isActive
+                ? ThemeManager.GetBrush("TabButtonActiveBackground")
+                : ThemeManager.GetBrush("TabButtonInactiveBackground"),
+            BorderBrush = isActive
+                ? ThemeManager.GetBrush("TabButtonActiveBorderBrush")
+                : Brushes.Transparent,
+            BorderThickness = new Thickness(0, 0, 0, 2),
+            Cursor = Cursors.Hand,
+            Template = template,
+            Content = label,
+            AllowDrop = true,
+            ToolTip = "Click to switch group · click again to rename · right-click for options"
+        };
+
+        button.Click += (_, _) =>
+        {
+            // Ignore the click that bubbles from inside the rename TextBox
+            if (button.Content is TextBox)
+                return;
+            if (group.Id == _activeGroupId)
+                StartMetaTabRename(group, button, label);
+            else
+                SetActiveGroup(group.Id);
+        };
+
+        button.MouseEnter += (_, _) =>
+        {
+            if (group.Id != _activeGroupId && button.Content is TextBlock)
+                button.Background = MakeTabHoverBrush();
+        };
+        button.MouseLeave += (_, _) =>
+        {
+            if (group.Id != _activeGroupId && button.Content is TextBlock)
+                button.Background = ThemeManager.GetBrush("TabButtonInactiveBackground");
+        };
+
+        // Right-click context menu (Delete group, only if empty)
+        var deleteItem = CreateMenuItem("Delete group", () => DeleteGroup(group.Id));
+        button.ContextMenu = new ContextMenu { Items = { deleteItem } };
+        button.ContextMenuOpening += (_, _) =>
+        {
+            deleteItem.IsEnabled = !_projects.Any(p => p.GroupId == group.Id);
+        };
+
+        // Drag-drop target: dropping a project tab here moves it to this group
+        button.DragOver += (_, e) =>
+        {
+            if (e.Data.GetDataPresent("ProjectTab"))
+            {
+                e.Effects = DragDropEffects.Move;
+                button.Background = MakeTabHoverBrush();
+                e.Handled = true;
+            }
+            else
+            {
+                e.Effects = DragDropEffects.None;
+            }
+        };
+        button.DragLeave += (_, _) =>
+        {
+            if (group.Id == _activeGroupId)
+                button.Background = ThemeManager.GetBrush("TabButtonActiveBackground");
+            else
+                button.Background = ThemeManager.GetBrush("TabButtonInactiveBackground");
+        };
+        button.Drop += (_, e) =>
+        {
+            // Reset hover-tinted background regardless of outcome
+            button.Background = group.Id == _activeGroupId
+                ? ThemeManager.GetBrush("TabButtonActiveBackground")
+                : ThemeManager.GetBrush("TabButtonInactiveBackground");
+
+            if (e.Data.GetData("ProjectTab") is ProjectInfo dropped)
+            {
+                MoveProjectToGroup(dropped, group.Id);
+                e.Handled = true;
+            }
+        };
+
+        return button;
+    }
+
+    private void StartMetaTabRename(ProjectGroup group, Button button, TextBlock label)
+    {
+        var textbox = new TextBox
+        {
+            Text = group.Name,
+            FontSize = 11,
+            MinWidth = Math.Max(60, label.ActualWidth + 16),
+            VerticalAlignment = VerticalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(-4, 0, -4, 0),
+            Padding = new Thickness(2, 0, 2, 0),
+            Background = ThemeManager.GetBrush("ContentBackground"),
+            Foreground = ThemeManager.GetBrush("TabButtonForeground"),
+            BorderThickness = new Thickness(1),
+            BorderBrush = ThemeManager.GetBrush("TabButtonActiveBorderBrush")
+        };
+
+        var committed = false;
+        void Commit(bool save)
+        {
+            if (committed) return;
+            committed = true;
+            if (save && !string.IsNullOrWhiteSpace(textbox.Text))
+            {
+                var newName = textbox.Text.Trim();
+                if (!string.Equals(newName, group.Name, StringComparison.Ordinal))
+                {
+                    group.Name = newName;
+                    SetWorkspaceDirty();
+                }
+            }
+            label.Text = group.Name;
+            button.Content = label;
+        }
+
+        textbox.LostFocus += (_, _) => Commit(true);
+        textbox.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter) { Commit(true); e.Handled = true; }
+            else if (e.Key == Key.Escape) { Commit(false); e.Handled = true; }
+        };
+
+        button.Content = textbox;
+
+        // Defer focus until after the visual tree has placed the textbox
+        Dispatcher.BeginInvoke(() =>
+        {
+            textbox.Focus();
+            Keyboard.Focus(textbox);
+            textbox.SelectAll();
+        }, DispatcherPriority.Input);
+    }
+
+    private void SetActiveGroup(string groupId)
+    {
+        if (_activeGroupId == groupId)
+            return;
+
+        _activeGroupId = groupId;
+        RefreshMetaTabBar();
+        RefreshProjectTabVisibility();
+
+        // If the active project isn't in the new group, switch to one that is
+        if (_activeProject == null || _activeProject.GroupId != groupId)
+        {
+            var firstInGroup = _projects.FirstOrDefault(p => p.GroupId == groupId);
+            if (firstInGroup != null)
+                SwitchToProject(firstInGroup);
+            else
+            {
+                // Empty group — show empty state but keep workspace open
+                _activeProject = null;
+                ProjectContentHost.Content = null;
+                ProjectContentHost.Visibility = Visibility.Collapsed;
+                EmptyStatePanel.Visibility = Visibility.Visible;
+                UpdateTitleBar();
+            }
+        }
+        // Pure group navigation — like project switching, doesn't dirty the workspace
+    }
+
+    private void MoveProjectToGroup(ProjectInfo project, string groupId)
+    {
+        if (project.GroupId == groupId)
+            return;
+        if (_groups.All(g => g.Id != groupId))
+            return;
+
+        project.GroupId = groupId;
+        RefreshProjectTabVisibility();
+
+        // If we just moved the active project out of the active group, show the next visible one.
+        // When the source group is now empty, follow the project to its new group so the user
+        // isn't left staring at an empty meta tab.
+        if (project == _activeProject && groupId != _activeGroupId)
+        {
+            var next = _projects.FirstOrDefault(p => p.GroupId == _activeGroupId);
+            if (next != null)
+            {
+                SwitchToProject(next);
+            }
+            else
+            {
+                _activeGroupId = groupId;
+                RefreshMetaTabBar();
+                RefreshProjectTabVisibility();
+            }
+        }
+
+        SetWorkspaceDirty();
+    }
+
+    private void DeleteGroup(string groupId)
+    {
+        var group = _groups.FirstOrDefault(g => g.Id == groupId);
+        if (group == null) return;
+        if (_projects.Any(p => p.GroupId == groupId))
+            return; // Only empty groups can be deleted
+
+        _groups.Remove(group);
+
+        // If only one group remains, dissolve all grouping (back to pristine no-group state)
+        if (_groups.Count <= 1)
+        {
+            _groups.Clear();
+            _activeGroupId = null;
+            foreach (var p in _projects)
+                p.GroupId = null;
+        }
+        else if (_activeGroupId == groupId)
+        {
+            _activeGroupId = _groups.OrderBy(g => g.Order).First().Id;
+        }
+
+        RefreshMetaTabBar();
+        RefreshProjectTabVisibility();
+
+        // Ensure something is showing in the content area
+        if (_activeGroupId != null &&
+            (_activeProject == null || _activeProject.GroupId != _activeGroupId))
+        {
+            var next = _projects.FirstOrDefault(p => p.GroupId == _activeGroupId);
+            if (next != null) SwitchToProject(next);
+        }
+
+        SetWorkspaceDirty();
+    }
+
+    /// <summary>
+    /// Returns the orientation for the meta tab strip and adjusts the meta border thickness
+    /// for the supplied toolbar position.
+    /// </summary>
+    private void ApplyMetaTabLayoutForToolbarPosition(string position)
+    {
+        switch (position)
+        {
+            case "Top":
+            case "Bottom":
+                DockPanel.SetDock(MetaTabBorder, Dock.Top);
+                MetaTabBorder.BorderThickness = new Thickness(0, 0, 0, 1);
+                MetaTabPanel.Orientation = Orientation.Horizontal;
+                break;
+            case "Left":
+            case "Right":
+                DockPanel.SetDock(MetaTabBorder, Dock.Top);
+                MetaTabBorder.BorderThickness = new Thickness(0, 0, 0, 1);
+                MetaTabPanel.Orientation = Orientation.Horizontal;
+                break;
+        }
     }
 
     private (DockingManager, AiChatControl, GitStatusControl, ProjectDescriptionControl, TodoListControl) CreateProjectDockingLayout(ProjectInfo project, string? layoutXml = null)
@@ -1676,6 +2070,15 @@ public partial class MainWindow : Window
         if (_activeProject == project)
             return;
 
+        // If groups are in use and this project lives in a different group,
+        // switch the active group so its tab is actually visible.
+        if (_groups.Count >= 2 && project.GroupId != null && project.GroupId != _activeGroupId)
+        {
+            _activeGroupId = project.GroupId;
+            RefreshMetaTabBar();
+            RefreshProjectTabVisibility();
+        }
+
         // Update tab button styles
         if (_activeProject != null && _projectTabButtons.TryGetValue(_activeProject, out var prevButton))
             SetTabButtonActive(prevButton, false);
@@ -1816,8 +2219,19 @@ public partial class MainWindow : Window
         else
         {
             button.Background = ThemeManager.GetBrush("TabButtonInactiveBackground");
-            button.BorderBrush = ThemeManager.GetBrush("TabButtonBorderBrush");
+            button.BorderBrush = Brushes.Transparent;
         }
+    }
+
+    /// <summary>
+    /// Subtle hover background for inactive tabs, derived from the active background
+    /// so it matches every theme without requiring per-theme brush additions.
+    /// </summary>
+    private static SolidColorBrush MakeTabHoverBrush()
+    {
+        var activeBrush = ThemeManager.GetBrush("TabButtonActiveBackground");
+        var c = activeBrush.Color;
+        return new SolidColorBrush(Color.FromArgb(96, c.R, c.G, c.B));
     }
 
     private void CloseActiveProject()
@@ -1869,14 +2283,28 @@ public partial class MainWindow : Window
 
         SetWorkspaceDirty();
 
-        // If this was the active project, switch to another or show empty state
+        // If this was the active project, switch to another or show empty state.
+        // When groups are active, prefer a project in the same active group.
         if (_activeProject == project)
         {
             _activeProject = null;
 
-            if (_projects.Count > 0)
+            var filtering = _groups.Count >= 2 && _activeGroupId != null;
+            ProjectInfo? next = filtering
+                ? _projects.LastOrDefault(p => p.GroupId == _activeGroupId)
+                : _projects.LastOrDefault();
+
+            if (next != null)
             {
-                SwitchToProject(_projects[^1]);
+                SwitchToProject(next);
+            }
+            else if (_projects.Count > 0)
+            {
+                // Active group is empty but other projects exist — leave empty content
+                ProjectContentHost.Content = null;
+                ProjectContentHost.Visibility = Visibility.Collapsed;
+                EmptyStatePanel.Visibility = Visibility.Visible;
+                UpdateTitleBar();
             }
             else
             {
@@ -1928,6 +2356,10 @@ public partial class MainWindow : Window
 
         _projects.Clear();
         _activeProject = null;
+        _groups.Clear();
+        _activeGroupId = null;
+        MetaTabPanel.Children.Clear();
+        MetaTabBorder.Visibility = Visibility.Collapsed;
         ProjectContentHost.Content = null;
         ProjectContentHost.Visibility = Visibility.Collapsed;
         EmptyStatePanel.Visibility = Visibility.Visible;
@@ -2122,14 +2554,22 @@ public partial class MainWindow : Window
         {
             Theme = ThemeManager.CurrentTheme.Id,
             ToolbarPosition = _currentToolbarPosition,
-            ActiveProjectPath = _activeProject?.FolderPath
+            ActiveProjectPath = _activeProject?.FolderPath,
+            ActiveGroupId = _activeGroupId,
+            Groups = _groups.Select(g => new ProjectGroup
+            {
+                Id = g.Id,
+                Name = g.Name,
+                Order = g.Order
+            }).ToList()
         };
 
         foreach (var project in _projects)
         {
             var wp = new WorkspaceProject
             {
-                FolderPath = project.FolderPath
+                FolderPath = project.FolderPath,
+                GroupId = project.GroupId
             };
 
             // Serialize AvalonDock layout
@@ -2219,18 +2659,58 @@ public partial class MainWindow : Window
             AppSettings.SetString("ToolbarPosition", workspace.ToolbarPosition);
         }
 
-        // Restore projects
+        // Restore groups before adding projects so AddProjectFromPath doesn't auto-assign GroupId
+        _groups.Clear();
+        _activeGroupId = null;
+        if (workspace.Groups != null && workspace.Groups.Count > 0)
+        {
+            foreach (var g in workspace.Groups)
+                _groups.Add(new ProjectGroup { Id = g.Id, Name = g.Name, Order = g.Order });
+        }
+
+        // Restore projects (group assignment is applied below from the workspace file)
         ProjectInfo? activeProject = null;
+        var pathToGroup = workspace.Projects.ToDictionary(
+            p => p.FolderPath,
+            p => p.GroupId,
+            StringComparer.OrdinalIgnoreCase);
+
         foreach (var wp in workspace.Projects)
         {
             var project = AddProjectFromPath(wp.FolderPath, wp.DockingLayout);
-            if (project != null && string.Equals(wp.FolderPath, workspace.ActiveProjectPath, StringComparison.OrdinalIgnoreCase))
-                activeProject = project;
+            if (project != null)
+            {
+                // Overwrite any default group assignment with the serialized one
+                project.GroupId = pathToGroup.TryGetValue(wp.FolderPath, out var gid) ? gid : null;
+                if (string.Equals(wp.FolderPath, workspace.ActiveProjectPath, StringComparison.OrdinalIgnoreCase))
+                    activeProject = project;
+            }
         }
 
-        // Switch to the active project
+        // Determine active group (prefer saved, fall back to first group, or null if none)
+        _activeGroupId = workspace.ActiveGroupId != null && _groups.Any(g => g.Id == workspace.ActiveGroupId)
+            ? workspace.ActiveGroupId
+            : _groups.OrderBy(g => g.Order).FirstOrDefault()?.Id;
+
+        RefreshMetaTabBar();
+        RefreshProjectTabVisibility();
+
+        // Switch to the active project (if it's hidden by group filter, switch to its group)
         if (activeProject != null)
+        {
+            if (_groups.Count >= 2 && activeProject.GroupId != null && activeProject.GroupId != _activeGroupId)
+                _activeGroupId = activeProject.GroupId;
+            RefreshMetaTabBar();
+            RefreshProjectTabVisibility();
             SwitchToProject(activeProject);
+        }
+        else if (_activeGroupId != null)
+        {
+            // Active project missing — pick the first project in the active group
+            var first = _projects.FirstOrDefault(p => p.GroupId == _activeGroupId);
+            if (first != null)
+                SwitchToProject(first);
+        }
 
         _suppressDirty = false;
         _currentWorkspacePath = filePath;
@@ -2404,6 +2884,7 @@ public partial class MainWindow : Window
         DockPanel.SetDock(ToolbarBorder, dock);
         ToolbarBorder.BorderThickness = borderThickness;
         ToolbarPanel.Orientation = orientation;
+        ApplyMetaTabLayoutForToolbarPosition(position);
         _currentToolbarPosition = position;
 
         // Force DockPanel layout recalculation
@@ -2507,6 +2988,9 @@ public partial class MainWindow : Window
 
         // Update toolbar + button accent
         _toolbarAddButton.BorderBrush = ThemeManager.GetBrush("AddButtonBorderBrush");
+
+        // Rebuild meta tab strip so its colors pick up the new theme
+        RefreshMetaTabBar();
 
         // Update taskbar icon with new theme accent bar
         UpdateTaskbarIcon();

@@ -322,10 +322,19 @@
                     Background="{DynamicResource ToolbarBackground}"
                     BorderBrush="{DynamicResource ToolbarBorderBrush}" BorderThickness="0,0,0,1"
                     Visibility="Collapsed">
-                <StackPanel x:Name="ToolbarPanel" Orientation="Horizontal"
-                            Margin="4">
+                <DockPanel x:Name="ToolbarOuterPanel" LastChildFill="True">
+                    <!-- Meta tab strip (groups). Hidden until 2+ groups exist. -->
+                    <Border x:Name="MetaTabBorder" DockPanel.Dock="Top"
+                            BorderBrush="{DynamicResource ToolbarBorderBrush}"
+                            BorderThickness="0,0,0,1"
+                            Visibility="Collapsed">
+                        <StackPanel x:Name="MetaTabPanel" Orientation="Horizontal">
+                            <!-- Meta tab elements are inserted here dynamically -->
+                        </StackPanel>
+                    </Border>
                     <!-- Project tab buttons are inserted here dynamically -->
-                </StackPanel>
+                    <StackPanel x:Name="ToolbarPanel" Orientation="Horizontal" />
+                </DockPanel>
             </Border>
 
             <!-- Main Content Area -->
