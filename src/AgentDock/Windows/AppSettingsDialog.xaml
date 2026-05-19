@@ -1,0 +1,270 @@
+<Window x:Class="AgentDock.Windows.AppSettingsDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="App Settings"
+        Width="680" Height="480"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Icon="/Assets/agentdock.png"
+        Background="Transparent">
+
+    <Window.Resources>
+        <Style x:Key="DialogButton" TargetType="{x:Type Button}">
+            <Setter Property="MinWidth" Value="76" />
+            <Setter Property="Height" Value="28" />
+            <Setter Property="Padding" Value="12,0" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Foreground" Value="{DynamicResource HelpForeground}" />
+            <Setter Property="Background" Value="{DynamicResource HelpCardBackground}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource HelpCardBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type Button}">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="3"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource MenuHighlightBackground}" />
+                            </Trigger>
+                            <Trigger Property="IsDefault" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush"
+                                        Value="{DynamicResource TabButtonActiveBorderBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="NavListItem" TargetType="{x:Type ListBoxItem}">
+            <Setter Property="Foreground" Value="{DynamicResource HelpForeground}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Padding" Value="12,8" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type ListBoxItem}">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}"
+                                CornerRadius="3"
+                                Margin="0,1">
+                            <ContentPresenter />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource MenuHighlightBackground}" />
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource ExplorerSelectedBackground}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SectionHeader" TargetType="{x:Type TextBlock}">
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource HelpForeground}" />
+            <Setter Property="Margin" Value="0,0,0,12" />
+        </Style>
+
+        <Style x:Key="FieldLabel" TargetType="{x:Type TextBlock}">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource HelpForeground}" />
+            <Setter Property="Margin" Value="0,0,0,4" />
+        </Style>
+
+        <Style x:Key="FieldHint" TargetType="{x:Type TextBlock}">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Opacity" Value="0.7" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Foreground" Value="{DynamicResource HelpForeground}" />
+            <Setter Property="Margin" Value="0,0,0,16" />
+        </Style>
+    </Window.Resources>
+
+    <Border Background="{DynamicResource HelpBackground}"
+            BorderBrush="{DynamicResource ToolbarBorderBrush}"
+            BorderThickness="1"
+            CornerRadius="4">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Border Grid.Row="0"
+                    Background="{DynamicResource TitleBarBackground}"
+                    CornerRadius="4,4,0,0"
+                    Padding="12,8"
+                    MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                <TextBlock Text="App Settings"
+                           FontSize="12"
+                           FontWeight="SemiBold"
+                           Foreground="{DynamicResource TitleBarForeground}" />
+            </Border>
+
+            <Grid Grid.Row="1">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="160" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0"
+                        BorderBrush="{DynamicResource ToolbarBorderBrush}"
+                        BorderThickness="0,0,1,0"
+                        Padding="8,8">
+                    <ListBox x:Name="NavList"
+                             Background="Transparent"
+                             BorderThickness="0"
+                             ItemContainerStyle="{StaticResource NavListItem}"
+                             SelectionChanged="NavList_SelectionChanged">
+                        <ListBoxItem Tag="appearance" IsSelected="True">Appearance</ListBoxItem>
+                        <ListBoxItem Tag="integrations">Integrations</ListBoxItem>
+                        <ListBoxItem Tag="updates">Updates</ListBoxItem>
+                        <ListBoxItem Tag="diagnostics">Diagnostics</ListBoxItem>
+                    </ListBox>
+                </Border>
+
+                <ScrollViewer Grid.Column="1"
+                              VerticalScrollBarVisibility="Auto"
+                              Padding="20,16">
+                    <Grid>
+                        <!-- Appearance -->
+                        <StackPanel x:Name="AppearanceSection">
+                            <TextBlock Text="Appearance" Style="{StaticResource SectionHeader}" />
+
+                            <TextBlock Text="Default Theme" Style="{StaticResource FieldLabel}" />
+                            <ComboBox x:Name="ThemeCombo"
+                                      Height="28"
+                                      FontSize="13"
+                                      VerticalContentAlignment="Center"
+                                      Margin="0,0,0,4">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding DisplayName}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                            <TextBlock Text="Used when launching without a workspace, or as the starting point for new workspaces."
+                                       Style="{StaticResource FieldHint}" />
+
+                            <TextBlock Text="Default Toolbar Position" Style="{StaticResource FieldLabel}" />
+                            <ComboBox x:Name="ToolbarPositionCombo"
+                                      Height="28"
+                                      FontSize="13"
+                                      VerticalContentAlignment="Center"
+                                      Margin="0,0,0,4">
+                                <ComboBoxItem Content="Top" Tag="Top" />
+                                <ComboBoxItem Content="Left" Tag="Left" />
+                                <ComboBoxItem Content="Right" Tag="Right" />
+                                <ComboBoxItem Content="Bottom" Tag="Bottom" />
+                            </ComboBox>
+                            <TextBlock Text="Where the project tab toolbar sits in the main window."
+                                       Style="{StaticResource FieldHint}" />
+                        </StackPanel>
+
+                        <!-- Integrations -->
+                        <StackPanel x:Name="IntegrationsSection" Visibility="Collapsed">
+                            <TextBlock Text="Integrations" Style="{StaticResource SectionHeader}" />
+
+                            <TextBlock Text="Claude Path Override" Style="{StaticResource FieldLabel}" />
+                            <DockPanel Margin="0,0,0,4">
+                                <Button DockPanel.Dock="Right"
+                                        Content="Reset"
+                                        Style="{StaticResource DialogButton}"
+                                        Click="ResetClaudePath_Click"
+                                        Margin="6,0,0,0" />
+                                <Button DockPanel.Dock="Right"
+                                        Content="Browse..."
+                                        Style="{StaticResource DialogButton}"
+                                        Click="BrowseClaudePath_Click"
+                                        Margin="6,0,0,0" />
+                                <TextBox x:Name="ClaudePathTextBox"
+                                         Height="28"
+                                         FontSize="12"
+                                         VerticalContentAlignment="Center"
+                                         Foreground="{DynamicResource HelpForeground}"
+                                         Background="{DynamicResource HelpCardBackground}"
+                                         BorderBrush="{DynamicResource HelpCardBorderBrush}"
+                                         BorderThickness="1"
+                                         Padding="6,0" />
+                            </DockPanel>
+                            <TextBlock Text="Leave blank to use 'claude' from your system PATH. Set this if you've installed Claude Code in a custom location."
+                                       Style="{StaticResource FieldHint}" />
+                        </StackPanel>
+
+                        <!-- Updates -->
+                        <StackPanel x:Name="UpdatesSection" Visibility="Collapsed">
+                            <TextBlock Text="Updates" Style="{StaticResource SectionHeader}" />
+
+                            <TextBlock Text="Release Channel" Style="{StaticResource FieldLabel}" />
+                            <ComboBox x:Name="UpdateChannelCombo"
+                                      Height="28"
+                                      FontSize="13"
+                                      VerticalContentAlignment="Center"
+                                      Margin="0,0,0,4">
+                                <ComboBoxItem Content="Stable" Tag="Stable" />
+                                <ComboBoxItem Content="Beta (pre-releases)" Tag="Beta" />
+                            </ComboBox>
+                            <TextBlock Style="{StaticResource FieldHint}"
+                                       TextWrapping="Wrap"
+                                       Text="Stable only auto-updates to official releases. Beta opts in to test builds tagged like v0.10.0-beta.1 — use this on machines you've volunteered to test pre-releases with. Beta still auto-updates to the final stable release when it ships." />
+                        </StackPanel>
+
+                        <!-- Diagnostics -->
+                        <StackPanel x:Name="DiagnosticsSection" Visibility="Collapsed">
+                            <TextBlock Text="Diagnostics" Style="{StaticResource SectionHeader}" />
+
+                            <TextBlock Text="Logs" Style="{StaticResource FieldLabel}" />
+                            <Button Content="Open Logs Folder"
+                                    Style="{StaticResource DialogButton}"
+                                    Click="OpenLogsFolder_Click"
+                                    HorizontalAlignment="Left"
+                                    Margin="0,0,0,4" />
+                            <TextBlock x:Name="LogsPathText"
+                                       Style="{StaticResource FieldHint}" />
+                        </StackPanel>
+                    </Grid>
+                </ScrollViewer>
+            </Grid>
+
+            <Border Grid.Row="2"
+                    BorderBrush="{DynamicResource ToolbarBorderBrush}"
+                    BorderThickness="0,1,0,0"
+                    Padding="16,12">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Content="OK"
+                            Style="{StaticResource DialogButton}"
+                            IsDefault="True"
+                            Click="OkButton_Click"
+                            Margin="0,0,8,0" />
+                    <Button Content="Cancel"
+                            Style="{StaticResource DialogButton}"
+                            IsCancel="True"
+                            Click="CancelButton_Click" />
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Border>
+</Window>

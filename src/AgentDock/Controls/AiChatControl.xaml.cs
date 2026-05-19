@@ -1,3 +1,5 @@
+using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
@@ -16,37 +18,34 @@ public partial class AiChatControl : UserControl
     private ClaudeSession? _session;
     private string _projectPath = "";
 
-    // Tracks the currently streaming message block so we can append deltas
-    private TextBox? _streamingBlock;
-    private string _streamingText = "";
+    // The virtualized chat list. Past messages are immutable VM classes;
+    // only the live tail (streaming text, building execution, inactivity
+    // warning) carries INPC. Past-message containers in the
+    // VirtualizingStackPanel are realized only when scrolled into view.
+    public ObservableCollection<ChatMessageVm> Messages { get; } = [];
 
-    // Thinking bubble tracking
-    private TextBox? _thinkingBlock;
-    private string _thinkingText = "";
-    private Border? _thinkingBubble;
-    private bool _thinkingExpanded = true; // expanded while streaming, collapsed when done
+    // Live-tail references — set when the corresponding VM is in the
+    // collection, nulled on finalize / removal.
+    private StreamingAssistantMessage? _streamingVm;
+    private StreamingThinkingMessage? _streamingThinkingVm;
+    private BuildingExecutionMessage? _executionVm;
+    private WaitingMessage? _waitingVm;
+    private InactivityWarning? _inactivityVm;
+    private DispatcherTimer? _inactivityElapsedTimer;
 
-    // Animated working indicator
+    // Animated working indicator in the status bar (not a message).
     private DispatcherTimer? _workingTimer;
     private int _spinnerIndex;
     private static readonly string[] SpinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-    // In-chat thinking placeholder (shown when Working, no deltas yet)
-    private Border? _waitingBubble;
-
-    // Execution bubble — groups tool-use blocks under a collapsible heading
-    private TextBox? _executionContentBlock;
-    private string _executionFullText = "";
-    private Border? _executionBubble;
-
-    // Pending AskUserQuestion — tracks question text for response
+    // Pending AskUserQuestion — tracks question text for response.
     private string? _pendingQuestionText;
 
-    // Inactivity warning bubble (removable when activity resumes)
-    private Border? _inactivityWarning;
-    private DispatcherTimer? _inactivityElapsedTimer;
-    private TextBlock? _inactivityElapsedText;
+    // Last user message timestamp, for the inactivity warning's elapsed text.
     private DateTime _lastMessageSentTime;
+
+    // Inner ScrollViewer of the ItemsControl, cached after template is applied.
+    private ScrollViewer? _scrollViewer;
 
     /// <summary>
     /// Raised when session state changes (for toolbar icon updates).
@@ -62,6 +61,12 @@ public partial class AiChatControl : UserControl
     /// Raised when the session init arrives and the model is known.
     /// </summary>
     public event Action<string>? SessionModelChanged;
+
+    /// <summary>
+    /// Raised when the user clicks a file-path reference rendered inside an
+    /// assistant markdown bubble. Payload is the absolute path.
+    /// </summary>
+    public event Action<string>? FileReferenceClicked;
 
     /// <summary>
     /// Cumulative stats for the current session.
@@ -90,7 +95,14 @@ public partial class AiChatControl : UserControl
     {
         Log.Info("AiChatControl: constructor");
         InitializeComponent();
+        MessageList.ItemsSource = Messages;
+        Messages.CollectionChanged += OnMessagesChanged;
         Log.Info("AiChatControl: InitializeComponent complete");
+
+        // Older Win10 builds don't ship the WinRT dictation recognizer — hide the
+        // mic button rather than show one that would always error.
+        if (!DictationService.IsSupportedOnThisOS)
+            MicButton.Visibility = Visibility.Collapsed;
     }
 
     public void Initialize(string projectPath)
@@ -105,10 +117,89 @@ public partial class AiChatControl : UserControl
             Dispatcher.BeginInvoke(() => InputBox.Focus(), System.Windows.Threading.DispatcherPriority.Input);
     }
 
+    // Clicks on the prompt border (outside the textbox itself, e.g. between the > and
+    // the text) should land focus in the textbox so the chrome behaves like one widget.
+    private void InputBorder_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource == InputBorder && InputBox.IsEnabled)
+        {
+            InputBox.Focus();
+            InputBox.CaretIndex = InputBox.Text.Length;
+            e.Handled = true;
+        }
+    }
+
     public void Shutdown()
     {
         _session?.Dispose();
         _session = null;
+        _dictation?.Dispose();
+        _dictation = null;
+    }
+
+    // --- Dictation ---
+
+    private DictationService? _dictation;
+
+    private async void MicButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_dictation == null)
+        {
+            _dictation = new DictationService();
+            _dictation.TextRecognized += text => Dispatcher.BeginInvoke(() => InsertDictatedText(text));
+            _dictation.StateChanged += state => Dispatcher.BeginInvoke(() => UpdateMicVisual(state));
+            _dictation.ErrorOccurred += msg => Dispatcher.BeginInvoke(() => SetMicErrorTooltip(msg));
+        }
+        try
+        {
+            await _dictation.ToggleAsync();
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Dictation toggle failed", ex);
+            SetMicErrorTooltip(ex.Message);
+        }
+    }
+
+    private void InsertDictatedText(string text)
+    {
+        var caret = InputBox.CaretIndex;
+        var existing = InputBox.Text;
+        var needsLeadingSpace = caret > 0 && caret <= existing.Length
+            && !char.IsWhiteSpace(existing[caret - 1]);
+        var insert = (needsLeadingSpace ? " " : "") + text;
+        InputBox.Text = existing.Insert(caret, insert);
+        InputBox.CaretIndex = caret + insert.Length;
+    }
+
+    private void UpdateMicVisual(DictationState state)
+    {
+        switch (state)
+        {
+            case DictationState.Idle:
+                MicIcon.Foreground = ThemeManager.GetBrush("ChatMutedForeground");
+                MicButton.ToolTip = "Start dictation";
+                break;
+            case DictationState.Starting:
+                MicIcon.Foreground = ThemeManager.GetBrush("ChatMutedForeground");
+                MicButton.ToolTip = "Starting…";
+                break;
+            case DictationState.Listening:
+                MicIcon.Foreground = ThemeManager.GetBrush("ChatDangerForeground");
+                MicButton.ToolTip = "Listening — click to stop";
+                break;
+            case DictationState.Stopping:
+                MicButton.ToolTip = "Stopping…";
+                break;
+            case DictationState.Error:
+                MicIcon.Foreground = ThemeManager.GetBrush("ChatMutedForeground");
+                break;
+        }
+    }
+
+    private void SetMicErrorTooltip(string message)
+    {
+        MicButton.ToolTip = $"Dictation error: {message}";
     }
 
     // --- Start Session ---
@@ -159,7 +250,6 @@ public partial class AiChatControl : UserControl
 
     private void OnStateChanged(ClaudeSessionState state)
     {
-        // Stop the working animation for any state change
         StopWorkingAnimation();
 
         if (state == ClaudeSessionState.Working)
@@ -187,7 +277,6 @@ public partial class AiChatControl : UserControl
             _ => ThemeManager.GetBrush("ChatMutedForeground")
         };
 
-        // Show danger icon when session is active in dangerous mode
         var showDanger = _session?.IsDangerousMode == true
             && state != ClaudeSessionState.NotStarted
             && state != ClaudeSessionState.Exited;
@@ -196,6 +285,9 @@ public partial class AiChatControl : UserControl
         var canSend = state == ClaudeSessionState.Idle;
         InputBox.IsEnabled = canSend;
         SendButton.IsEnabled = canSend;
+        MicButton.IsEnabled = canSend;
+        if (!canSend && _dictation?.IsActive == true)
+            _ = _dictation.StopAsync();
 
         if (canSend)
             FocusInput();
@@ -228,7 +320,6 @@ public partial class AiChatControl : UserControl
         if (_session?.IsDangerousMode == true)
             AddSystemMessage("WARNING: Dangerous mode — all permissions auto-approved", isWarning: true);
 
-        // Skip the synthetic "(pending first message)" init fired before the subprocess starts
         if (!string.IsNullOrEmpty(init.Model) && !init.Model.StartsWith("("))
             SessionModelChanged?.Invoke(init.Model);
     }
@@ -238,7 +329,6 @@ public partial class AiChatControl : UserControl
     private void Send_Click(object sender, RoutedEventArgs e) => SendCurrentMessage();
     private async void Stop_Click(object sender, RoutedEventArgs e)
     {
-        // Immediate UI feedback — disable controls, show stopping state
         StopWorkingAnimation();
         StopButton.IsEnabled = false;
         InputBox.IsEnabled = false;
@@ -248,10 +338,10 @@ public partial class AiChatControl : UserControl
 
         RemoveWaitingBubble();
         RemoveInactivityWarning();
-        FinalizeThinkingBlock();
-        FinalizeStreamingBlock();
+        FinalizeThinking();
+        FinalizeStreaming();
+        FinalizeExecution();
 
-        // Await the actual process kill (runs off UI thread)
         var session = _session;
         _session = null;
         if (session != null)
@@ -260,11 +350,10 @@ public partial class AiChatControl : UserControl
             session.Dispose();
         }
 
-        // Now reset to start panel
         ChatPanel.Visibility = Visibility.Collapsed;
         StartPanel.Visibility = Visibility.Visible;
         StopButton.IsEnabled = true;
-        MessageList.Children.Clear();
+        ClearMessages();
     }
 
     private void InputBox_KeyDown(object sender, KeyEventArgs e)
@@ -282,7 +371,6 @@ public partial class AiChatControl : UserControl
     {
         var text = InputBox.Text;
 
-        // Only show popup while typing the command word (starts with /, no whitespace yet)
         if (!text.StartsWith('/') || text.Any(char.IsWhiteSpace))
         {
             SlashCommandPopup.IsOpen = false;
@@ -346,7 +434,6 @@ public partial class AiChatControl : UserControl
 
     private void SlashCommandList_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
-        // Only complete if the click landed on a ListBoxItem (not the empty area or scrollbar)
         var dep = e.OriginalSource as DependencyObject;
         while (dep != null && dep is not ListBoxItem)
             dep = VisualTreeHelper.GetParent(dep);
@@ -372,7 +459,7 @@ public partial class AiChatControl : UserControl
     {
         var menu = new ContextMenu
         {
-            Style = null, // use default WPF style
+            Style = null,
             PlacementTarget = PromptMenuButton,
             Placement = System.Windows.Controls.Primitives.PlacementMode.Top
         };
@@ -411,23 +498,19 @@ public partial class AiChatControl : UserControl
 
         InputBox.Text = "";
 
-        // Check for slash commands
         if (text.StartsWith('/'))
         {
             if (TryHandleLocalCommand(text))
                 return;
-
-            // Not a local command — pass through to Claude Code as-is
         }
 
         if (_session == null || _session.State != ClaudeSessionState.Idle)
             return;
 
-        // Collapse previous streaming block if still open
-        FinalizeStreamingBlock();
-        _executionContentBlock = null;
-        _executionFullText = "";
-        _executionBubble = null;
+        // Defensive turn-boundary finalize — should already have happened on
+        // the previous result, but covers edge cases (manual /compact mid-stream etc.).
+        FinalizeStreaming();
+        FinalizeExecution();
 
         _lastMessageSentTime = DateTime.UtcNow;
         AddUserMessage(text);
@@ -453,7 +536,7 @@ public partial class AiChatControl : UserControl
                 ExecuteLocalCommand("/logs");
                 return true;
             default:
-                return false; // not a local command — pass through
+                return false;
         }
     }
 
@@ -464,19 +547,16 @@ public partial class AiChatControl : UserControl
             case "/clear":
                 if (_session != null && _session.State == ClaudeSessionState.Idle)
                 {
-                    MessageList.Children.Clear();
+                    ClearMessages();
                     AddSystemMessage("Chat cleared.");
                 }
                 break;
 
             case "/compact":
-                // Compact is a Claude Code command — send it through
                 if (_session != null && _session.State == ClaudeSessionState.Idle)
                 {
-                    FinalizeStreamingBlock();
-                    _executionContentBlock = null;
-                    _executionFullText = "";
-                    _executionBubble = null;
+                    FinalizeStreaming();
+                    FinalizeExecution();
                     _lastMessageSentTime = DateTime.UtcNow;
                     AddUserMessage("/compact");
                     ShowWaitingBubble();
@@ -500,74 +580,78 @@ public partial class AiChatControl : UserControl
         }
     }
 
-    // --- Waiting Bubble (shown until first delta arrives) ---
+    // --- Message Collection Helpers ---
+
+    private void AddUserMessage(string text)
+    {
+        Messages.Add(new UserMessage(Guid.NewGuid(), text));
+    }
+
+    private void AddSystemMessage(string text, bool isWarning = false)
+    {
+        Messages.Add(new SystemMessage(Guid.NewGuid(), text, isWarning));
+    }
 
     private void ShowWaitingBubble()
     {
-        var tb = new TextBlock
-        {
-            Text = "Thinking...",
-            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
-            FontSize = 11,
-            Foreground = ThemeManager.GetBrush("ChatMutedForeground"),
-            FontStyle = FontStyles.Italic,
-            TextWrapping = TextWrapping.Wrap
-        };
-
-        _waitingBubble = new Border
-        {
-            Background = ThemeManager.GetBrush("ChatThinkingBackground"),
-            CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(8, 4, 8, 4),
-            Margin = new Thickness(8, 2, 40, 2),
-            HorizontalAlignment = HorizontalAlignment.Left,
-            BorderBrush = ThemeManager.GetBrush("ChatThinkingBorderBrush"),
-            BorderThickness = new Thickness(1),
-            Child = tb
-        };
-
-        MessageList.Children.Add(_waitingBubble);
-        ScrollToBottom();
+        if (_waitingVm != null) return; // already shown
+        _waitingVm = new WaitingMessage(Guid.NewGuid());
+        Messages.Add(_waitingVm);
     }
 
     private void RemoveWaitingBubble()
     {
-        if (_waitingBubble != null)
-        {
-            MessageList.Children.Remove(_waitingBubble);
-            _waitingBubble = null;
-        }
+        if (_waitingVm == null) return;
+        Messages.Remove(_waitingVm);
+        _waitingVm = null;
     }
 
-    // --- Content Block Events ---
+    /// <summary>
+    /// Empties the collection and resets every live-tail reference. Used by
+    /// /clear and Stop. Without resetting the refs we'd hold pointers to
+    /// VMs that are no longer in the collection.
+    /// </summary>
+    private void ClearMessages()
+    {
+        _inactivityElapsedTimer?.Stop();
+        _inactivityElapsedTimer = null;
+        // Stop streaming VMs' internal throttle timers and unsubscribe so the
+        // VMs (and this control) become GC-eligible together.
+        if (_streamingVm != null)
+        {
+            _streamingVm.Flush();
+            _streamingVm.PropertyChanged -= OnStreamingTextChanged;
+        }
+        if (_streamingThinkingVm != null)
+        {
+            _streamingThinkingVm.Flush();
+            _streamingThinkingVm.PropertyChanged -= OnStreamingTextChanged;
+        }
+        Messages.Clear();
+        _streamingVm = null;
+        _streamingThinkingVm = null;
+        _executionVm = null;
+        _waitingVm = null;
+        _inactivityVm = null;
+    }
+
+    // --- Content Block / Stream Events ---
 
     private void OnContentBlockStarted(ClaudeContentBlockEvent evt)
     {
         RemoveWaitingBubble();
-
-        if (evt.BlockType == "thinking")
-        {
-            // Start a new thinking bubble
-            _thinkingText = "";
-            _thinkingBlock = CreateSelectableText(11,
-                ThemeManager.GetBrush("ChatMutedForeground"),
-                FontStyles.Italic);
-            _thinkingBubble = CreateThinkingBubble(_thinkingBlock);
-            _thinkingExpanded = true;
-            MessageList.Children.Add(_thinkingBubble);
-        }
+        // Thinking bubble is created lazily on the first real thinking_delta —
+        // claude-opus-4-7 sends redacted thinking (no deltas), so eagerly
+        // creating a bubble here would leave it permanently empty.
     }
 
     private void OnContentBlockStopped(ClaudeContentBlockEvent evt)
     {
-        // When a thinking block stops, collapse it
-        if (_thinkingBlock != null)
-        {
-            FinalizeThinkingBlock();
-        }
+        // The CLI marks the end of a thinking block here. Finalize the live
+        // thinking VM (if any) by swapping it for an immutable record.
+        if (_streamingThinkingVm != null)
+            FinalizeThinking();
     }
-
-    // --- Streaming ---
 
     private void OnStreamDelta(ClaudeStreamDelta delta)
     {
@@ -580,101 +664,97 @@ public partial class AiChatControl : UserControl
             return;
         }
 
-        // First text_delta — collapse any open thinking bubble
-        if (_streamingBlock == null && _thinkingBlock != null)
+        // First text_delta of a new assistant block — finalize any open
+        // thinking first so it renders as a separate (collapsible) message.
+        if (_streamingVm == null && _streamingThinkingVm != null)
+            FinalizeThinking();
+
+        if (_streamingVm == null)
         {
-            FinalizeThinkingBlock();
+            _streamingVm = new StreamingAssistantMessage(Guid.NewGuid());
+            _streamingVm.PropertyChanged += OnStreamingTextChanged;
+            Messages.Add(_streamingVm);
         }
 
-        if (_streamingBlock == null)
-        {
-            // Create a new streaming message block
-            _streamingText = "";
-            _streamingBlock = CreateStreamingBlock();
-            var container = CreateAssistantBubble(_streamingBlock);
-            MessageList.Children.Add(container);
-        }
-
-        _streamingText += delta.Text;
-        _streamingBlock.Text = _streamingText;
-        ScrollToBottom();
+        // Coalesced through a ~30 fps throttle inside the VM so a fast model
+        // stream doesn't flood the binding system.
+        _streamingVm.AppendText(delta.Text);
     }
 
     private void OnThinkingDelta(ClaudeStreamDelta delta)
     {
-        if (_thinkingBlock == null)
+        if (_streamingThinkingVm == null)
         {
-            // No content_block_start arrived — create thinking bubble on first delta
-            _thinkingText = "";
-            _thinkingBlock = CreateSelectableText(11,
-                ThemeManager.GetBrush("ChatMutedForeground"),
-                FontStyles.Italic);
-            _thinkingBubble = CreateThinkingBubble(_thinkingBlock);
-            _thinkingExpanded = true;
-            MessageList.Children.Add(_thinkingBubble);
+            _streamingThinkingVm = new StreamingThinkingMessage(Guid.NewGuid());
+            _streamingThinkingVm.PropertyChanged += OnStreamingTextChanged;
+            Messages.Add(_streamingThinkingVm);
         }
+        _streamingThinkingVm.AppendText(delta.Text);
+    }
 
-        _thinkingText += delta.Text;
-        if (_thinkingExpanded)
-        {
-            _thinkingBlock.Text = _thinkingText;
-        }
-        ScrollToBottom();
+    /// <summary>
+    /// Sticky-bottom follow during streaming: when a live VM's text changes,
+    /// scroll to the new bottom <i>only</i> if the user was already at the
+    /// bottom. If they've scrolled up to read history, don't yank them back.
+    /// </summary>
+    private void OnStreamingTextChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(StreamingTextMessage.Text)) return;
+        var sv = GetScrollViewer();
+        if (sv == null) return;
+        var atBottom = sv.ScrollableHeight == 0 || sv.VerticalOffset >= sv.ScrollableHeight - 50;
+        if (atBottom)
+            Dispatcher.BeginInvoke(() => sv.ScrollToEnd(), DispatcherPriority.Background);
     }
 
     private void OnAssistantMessage(ClaudeAssistantMessage msg)
     {
-        // If we have streaming text, the stream deltas already rendered it.
-        // The assistant message is the "complete" version.
-        // We finalize the streaming block with the full text.
+        // text blocks → finalize the streaming VM with the authoritative full text
         var fullText = string.Join("", msg.Content
             .Where(c => c.Type == "text" && c.Text != null)
             .Select(c => c.Text));
 
-        if (_streamingBlock != null && !string.IsNullOrEmpty(fullText))
-        {
-            _streamingBlock.Text = fullText;
-            _streamingText = fullText;
-        }
+        if (_streamingVm != null && !string.IsNullOrEmpty(fullText))
+            _streamingVm.Text = fullText; // setter clears throttle buffer + timer
 
-        // Group tool-use blocks into collapsible "Execution" bubble
+        // tool_use blocks → append to the building-execution bubble
         var toolBlocks = msg.Content.Where(c => c.Type == "tool_use").ToList();
         if (toolBlocks.Count > 0)
         {
+            EnsureExecutionVm();
             foreach (var block in toolBlocks)
             {
-                var toolText = $"[Tool: {block.Name}]";
+                var inputStr = "";
                 if (block.Input is JsonElement input)
                 {
-                    var inputStr = input.ValueKind == JsonValueKind.Object
+                    inputStr = input.ValueKind == JsonValueKind.Object
                         ? FormatToolInput(input)
                         : input.ToString();
-                    toolText += $"\n{inputStr}";
                 }
-
-                AppendToExecutionBubble(toolText);
+                _executionVm!.Tools.Add(new ToolEntry(block.Name ?? "(unnamed)", inputStr));
             }
         }
 
-        FinalizeStreamingBlock();
+        // The assistant message marks the end of one iteration's text content.
+        // Replace the streaming VM with an immutable AssistantMessage so the
+        // bubble stops re-rendering and (if multi-line) gets the markdown
+        // toggle button.
+        FinalizeStreaming();
     }
 
     private void OnResultReceived(ClaudeResultMessage result)
     {
         RemoveWaitingBubble();
         RemoveInactivityWarning();
-        FinalizeThinkingBlock();
-        FinalizeStreamingBlock();
+        FinalizeThinking();
+        FinalizeStreaming();
+        FinalizeExecution();
 
         if (result.IsError && result.Errors?.Count > 0)
-        {
             AddSystemMessage($"Error: {string.Join("; ", result.Errors)}", isWarning: true);
-        }
 
-        // Update session stats (values from Claude Code are cumulative)
         var (costDelta, tokenDelta) = Stats.Update(result);
 
-        // Build per-interaction summary line using deltas
         var parts = new List<string>();
         if (costDelta > 0)
             parts.Add($"${costDelta:F4}");
@@ -692,67 +772,89 @@ public partial class AiChatControl : UserControl
         SessionStatsChanged?.Invoke(Stats);
     }
 
-    private void FinalizeThinkingBlock()
+    // --- Finalize / Swap (live VM → immutable record) ---
+
+    private void EnsureExecutionVm()
     {
-        if (_thinkingBlock == null || _thinkingBubble == null)
-            return;
-
-        var contentBlock = _thinkingBlock;
-        var fullText = _thinkingText;
-        var expanded = false;
-
-        // Collapse content, add chevron to header
-        _thinkingExpanded = false;
-        contentBlock.Visibility = Visibility.Collapsed;
-
-        var panel = (StackPanel)_thinkingBubble.Child;
-        var label = (UIElement)panel.Children[0];
-        panel.Children.RemoveAt(0);
-
-        var chevron = CreateCollapseChevron(false);
-        var headerRow = new StackPanel { Orientation = Orientation.Horizontal, Cursor = Cursors.Hand };
-        headerRow.Children.Add(chevron);
-        headerRow.Children.Add(label);
-        panel.Children.Insert(0, headerRow);
-
-        headerRow.MouseLeftButtonUp += (_, e) =>
-        {
-            expanded = !expanded;
-            chevron.Text = expanded ? "▼" : "▶";
-            contentBlock.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed;
-            e.Handled = true;
-        };
-
-        _thinkingBlock = null;
-        _thinkingText = "";
-        _thinkingBubble = null;
+        if (_executionVm != null) return;
+        _executionVm = new BuildingExecutionMessage(Guid.NewGuid());
+        Messages.Add(_executionVm);
     }
 
-    private void FinalizeStreamingBlock()
+    private void FinalizeStreaming()
     {
-        if (_streamingBlock == null)
-            return;
+        if (_streamingVm == null) return;
+        // Drain any buffered deltas the throttle timer hasn't flushed yet,
+        // then drop the PropertyChanged subscription so the VM is GC-eligible.
+        _streamingVm.Flush();
+        _streamingVm.PropertyChanged -= OnStreamingTextChanged;
 
-        // Find the parent container and add markdown toggle + collapsible support
-        var parent = _streamingBlock.Parent as StackPanel;
-        if (parent?.Parent is Border border)
+        var idx = Messages.IndexOf(_streamingVm);
+        if (idx >= 0)
         {
-            // Add markdown preview toggle for multi-line assistant messages
-            if (_streamingText.Contains('\n'))
-            {
-                AddMarkdownToggle(border, parent, _streamingBlock, _streamingText);
-            }
-        }
+            var text = _streamingVm.Text;
+            var hasNl = text.Contains('\n');
 
-        _streamingBlock = null;
-        _streamingText = "";
+            // Build the rendered FlowDocument exactly once, here at finalize.
+            // The same document instance is re-attached to whichever container
+            // realizes this message; scroll-past-and-back doesn't re-parse.
+            // Single-line messages render as plain text — markdown rendering
+            // would be no-op and the toggle is useless, so skip the build.
+            FlowDocument? document = null;
+            if (hasNl)
+            {
+                document = MarkdownHelper.BuildDocument(
+                    text,
+                    markdownStyle: (System.Windows.Style)FindResource("ChatMarkdownStyle"),
+                    projectPath: _projectPath,
+                    onFileLinkClicked: p => FileReferenceClicked?.Invoke(p));
+            }
+
+            Messages[idx] = new AssistantMessage(
+                id: _streamingVm.Id,
+                text: text,
+                isMarkdownView: hasNl,
+                hasMarkdownToggle: hasNl,
+                markdown: document);
+        }
+        _streamingVm = null;
+    }
+
+    private void FinalizeThinking()
+    {
+        if (_streamingThinkingVm == null) return;
+        _streamingThinkingVm.Flush();
+        _streamingThinkingVm.PropertyChanged -= OnStreamingTextChanged;
+
+        var idx = Messages.IndexOf(_streamingThinkingVm);
+        if (idx >= 0)
+        {
+            Messages[idx] = new ThinkingMessage(
+                _streamingThinkingVm.Id,
+                _streamingThinkingVm.Text,
+                isExpanded: false);
+        }
+        _streamingThinkingVm = null;
+    }
+
+    private void FinalizeExecution()
+    {
+        if (_executionVm == null) return;
+        var idx = Messages.IndexOf(_executionVm);
+        if (idx >= 0)
+        {
+            Messages[idx] = new ExecutionMessage(
+                _executionVm.Id,
+                _executionVm.Tools.ToList(),
+                isExpanded: false);
+        }
+        _executionVm = null;
     }
 
     // --- Permission Handling ---
 
     private void OnPermissionRequested(ClaudePermissionRequest req)
     {
-        // AskUserQuestion gets a specialized question panel instead of generic Allow/Deny
         if (req.ToolName == "AskUserQuestion" && req.Input.ValueKind == JsonValueKind.Object)
         {
             ShowQuestionPanel(req);
@@ -779,7 +881,6 @@ public partial class AiChatControl : UserControl
         {
             if (!req.Input.TryGetProperty("questions", out var questions) || questions.GetArrayLength() == 0)
             {
-                // Fallback to regular permission panel
                 OnPermissionRequested(new ClaudePermissionRequest
                 {
                     RequestId = req.RequestId,
@@ -849,7 +950,6 @@ public partial class AiChatControl : UserControl
         catch (Exception ex)
         {
             Log.Error("Failed to parse AskUserQuestion input", ex);
-            // Fallback: show as regular permission
             PermissionToolName.Text = $"Tool: {req.ToolName}";
             PermissionDetail.Text = FormatToolInput(req.Input);
             InputPanel.Visibility = Visibility.Collapsed;
@@ -904,99 +1004,33 @@ public partial class AiChatControl : UserControl
 
     private void OnInactivityTimeout()
     {
-        if (_session == null || _inactivityWarning != null)
-            return; // Already showing a warning or no session
+        if (_session == null || _inactivityVm != null)
+            return;
 
-        var elapsed = DateTime.UtcNow - _lastMessageSentTime;
-        var warningText = new TextBlock
+        _inactivityVm = new InactivityWarning(Guid.NewGuid())
         {
-            Text = "Claude hasn't responded for a while — it may be stuck.",
-            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
-            FontSize = 11,
-            Foreground = ThemeManager.GetBrush("ChatStatusWarningForeground"),
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 0, 0, 4)
+            ElapsedText = FormatElapsed(DateTime.UtcNow - _lastMessageSentTime),
+            OnWait = () =>
+            {
+                RemoveInactivityWarning();
+                _session?.ExtendInactivityTimer();
+            },
+            OnKill = () =>
+            {
+                RemoveInactivityWarning();
+                Stop_Click(this, new RoutedEventArgs());
+            }
         };
+        Messages.Add(_inactivityVm);
 
-        _inactivityElapsedText = new TextBlock
-        {
-            Text = FormatElapsed(elapsed),
-            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
-            FontSize = 10,
-            Foreground = ThemeManager.GetBrush("ChatMutedForeground"),
-            Margin = new Thickness(0, 0, 0, 6)
-        };
-
-        // Start a timer to keep the elapsed display up to date
         _inactivityElapsedTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _inactivityElapsedTimer.Tick += (_, _) =>
         {
-            if (_inactivityElapsedText != null)
-                _inactivityElapsedText.Text = FormatElapsed(DateTime.UtcNow - _lastMessageSentTime);
+            if (_inactivityVm != null)
+                _inactivityVm.ElapsedText = FormatElapsed(DateTime.UtcNow - _lastMessageSentTime);
         };
         _inactivityElapsedTimer.Start();
 
-        var buttonPanel = new StackPanel { Orientation = Orientation.Horizontal };
-
-        var waitBtn = new Button
-        {
-            Content = "Wait longer",
-            Cursor = Cursors.Hand,
-            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
-            FontSize = 11,
-            Background = ThemeManager.GetBrush("ChatButtonBackground"),
-            Foreground = ThemeManager.GetBrush("ChatButtonForeground"),
-            BorderBrush = ThemeManager.GetBrush("ChatButtonBorderBrush"),
-            BorderThickness = new Thickness(1),
-            Padding = new Thickness(10, 4, 10, 4),
-            HorizontalAlignment = HorizontalAlignment.Left,
-            Margin = new Thickness(0, 0, 8, 0)
-        };
-        waitBtn.Click += (_, _) =>
-        {
-            RemoveInactivityWarning();
-            _session?.ExtendInactivityTimer();
-        };
-
-        var killBtn = new Button
-        {
-            Content = "Kill process",
-            Cursor = Cursors.Hand,
-            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
-            FontSize = 11,
-            Background = ThemeManager.GetBrush("ChatKillButtonBackground"),
-            Foreground = ThemeManager.GetBrush("ChatDangerForeground"),
-            BorderBrush = ThemeManager.GetBrush("ChatKillButtonBorderBrush"),
-            BorderThickness = new Thickness(1),
-            Padding = new Thickness(10, 4, 10, 4),
-            HorizontalAlignment = HorizontalAlignment.Left
-        };
-        killBtn.Click += (_, _) =>
-        {
-            RemoveInactivityWarning();
-            Stop_Click(this, new RoutedEventArgs());
-        };
-
-        buttonPanel.Children.Add(waitBtn);
-        buttonPanel.Children.Add(killBtn);
-
-        var panel = new StackPanel { Margin = new Thickness(0) };
-        panel.Children.Add(warningText);
-        panel.Children.Add(_inactivityElapsedText);
-        panel.Children.Add(buttonPanel);
-
-        _inactivityWarning = new Border
-        {
-            Background = ThemeManager.GetBrush("ChatWarningBackground"),
-            CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(10, 8, 10, 8),
-            Margin = new Thickness(8, 4, 8, 4),
-            BorderBrush = ThemeManager.GetBrush("ChatWarningBorderBrush"),
-            BorderThickness = new Thickness(1),
-            Child = panel
-        };
-
-        MessageList.Children.Add(_inactivityWarning);
         ScrollToBottom();
     }
 
@@ -1011,11 +1045,10 @@ public partial class AiChatControl : UserControl
     {
         _inactivityElapsedTimer?.Stop();
         _inactivityElapsedTimer = null;
-        _inactivityElapsedText = null;
-        if (_inactivityWarning != null)
+        if (_inactivityVm != null)
         {
-            MessageList.Children.Remove(_inactivityWarning);
-            _inactivityWarning = null;
+            Messages.Remove(_inactivityVm);
+            _inactivityVm = null;
         }
     }
 
@@ -1023,7 +1056,6 @@ public partial class AiChatControl : UserControl
 
     private void OnErrorOutput(string text)
     {
-        // Only show meaningful errors, not debug noise
         if (text.Contains("error", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("fatal", StringComparison.OrdinalIgnoreCase))
         {
@@ -1034,341 +1066,169 @@ public partial class AiChatControl : UserControl
     private void OnProcessExited(int exitCode)
     {
         if (exitCode != 0)
-        {
             AddSystemMessage($"Claude process exited with code {exitCode}", isWarning: true);
-        }
         else
-        {
             AddSystemMessage("Session ended");
+    }
+
+    // --- DataTemplate Click Handlers ---
+
+    // For finalized AssistantMessage: toggling the source/rendered view replaces
+    // the immutable VM with a new instance carrying the flipped flag. The
+    // ItemsControl re-evaluates the ContentControl's ContentTemplate selector
+    // and swaps just that one container's child template.
+    private void MarkdownToggle_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.Tag is AssistantMessage msg)
+        {
+            var idx = Messages.IndexOf(msg);
+            if (idx >= 0)
+            {
+                // Reuse the same FlowDocument — toggling the view doesn't
+                // re-parse markdown.
+                Messages[idx] = new AssistantMessage(
+                    msg.Id, msg.Text, !msg.IsMarkdownView, msg.HasMarkdownToggle, msg.Markdown);
+            }
         }
     }
 
-    // --- Message Rendering ---
-
-    private void AddUserMessage(string text)
+    private void ThinkingHeader_Click(object sender, MouseButtonEventArgs e)
     {
-        var bubble = new Border
+        if (sender is FrameworkElement fe && fe.Tag is ThinkingMessage msg)
         {
-            Background = ThemeManager.GetBrush("ChatUserBubbleBackground"),
-            CornerRadius = new CornerRadius(8, 8, 2, 8),
-            Padding = new Thickness(10, 6, 10, 6),
-            Margin = new Thickness(40, 4, 8, 4),
-            HorizontalAlignment = HorizontalAlignment.Right
-        };
-
-        var panel = new StackPanel();
-        var label = new TextBlock
-        {
-            Text = "You",
-            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
-            FontSize = 10,
-            Foreground = ThemeManager.GetBrush("ChatUserLabelForeground"),
-            Margin = new Thickness(0, 0, 0, 2)
-        };
-        var content = CreateSelectableText(12,
-            ThemeManager.GetBrush("ChatTextForeground"));
-        content.Text = text;
-        panel.Children.Add(label);
-        panel.Children.Add(content);
-        bubble.Child = panel;
-
-        MessageList.Children.Add(bubble);
-        ScrollToBottom();
+            var idx = Messages.IndexOf(msg);
+            if (idx >= 0)
+                Messages[idx] = new ThinkingMessage(msg.Id, msg.Text, !msg.IsExpanded);
+        }
+        e.Handled = true;
     }
 
-    private Border CreateAssistantBubble(TextBox contentBlock)
+    private void ExecutionHeader_Click(object sender, MouseButtonEventArgs e)
     {
-        var bubble = new Border
+        if (sender is FrameworkElement fe && fe.Tag is ExecutionMessage msg)
         {
-            Background = ThemeManager.GetBrush("ChatAssistantBubbleBackground"),
-            CornerRadius = new CornerRadius(8, 8, 8, 2),
-            Padding = new Thickness(10, 6, 10, 6),
-            Margin = new Thickness(8, 4, 40, 4),
-            HorizontalAlignment = HorizontalAlignment.Left
-        };
-
-        var panel = new StackPanel();
-        var label = new TextBlock
-        {
-            Text = "Claude",
-            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
-            FontSize = 10,
-            Foreground = ThemeManager.GetBrush("ChatAssistantLabelForeground"),
-            Margin = new Thickness(0, 0, 0, 2)
-        };
-        panel.Children.Add(label);
-        panel.Children.Add(contentBlock);
-        bubble.Child = panel;
-
-        return bubble;
+            var idx = Messages.IndexOf(msg);
+            if (idx >= 0)
+                Messages[idx] = new ExecutionMessage(msg.Id, msg.Tools, !msg.IsExpanded);
+        }
+        e.Handled = true;
     }
 
-    private static TextBox CreateStreamingBlock()
+    private void BuildingExecutionHeader_Click(object sender, MouseButtonEventArgs e)
     {
-        return CreateSelectableText(12,
-            ThemeManager.GetBrush("ChatTextForeground"));
+        if (sender is FrameworkElement fe && fe.Tag is BuildingExecutionMessage msg)
+            msg.IsExpanded = !msg.IsExpanded;
+        e.Handled = true;
     }
 
-    private static Border CreateThinkingBubble(TextBox contentBlock)
+    private void InactivityWait_Click(object sender, RoutedEventArgs e)
     {
-        var bubble = new Border
-        {
-            Background = ThemeManager.GetBrush("ChatThinkingBackground"),
-            CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(8, 4, 8, 4),
-            Margin = new Thickness(8, 2, 40, 2),
-            HorizontalAlignment = HorizontalAlignment.Left,
-            BorderBrush = ThemeManager.GetBrush("ChatThinkingBorderBrush"),
-            BorderThickness = new Thickness(1)
-        };
-
-        var panel = new StackPanel();
-        var label = new TextBlock
-        {
-            Text = "Thinking",
-            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
-            FontSize = 10,
-            Foreground = ThemeManager.GetBrush("ChatSubtleForeground"),
-            FontStyle = FontStyles.Italic,
-            Margin = new Thickness(0, 0, 0, 2)
-        };
-        panel.Children.Add(label);
-        panel.Children.Add(contentBlock);
-        bubble.Child = panel;
-
-        return bubble;
+        if (sender is FrameworkElement fe && fe.Tag is InactivityWarning msg)
+            msg.OnWait?.Invoke();
     }
 
-    private void AppendToExecutionBubble(string toolText)
+    private void InactivityKill_Click(object sender, RoutedEventArgs e)
     {
-        if (_executionBubble == null)
+        if (sender is FrameworkElement fe && fe.Tag is InactivityWarning msg)
+            msg.OnKill?.Invoke();
+    }
+
+    // Container recycling: DataContext changes when the container is reused
+    // for a different message. Attach the cached FlowDocument — no re-parse,
+    // no re-wire of file links.
+    private void AssistantMarkdown_DataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
+        => AttachAssistantDocument((MarkdownScrollViewer)sender, e.NewValue as AssistantMessage);
+
+    // Initial realization — DataContextChanged may fire before the viewer is
+    // in the visual tree, so attach again here defensively.
+    private void AssistantMarkdown_Loaded(object sender, RoutedEventArgs e)
+        => AttachAssistantDocument((MarkdownScrollViewer)sender, ((MarkdownScrollViewer)sender).DataContext as AssistantMessage);
+
+    private static void AttachAssistantDocument(MarkdownScrollViewer viewer, AssistantMessage? msg)
+    {
+        if (msg?.Markdown == null)
         {
-            _executionContentBlock = CreateSelectableText(10,
-                ThemeManager.GetBrush("ChatExecutionForeground"),
-                FontStyles.Normal);
-            _executionBubble = CreateExecutionBubble(_executionContentBlock);
-            MessageList.Children.Add(_executionBubble);
-            _executionFullText = "";
+            viewer.Document = null;
+            return;
+        }
+        if (ReferenceEquals(viewer.Document, msg.Markdown))
+            return;
+
+        // FlowDocument has at most one logical parent. If our cached document
+        // is currently attached to another (recycled) viewer, detach it first.
+        if (msg.Markdown.Parent is System.Windows.Controls.FlowDocumentScrollViewer prev
+            && !ReferenceEquals(prev, viewer))
+        {
+            prev.Document = null;
         }
 
-        _executionFullText += (string.IsNullOrEmpty(_executionFullText) ? "" : "\n\n") + toolText;
-        _executionContentBlock!.Text = _executionFullText;
-        ScrollToBottom();
+        viewer.Document = msg.Markdown;
     }
 
-    private static Border CreateExecutionBubble(TextBox contentBlock)
+    // --- Scroll + Wheel ---
+
+    private ScrollViewer? GetScrollViewer()
     {
-        var bubble = new Border
-        {
-            Background = ThemeManager.GetBrush("ChatExecutionBackground"),
-            CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(8, 4, 8, 4),
-            Margin = new Thickness(8, 2, 40, 2),
-            HorizontalAlignment = HorizontalAlignment.Left,
-            BorderBrush = ThemeManager.GetBrush("ChatExecutionBorderBrush"),
-            BorderThickness = new Thickness(1)
-        };
-
-        var panel = new StackPanel();
-
-        var label = new TextBlock
-        {
-            Text = "Execution",
-            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
-            FontSize = 10,
-            Foreground = ThemeManager.GetBrush("ChatExecutionForeground"),
-            FontStyle = FontStyles.Italic,
-            Margin = new Thickness(0, 0, 0, 2)
-        };
-
-        var chevron = CreateCollapseChevron(false);
-        var headerRow = new StackPanel { Orientation = Orientation.Horizontal, Cursor = Cursors.Hand };
-        headerRow.Children.Add(chevron);
-        headerRow.Children.Add(label);
-
-        contentBlock.Visibility = Visibility.Collapsed;
-        var expanded = false;
-
-        headerRow.MouseLeftButtonUp += (_, e) =>
-        {
-            expanded = !expanded;
-            chevron.Text = expanded ? "▼" : "▶";
-            contentBlock.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed;
-            e.Handled = true;
-        };
-
-        panel.Children.Add(headerRow);
-        panel.Children.Add(contentBlock);
-        bubble.Child = panel;
-
-        return bubble;
+        if (_scrollViewer != null) return _scrollViewer;
+        _scrollViewer = FindVisualChild<ScrollViewer>(MessageList);
+        return _scrollViewer;
     }
 
-    private void AddSystemMessage(string text, bool isWarning = false)
+    private static T? FindVisualChild<T>(DependencyObject root) where T : DependencyObject
     {
-        var tb = new TextBlock
+        if (root is T match) return match;
+        var count = VisualTreeHelper.GetChildrenCount(root);
+        for (int i = 0; i < count; i++)
         {
-            Text = text,
-            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
-            FontSize = 10,
-            Foreground = isWarning
-                ? ThemeManager.GetBrush("ChatDangerForeground")
-                : ThemeManager.GetBrush("ChatSubtleForeground"),
-            HorizontalAlignment = HorizontalAlignment.Center,
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(8, 6, 8, 6)
-        };
-
-        MessageList.Children.Add(tb);
-        ScrollToBottom();
+            var found = FindVisualChild<T>(VisualTreeHelper.GetChild(root, i));
+            if (found != null) return found;
+        }
+        return null;
     }
 
-    // --- Markdown Toggle + Collapsible Messages ---
-
-    private void AddMarkdownToggle(Border bubble, StackPanel panel, TextBox contentBlock, string fullText)
+    private void ScrollToBottom()
     {
-        // Create the markdown rendered view
-        var markdownViewer = new MarkdownScrollViewer
-        {
-            Background = Brushes.Transparent,
-            Foreground = ThemeManager.GetBrush("ChatTextForeground"),
-            MarkdownStyle = (Style)FindResource("ChatMarkdownStyle"),
-            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            Padding = new Thickness(0)
-        };
-        MarkdownHelper.RenderTo(markdownViewer, fullText);
-
-        var isRendered = true;
-        contentBlock.Visibility = Visibility.Collapsed;
-        panel.Children.Add(markdownViewer);
-
-        // Toggle button (top-right of bubble)
-        var toggleIcon = new TextBlock
-        {
-            Text = "\uE943", // Code icon (showing rendered, click to see source)
-            FontFamily = new FontFamily("Segoe MDL2 Assets"),
-            FontSize = 11,
-            Foreground = ThemeManager.GetBrush("ChatMutedForeground")
-        };
-
-        var toggleButton = new Button
-        {
-            Content = toggleIcon,
-            Background = Brushes.Transparent,
-            BorderBrush = ThemeManager.GetBrush("ChatThinkingBorderBrush"),
-            BorderThickness = new Thickness(1),
-            Cursor = Cursors.Hand,
-            Padding = new Thickness(4, 2, 4, 2),
-            HorizontalAlignment = HorizontalAlignment.Right,
-            ToolTip = "Switch to source view",
-            Opacity = 0.7
-        };
-
-        // Remove default button chrome
-        var btnTemplate = new ControlTemplate(typeof(Button));
-        var bdFactory = new FrameworkElementFactory(typeof(Border), "Bd");
-        bdFactory.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(BackgroundProperty));
-        bdFactory.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(BorderBrushProperty));
-        bdFactory.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(BorderThicknessProperty));
-        bdFactory.SetValue(Border.CornerRadiusProperty, new CornerRadius(3));
-        bdFactory.SetValue(Border.PaddingProperty, new TemplateBindingExtension(PaddingProperty));
-        var cp = new FrameworkElementFactory(typeof(ContentPresenter));
-        cp.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
-        cp.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
-        bdFactory.AppendChild(cp);
-        btnTemplate.VisualTree = bdFactory;
-        toggleButton.Template = btnTemplate;
-
-        toggleButton.Click += (_, _) =>
-        {
-            if (isRendered)
-            {
-                markdownViewer.Visibility = Visibility.Collapsed;
-                contentBlock.Visibility = Visibility.Visible;
-                toggleIcon.Text = "\uE890"; // Preview/eye icon
-                toggleButton.ToolTip = "Switch to rendered view";
-                isRendered = false;
-            }
-            else
-            {
-                contentBlock.Visibility = Visibility.Collapsed;
-                markdownViewer.Visibility = Visibility.Visible;
-                toggleIcon.Text = "\uE943"; // Code icon
-                toggleButton.ToolTip = "Switch to source view";
-                isRendered = true;
-            }
-        };
-
-        // Insert toggle button at the top of the panel (after label)
-        panel.Children.Insert(1, toggleButton);
+        var sv = GetScrollViewer();
+        if (sv != null)
+            sv.ScrollToEnd();
     }
 
-    private void MakeCollapsible(Border bubble, StackPanel panel, TextBox contentBlock, string fullText)
+    /// <summary>
+    /// Sticky-bottom auto-scroll: when a message is added and the user is at
+    /// (or near) the bottom of the chat, scroll to follow. If they've scrolled
+    /// up to read history, leave them where they are.
+    /// </summary>
+    private void OnMessagesChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        var lines = fullText.Split('\n');
-        if (lines.Length <= 3)
-            return; // Not worth collapsing
+        if (e.Action != NotifyCollectionChangedAction.Add)
+            return;
 
-        var firstLine = lines[0].Length > 80 ? lines[0][..80] + "..." : lines[0];
-        var collapsed = $"{firstLine}\n  [{lines.Length} lines]";
-
-        // Add chevron to the header row next to the label
-        var isExpanded = true;
-        var label = (UIElement)panel.Children[0];
-        panel.Children.RemoveAt(0);
-
-        var chevron = CreateCollapseChevron(true);
-        var headerRow = new StackPanel { Orientation = Orientation.Horizontal, Cursor = Cursors.Hand };
-        headerRow.Children.Add(chevron);
-        headerRow.Children.Add(label);
-        panel.Children.Insert(0, headerRow);
-
-        headerRow.MouseLeftButtonUp += (_, e) =>
+        var sv = GetScrollViewer();
+        if (sv == null)
         {
-            isExpanded = !isExpanded;
-            chevron.Text = isExpanded ? "▼" : "▶";
-            contentBlock.Text = isExpanded ? fullText : collapsed;
-            e.Handled = true;
-        };
+            // Template not applied yet — schedule scroll after first render.
+            Dispatcher.BeginInvoke(ScrollToBottom, DispatcherPriority.Loaded);
+            return;
+        }
+
+        var atBottom = sv.ScrollableHeight == 0
+            || sv.VerticalOffset >= sv.ScrollableHeight - 50;
+        if (atBottom)
+        {
+            // Defer until after the new container is realized & measured.
+            Dispatcher.BeginInvoke(() => sv.ScrollToEnd(), DispatcherPriority.Background);
+        }
+    }
+
+    private void MessageList_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        var sv = GetScrollViewer();
+        if (sv == null) return;
+        sv.ScrollToVerticalOffset(sv.VerticalOffset - e.Delta);
+        e.Handled = true;
     }
 
     // --- Helpers ---
-
-    private static TextBlock CreateCollapseChevron(bool expanded)
-    {
-        return new TextBlock
-        {
-            Text = expanded ? "▼" : "▶",
-            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
-            FontSize = 10,
-            Foreground = ThemeManager.GetBrush("ChatMutedForeground"),
-            Cursor = Cursors.Hand,
-            Margin = new Thickness(0, 0, 4, 0),
-            VerticalAlignment = VerticalAlignment.Center
-        };
-    }
-
-    private static TextBox CreateSelectableText(double fontSize, Brush foreground,
-        FontStyle? fontStyle = null)
-    {
-        var tb = new TextBox
-        {
-            FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
-            FontSize = fontSize,
-            Foreground = foreground,
-            TextWrapping = TextWrapping.Wrap,
-            IsReadOnly = true,
-            BorderThickness = new Thickness(0),
-            Background = Brushes.Transparent,
-            Padding = new Thickness(0),
-            FocusVisualStyle = null,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled
-        };
-        if (fontStyle.HasValue)
-            tb.FontStyle = fontStyle.Value;
-        return tb;
-    }
 
     private static string FormatToolInput(JsonElement input)
     {
@@ -1380,17 +1240,5 @@ public partial class AiChatControl : UserControl
         {
             return input.ToString();
         }
-    }
-
-    private void MessageScroller_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
-    {
-        // Prevent child controls (TextBox, MarkdownScrollViewer) from stealing wheel events
-        MessageScroller.ScrollToVerticalOffset(MessageScroller.VerticalOffset - e.Delta);
-        e.Handled = true;
-    }
-
-    private void ScrollToBottom()
-    {
-        MessageScroller.ScrollToEnd();
     }
 }

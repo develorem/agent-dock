@@ -16,11 +16,23 @@ public partial class App : Application
     [DllImport("kernel32.dll")]
     private static extern bool AttachConsole(int dwProcessId);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SystemParametersInfo(uint uiAction, uint uiParam, IntPtr pvParam, uint fWinIni);
+
     private const int AttachParentProcess = -1;
+    private const uint SPI_SETFOREGROUNDLOCKTIMEOUT = 0x2001;
 
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        // Disable the per-user foreground-lock timeout so the shell can always
+        // bring our window to the front (taskbar click on a minimized window).
+        // Without this, a long-running instance whose foreground privilege has
+        // expired plays the default-beep ding and refuses to restore from the
+        // taskbar. SPIF flags = 0 means in-memory only, not persisted to the
+        // registry — the setting resets next reboot.
+        SystemParametersInfo(SPI_SETFOREGROUNDLOCKTIMEOUT, 0, IntPtr.Zero, 0);
 
         // Parse command-line arguments before initializing the logger,
         // so we know the logs folder and session context.

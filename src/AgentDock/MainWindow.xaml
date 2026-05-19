@@ -48,8 +48,8 @@
                        Margin="10,0,6,0"
                        WindowChrome.IsHitTestVisibleInChrome="True" />
 
-                <!-- Product name -->
-                <TextBlock Grid.Column="1"
+                <!-- Product name + version -->
+                <TextBlock x:Name="ProductNameText" Grid.Column="1"
                            Text="Agent Dock"
                            FontSize="12"
                            FontWeight="SemiBold"
@@ -102,58 +102,15 @@
                         </MenuItem>
                     </MenuItem>
                     <MenuItem Header="S_ettings">
-                        <MenuItem Header="_Theme" x:Name="ThemeMenu">
+                        <MenuItem Header="_Workspace Settings..." Click="WorkspaceSettings_Click">
                             <MenuItem.Icon>
-                                <TextBlock Text="&#xE790;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                <TextBlock Text="&#xE821;" FontFamily="Segoe MDL2 Assets" FontSize="12"
                                            Foreground="{DynamicResource MenuIconForeground}" />
                             </MenuItem.Icon>
-                            <!-- Items populated dynamically in code-behind -->
                         </MenuItem>
-                        <MenuItem Header="Toolbar _Position">
-                            <MenuItem.Icon>
-                                <TextBlock Text="&#xE8E4;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                                           Foreground="{DynamicResource MenuIconForeground}" />
-                            </MenuItem.Icon>
-                            <MenuItem Header="_Top" x:Name="ToolbarTopMenu" IsCheckable="True" IsChecked="True"
-                                      Click="ToolbarPosition_Click" Tag="Top">
-                                <MenuItem.Icon>
-                                    <TextBlock Text="&#xE74A;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                                               Foreground="{DynamicResource MenuIconForeground}" />
-                                </MenuItem.Icon>
-                            </MenuItem>
-                            <MenuItem Header="_Left" x:Name="ToolbarLeftMenu" IsCheckable="True"
-                                      Click="ToolbarPosition_Click" Tag="Left">
-                                <MenuItem.Icon>
-                                    <TextBlock Text="&#xE76B;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                                               Foreground="{DynamicResource MenuIconForeground}" />
-                                </MenuItem.Icon>
-                            </MenuItem>
-                            <MenuItem Header="_Right" x:Name="ToolbarRightMenu" IsCheckable="True"
-                                      Click="ToolbarPosition_Click" Tag="Right">
-                                <MenuItem.Icon>
-                                    <TextBlock Text="&#xE76C;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                                               Foreground="{DynamicResource MenuIconForeground}" />
-                                </MenuItem.Icon>
-                            </MenuItem>
-                            <MenuItem Header="_Bottom" x:Name="ToolbarBottomMenu" IsCheckable="True"
-                                      Click="ToolbarPosition_Click" Tag="Bottom">
-                                <MenuItem.Icon>
-                                    <TextBlock Text="&#xE74B;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                                               Foreground="{DynamicResource MenuIconForeground}" />
-                                </MenuItem.Icon>
-                            </MenuItem>
-                        </MenuItem>
-                        <Separator />
-                        <MenuItem Header="_Claude Path Override..." Click="ClaudePathOverride_Click">
+                        <MenuItem Header="_App Settings..." Click="AppSettings_Click">
                             <MenuItem.Icon>
                                 <TextBlock Text="&#xE713;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                                           Foreground="{DynamicResource MenuIconForeground}" />
-                            </MenuItem.Icon>
-                        </MenuItem>
-                        <Separator />
-                        <MenuItem Header="Open _Logs Folder" Click="OpenLogsFolder_Click">
-                            <MenuItem.Icon>
-                                <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets" FontSize="12"
                                            Foreground="{DynamicResource MenuIconForeground}" />
                             </MenuItem.Icon>
                         </MenuItem>
@@ -365,10 +322,19 @@
                     Background="{DynamicResource ToolbarBackground}"
                     BorderBrush="{DynamicResource ToolbarBorderBrush}" BorderThickness="0,0,0,1"
                     Visibility="Collapsed">
-                <StackPanel x:Name="ToolbarPanel" Orientation="Horizontal"
-                            Margin="4">
+                <DockPanel x:Name="ToolbarOuterPanel" LastChildFill="True">
+                    <!-- Meta tab strip (groups). Hidden until 2+ groups exist. -->
+                    <Border x:Name="MetaTabBorder" DockPanel.Dock="Top"
+                            BorderBrush="{DynamicResource ToolbarBorderBrush}"
+                            BorderThickness="0,0,0,1"
+                            Visibility="Collapsed">
+                        <StackPanel x:Name="MetaTabPanel" Orientation="Horizontal">
+                            <!-- Meta tab elements are inserted here dynamically -->
+                        </StackPanel>
+                    </Border>
                     <!-- Project tab buttons are inserted here dynamically -->
-                </StackPanel>
+                    <StackPanel x:Name="ToolbarPanel" Orientation="Horizontal" />
+                </DockPanel>
             </Border>
 
             <!-- Main Content Area -->

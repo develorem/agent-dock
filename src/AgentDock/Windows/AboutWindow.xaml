@@ -71,6 +71,13 @@
                 </Hyperlink>
             </TextBlock>
             <TextBlock FontSize="13" Margin="0,0,0,4">
+                <Hyperlink NavigateUri="https://github.com/develorem/agent-dock/releases"
+                           RequestNavigate="Hyperlink_RequestNavigate">
+                    <Run Foreground="{DynamicResource HelpLinkForeground}"
+                         Text="Release Notes &#x2197;" />
+                </Hyperlink>
+            </TextBlock>
+            <TextBlock FontSize="13" Margin="0,0,0,4">
                 <Hyperlink NavigateUri="https://github.com/develorem"
                            RequestNavigate="Hyperlink_RequestNavigate">
                     <Run Foreground="{DynamicResource HelpLinkForeground}"

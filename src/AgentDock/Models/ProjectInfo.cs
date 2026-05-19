@@ -22,4 +22,10 @@ public class ProjectInfo
     /// </summary>
     public string DisplayName =>
         string.IsNullOrWhiteSpace(CustomName) ? FolderName : CustomName!;
+
+    /// <summary>
+    /// Id of the <see cref="ProjectGroup"/> this project belongs to.
+    /// Null when no grouping is in use for the current workspace.
+    /// </summary>
+    public string? GroupId { get; set; }
 }

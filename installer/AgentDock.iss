@@ -30,6 +30,10 @@ PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
+; .NET 10 desktop apps require Windows 10 or later. The dictation feature
+; additionally requires Win10 build 19041; that's checked at runtime so older
+; Win10 installs simply hide the mic button.
+MinVersion=10.0
 ChangesAssociations=yes
 ChangesEnvironment=yes
 SetupIconFile=..\assets\agentdock.ico

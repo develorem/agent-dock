@@ -239,6 +239,53 @@ Fetch and integrate Develorem logo. App icon for taskbar/title bar. Consistent s
 
 ---
 
+## Task 15: Tab Restyle + Tab Groups
+**Status:** `[ ]`
+
+Two related changes to the project tab strip:
+
+**A. Restyle project tabs (VS Code-like)**
+Replace the current button-style ControlTemplate in `MainWindow.xaml.cs` (`CreateProjectTabButton`, ~lines 967-978) with flat rectangular tabs:
+- Inactive: transparent background.
+- Active: subtle themed fill + ~2px themed bottom-edge accent.
+- Hover: slight background lift, no border.
+- Tabs sit flush with the content area below (no gap, no rounded button corners).
+
+**B. Tab groups ("meta tabs")**
+A new optional grouping layer above the project tab row, hidden until the user creates a group.
+
+- **Creation:** Right-click a project tab → existing context menu gains "Add to new group". First use creates a group named "Group 1" containing that tab and an implicit "Ungrouped" group holding everything else. Subsequent uses increment: "Group 2", "Group 3", …
+- **Meta bar visibility:** Zero height / no chrome when only one group exists. Appears as a thin horizontal row above `ToolbarPanel` once 2+ groups exist.
+- **Meta tab styling:** Lighter-weight than project tabs (label-only chip), active group shows themed bottom accent.
+- **Click meta tab:** Switches active group; project tab row filters to that group's projects only.
+- **Inline rename:** Click the group's text label → inline TextBox. Commit on focus-loss or Enter; Esc cancels. ("Ungrouped" is renameable like any other group.)
+- **Right-click meta tab:** Context menu with "Delete group" — enabled only when the group has zero projects.
+- **Drag-drop:** A project tab dragged onto a meta tab moves the project to that group. Extends existing `ToolbarPanel_DragOver/Drop` handlers.
+- **Toolbar orientation:** When toolbar is on top, meta bar is a row above project tabs. For left/right/bottom toolbar positions, mirror the layout (meta column adjacent to project column). Parity across all four orientations.
+
+**Persistence (workspace file):**
+- Bump `WorkspaceFile.Version` to `2`.
+- Add `Groups: [{ Id, Name, Order }]` to `WorkspaceFile`.
+- Add nullable `GroupId` to `WorkspaceProject`.
+- Add `ActiveGroupId` so the active group restores on load.
+- Loader: v1 files (no Groups field) load with all projects ungrouped, meta bar hidden.
+
+**Done criteria:**
+- Project tabs render in flat VS Code-like style; active and hover states clearly distinct, themed.
+- No meta bar visible until a group is created.
+- Right-click → "Add to new group" creates "Group 1" and an "Ungrouped" group; meta bar appears.
+- Subsequent "Add to new group" produces "Group 2", "Group 3", …
+- Clicking a meta tab filters the project tab row to that group's projects only.
+- Click on a group's name → inline rename works (Enter commits, Esc cancels, focus-loss commits).
+- Right-click a meta tab shows "Delete group", disabled when group has tabs.
+- Dragging a project tab onto a meta tab reassigns its group.
+- Meta bar layout adapts to all four toolbar positions (top/left/right/bottom).
+- Workspace save/load round-trips groups, group names, group order, and active group.
+- v1 workspace files still load cleanly (treated as all-ungrouped, meta bar hidden).
+- Release notes updated under `docs/release-notes/v{next}.md`.
+
+---
+
 ## Workflow
 
 1. Each task is implemented incrementally

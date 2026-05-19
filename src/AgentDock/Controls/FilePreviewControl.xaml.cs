@@ -27,11 +27,23 @@ public partial class FilePreviewControl : UserControl
         ".md", ".markdown"
     };
 
+    private static readonly HashSet<string> JsonExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".json"
+    };
+
     // Max file size to preview (5 MB)
     private const long MaxTextFileSize = 5 * 1024 * 1024;
 
     private string? _currentExtension;
     private bool _isMarkdownRendered;
+    private string? _diffFilePath;
+
+    /// <summary>
+    /// Raised when the user clicks the "show full file" button while a diff is being
+    /// previewed. Payload is the absolute file path passed to <see cref="ShowDiff"/>.
+    /// </summary>
+    public event Action<string>? RevealInExplorerRequested;
 
     public FilePreviewControl()
     {
@@ -44,8 +56,12 @@ public partial class FilePreviewControl : UserControl
     {
         ApplyLinkColor();
 
-        // Re-apply syntax highlighting with new theme colors
-        if (_currentExtension != null && TextPreview.Visibility == Visibility.Visible && _diffColorizer == null)
+        // Re-apply syntax highlighting with new theme colors. JSON keeps no built-in
+        // highlighter — the JsonColorizer picks up theme brushes on Redraw below.
+        if (_currentExtension != null
+            && TextPreview.Visibility == Visibility.Visible
+            && _diffColorizer == null
+            && !JsonExtensions.Contains(_currentExtension))
         {
             TextPreview.SyntaxHighlighting = ThemeManager.GetHighlighting(_currentExtension);
         }
@@ -68,6 +84,7 @@ public partial class FilePreviewControl : UserControl
     }
 
     private MarkdownLinkColorizer? _linkColorizer;
+    private JsonColorizer? _jsonColorizer;
 
     private void ApplyMarkdownLinkColorizer(string extension)
     {
@@ -86,6 +103,26 @@ public partial class FilePreviewControl : UserControl
         {
             TextPreview.TextArea.TextView.LineTransformers.Remove(_linkColorizer);
             _linkColorizer = null;
+        }
+    }
+
+    private void ApplyJsonColorizer(string extension)
+    {
+        RemoveJsonColorizer();
+
+        if (JsonExtensions.Contains(extension))
+        {
+            _jsonColorizer = new JsonColorizer();
+            TextPreview.TextArea.TextView.LineTransformers.Add(_jsonColorizer);
+        }
+    }
+
+    private void RemoveJsonColorizer()
+    {
+        if (_jsonColorizer != null)
+        {
+            TextPreview.TextArea.TextView.LineTransformers.Remove(_jsonColorizer);
+            _jsonColorizer = null;
         }
     }
 
@@ -122,7 +159,7 @@ public partial class FilePreviewControl : UserControl
 
     private DiffLineColorizer? _diffColorizer;
 
-    public void ShowDiff(string diffContent)
+    public void ShowDiff(string filePath, string diffContent)
     {
         HideAll();
         ClosePreviewButton.Visibility = Visibility.Visible;
@@ -137,7 +174,18 @@ public partial class FilePreviewControl : UserControl
         _diffColorizer = new DiffLineColorizer();
         TextPreview.TextArea.TextView.LineTransformers.Add(_diffColorizer);
 
+        _diffFilePath = filePath;
+        RevealInExplorerButton.Visibility = File.Exists(filePath)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
         TextPreview.Visibility = Visibility.Visible;
+    }
+
+    private void RevealInExplorer_Click(object sender, RoutedEventArgs e)
+    {
+        if (!string.IsNullOrEmpty(_diffFilePath))
+            RevealInExplorerRequested?.Invoke(_diffFilePath);
     }
 
     public void Clear()
@@ -271,8 +319,13 @@ public partial class FilePreviewControl : UserControl
 
             TextPreview.Load(filePath);
             _currentExtension = extension;
-            TextPreview.SyntaxHighlighting = ThemeManager.GetHighlighting(extension);
+            // JSON is rendered by JsonColorizer instead of any built-in highlighter,
+            // so colors stay theme-aware in both dark and light modes.
+            TextPreview.SyntaxHighlighting = JsonExtensions.Contains(extension)
+                ? null
+                : ThemeManager.GetHighlighting(extension);
             ApplyMarkdownLinkColorizer(extension);
+            ApplyJsonColorizer(extension);
             TextPreview.ScrollToHome();
             TextPreview.Visibility = Visibility.Visible;
         }
@@ -326,12 +379,15 @@ public partial class FilePreviewControl : UserControl
         TextPreview.Visibility = Visibility.Collapsed;
         MarkdownPreview.Visibility = Visibility.Collapsed;
         MarkdownToggleButton.Visibility = Visibility.Collapsed;
+        RevealInExplorerButton.Visibility = Visibility.Collapsed;
         ClosePreviewButton.Visibility = Visibility.Collapsed;
         ImageContainer.Visibility = Visibility.Collapsed;
         NoPreviewMessage.Visibility = Visibility.Collapsed;
         _isMarkdownRendered = false;
+        _diffFilePath = null;
         RemoveDiffColorizer();
         RemoveMarkdownLinkColorizer();
+        RemoveJsonColorizer();
     }
 
     private void RemoveDiffColorizer()

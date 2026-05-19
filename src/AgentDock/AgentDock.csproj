@@ -2,7 +2,8 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
@@ -15,9 +16,9 @@
     <Authors>Develorem</Authors>
     <Description>Manage multiple Claude Code AI sessions across projects from a single window.</Description>
     <Copyright>Copyright (c) 2026 Develorem</Copyright>
-    <Version>0.3.0</Version>
-    <AssemblyVersion>0.3.0.0</AssemblyVersion>
-    <FileVersion>0.3.0.0</FileVersion>
+    <Version>0.9.0</Version>
+    <AssemblyVersion>0.9.0.0</AssemblyVersion>
+    <FileVersion>0.9.0.0</FileVersion>
     <RepositoryUrl>https://github.com/develorem/agent-dock</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <ApplicationIcon>..\..\assets\agentdock.ico</ApplicationIcon>
@@ -39,6 +40,10 @@
 
   <ItemGroup>
     <Resource Include="..\..\assets\agentdock.png" Link="Assets\agentdock.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\docs\release-notes\v*.md" LogicalName="ReleaseNotes/%(Filename).md" />
   </ItemGroup>
 
 </Project>
