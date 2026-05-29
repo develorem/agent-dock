@@ -266,12 +266,17 @@
                     BorderThickness="0,1,0,0"
                     Padding="8,6">
                 <StackPanel>
-                    <TextBlock x:Name="QuestionText"
-                               FontFamily="Cascadia Code, Consolas, Courier New"
-                               FontSize="12" FontWeight="SemiBold"
-                               Foreground="{DynamicResource ChatQuestionTitleForeground}"
-                               TextWrapping="Wrap"
-                               Margin="0,0,0,6" />
+                    <TextBox x:Name="QuestionText"
+                             IsReadOnly="True"
+                             IsReadOnlyCaretVisible="False"
+                             Background="Transparent"
+                             BorderThickness="0"
+                             Padding="0"
+                             FontFamily="Cascadia Code, Consolas, Courier New"
+                             FontSize="12" FontWeight="SemiBold"
+                             Foreground="{DynamicResource ChatQuestionTitleForeground}"
+                             TextWrapping="Wrap"
+                             Margin="0,0,0,6" />
                     <StackPanel x:Name="QuestionOptionsPanel" Margin="0,0,0,6" />
                     <DockPanel Margin="0,2,0,0">
                         <Button Content="Send"
