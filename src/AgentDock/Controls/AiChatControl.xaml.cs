@@ -639,10 +639,14 @@ public partial class AiChatControl : UserControl
 
     private void OnContentBlockStarted(ClaudeContentBlockEvent evt)
     {
-        RemoveWaitingBubble();
-        // Thinking bubble is created lazily on the first real thinking_delta —
-        // claude-opus-4-7 sends redacted thinking (no deltas), so eagerly
-        // creating a bubble here would leave it permanently empty.
+        // Keep the "Thinking..." placeholder while a thinking block is open.
+        // claude-opus-4-7 sends redacted thinking (signature_delta only, no
+        // thinking_delta), so this placeholder is the only signal the user
+        // gets that the model is working until the first text_delta arrives.
+        // OnStreamDelta removes it when any real delta (text or thinking)
+        // shows up; OnResultReceived is the defensive fallback.
+        if (evt.BlockType != "thinking")
+            RemoveWaitingBubble();
     }
 
     private void OnContentBlockStopped(ClaudeContentBlockEvent evt)
