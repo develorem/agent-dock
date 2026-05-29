@@ -176,27 +176,68 @@ public partial class MainWindow : Window
         SetWindowLong(hwnd, GWL_STYLE, style | WS_SYSMENU);
 
         var source = HwndSource.FromHwnd(hwnd);
-        source?.AddHook(WndProc);
+        if (source != null)
+        {
+            source.AddHook(WndProc);
+            Log.Info($"OnSourceInitialized: WndProc hook installed (hwnd=0x{hwnd:X})");
+        }
+        else
+        {
+            Log.Warn($"OnSourceInitialized: HwndSource.FromHwnd returned null (hwnd=0x{hwnd:X}) — WndProc hook NOT installed");
+        }
     }
+
+    private static int _wmGetMinMaxInfoCount;
+    private static int _wndProcExceptionCount;
 
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
-        // WM_GETMINMAXINFO — constrain maximized size to the work area
+        // WM_GETMINMAXINFO — constrain maximized size to the work area.
+        //
+        // Wrapped in try/catch so a managed marshaling failure (bad lParam,
+        // unexpected struct layout) is logged before bubbling. A native AV in
+        // the OS read/write won't be caught here — that path is what the WER
+        // LocalDump configuration is for — but anything inside the CLR will.
         if (msg == 0x0024)
         {
-            var mmi = Marshal.PtrToStructure<MINMAXINFO>(lParam);
-            var monitor = MonitorFromWindow(hwnd, 2); // MONITOR_DEFAULTTONEAREST
-            if (monitor != IntPtr.Zero)
+            try
             {
-                var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
-                GetMonitorInfo(monitor, ref mi);
-                mmi.ptMaxPosition.X = Math.Abs(mi.rcWork.Left - mi.rcMonitor.Left);
-                mmi.ptMaxPosition.Y = Math.Abs(mi.rcWork.Top - mi.rcMonitor.Top);
-                mmi.ptMaxSize.X = Math.Abs(mi.rcWork.Right - mi.rcWork.Left);
-                mmi.ptMaxSize.Y = Math.Abs(mi.rcWork.Bottom - mi.rcWork.Top);
+                var n = System.Threading.Interlocked.Increment(ref _wmGetMinMaxInfoCount);
+                if (n == 1)
+                    Log.Info($"WndProc: first WM_GETMINMAXINFO (hwnd=0x{hwnd:X}, lParam=0x{lParam:X})");
+
+                if (lParam == IntPtr.Zero)
+                {
+                    Log.Warn($"WndProc: WM_GETMINMAXINFO with null lParam (count={n}) — skipping");
+                    return IntPtr.Zero;
+                }
+
+                var mmi = Marshal.PtrToStructure<MINMAXINFO>(lParam);
+                var monitor = MonitorFromWindow(hwnd, 2); // MONITOR_DEFAULTTONEAREST
+                if (monitor != IntPtr.Zero)
+                {
+                    var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+                    GetMonitorInfo(monitor, ref mi);
+                    mmi.ptMaxPosition.X = Math.Abs(mi.rcWork.Left - mi.rcMonitor.Left);
+                    mmi.ptMaxPosition.Y = Math.Abs(mi.rcWork.Top - mi.rcMonitor.Top);
+                    mmi.ptMaxSize.X = Math.Abs(mi.rcWork.Right - mi.rcWork.Left);
+                    mmi.ptMaxSize.Y = Math.Abs(mi.rcWork.Bottom - mi.rcWork.Top);
+                }
+                else
+                {
+                    Log.Warn($"WndProc: MonitorFromWindow returned 0 for hwnd=0x{hwnd:X} (count={n}) — using OS defaults");
+                }
+                // fDeleteOld:false — MINMAXINFO is pure POD (POINTs and ints).
+                // No managed pointers in the destination buffer to release.
+                Marshal.StructureToPtr(mmi, lParam, false);
+                handled = true;
             }
-            Marshal.StructureToPtr(mmi, lParam, true);
-            handled = true;
+            catch (Exception ex)
+            {
+                var n = System.Threading.Interlocked.Increment(ref _wndProcExceptionCount);
+                Log.Error($"WndProc: managed exception handling WM_GETMINMAXINFO (count={n}, lParam=0x{lParam:X})", ex);
+                handled = false;
+            }
         }
         return IntPtr.Zero;
     }
@@ -2066,14 +2107,18 @@ public partial class MainWindow : Window
 
     private void SwitchToProject(ProjectInfo project)
     {
-        Log.Info($"SwitchToProject: '{project.FolderName}'");
+        Log.Info($"SwitchToProject: '{project.FolderName}' — entry (prev='{_activeProject?.FolderName ?? "(none)"}', projects={_projects.Count}, groups={_groups.Count})");
         if (_activeProject == project)
+        {
+            Log.Info("SwitchToProject: already active — no-op");
             return;
+        }
 
         // If groups are in use and this project lives in a different group,
         // switch the active group so its tab is actually visible.
         if (_groups.Count >= 2 && project.GroupId != null && project.GroupId != _activeGroupId)
         {
+            Log.Info($"SwitchToProject: switching active group '{_activeGroupId}' -> '{project.GroupId}'");
             _activeGroupId = project.GroupId;
             RefreshMetaTabBar();
             RefreshProjectTabVisibility();
@@ -2094,9 +2139,15 @@ public partial class MainWindow : Window
         // Show the project's content
         if (_projectContents.TryGetValue(project, out var content))
         {
+            Log.Info($"SwitchToProject: swapping ProjectContentHost.Content -> '{project.FolderName}'");
             ProjectContentHost.Content = content;
             ProjectContentHost.Visibility = Visibility.Visible;
             EmptyStatePanel.Visibility = Visibility.Collapsed;
+            Log.Info("SwitchToProject: content swap returned");
+        }
+        else
+        {
+            Log.Warn($"SwitchToProject: no content registered for '{project.FolderName}' — skipping content swap");
         }
 
         // Update title bar
@@ -2105,6 +2156,8 @@ public partial class MainWindow : Window
         // Focus the AI chat input if the session is idle
         if (_projectChatControls.TryGetValue(project, out var chatControl))
             chatControl.FocusInput();
+
+        Log.Info($"SwitchToProject: '{project.FolderName}' — complete");
     }
 
     private void UpdateTitleBar()
