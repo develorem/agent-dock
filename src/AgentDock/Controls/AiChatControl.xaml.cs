@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.Text.Json;
@@ -257,6 +258,16 @@ public partial class AiChatControl : UserControl
     {
         StopWorkingAnimation();
 
+        // TEMP perf instrumentation — track how many sessions across all tabs
+        // are Working at once, so a slow keystroke can be correlated with
+        // background-tab contention. Remove with the rest of the PERF block.
+        var nowWorking = state == ClaudeSessionState.Working;
+        if (nowWorking != _countedAsWorking)
+        {
+            _countedAsWorking = nowWorking;
+            s_workingSessionCount += nowWorking ? 1 : -1;
+        }
+
         if (state == ClaudeSessionState.Working)
         {
             StartWorkingAnimation();
@@ -374,6 +385,10 @@ public partial class AiChatControl : UserControl
 
     private void InputBox_TextChanged(object sender, TextChangedEventArgs e)
     {
+        // TEMP perf instrumentation (input-lag investigation) — remove once the
+        // chat-list layout cost is diagnosed.
+        MeasureKeystrokeLatency();
+
         var text = InputBox.Text;
 
         if (!text.StartsWith('/') || text.Any(char.IsWhiteSpace))
@@ -751,7 +766,7 @@ public partial class AiChatControl : UserControl
 
     private void OnAssistantMessage(ClaudeAssistantMessage msg)
     {
-        // text blocks → finalize the streaming VM with the authoritative full text
+        // Apply the authoritative full text to the streaming VM.
         var fullText = string.Join("", msg.Content
             .Where(c => c.Type == "text" && c.Text != null)
             .Select(c => c.Text));
@@ -759,10 +774,22 @@ public partial class AiChatControl : UserControl
         if (_streamingVm != null && !string.IsNullOrEmpty(fullText))
             _streamingVm.Text = fullText; // setter clears throttle buffer + timer
 
-        // tool_use blocks → append to the building-execution bubble
         var toolBlocks = msg.Content.Where(c => c.Type == "tool_use").ToList();
+
         if (toolBlocks.Count > 0)
         {
+            // This assistant message calls tools, so any text it produced is
+            // intermediate commentary ("let me check…", "now I'll…"), not the
+            // final answer. Fold that text into the collapsed thinking window
+            // so only executions and the final answer stay expanded — keeping
+            // the transcript short and cheap to render.
+            FoldStreamingTextIntoThinking();
+
+            // Collapse the commentary immediately. (EnsureExecutionVm only
+            // finalizes thinking when it creates the turn's first execution
+            // bubble; tools after that reuse the existing bubble, so we can't
+            // rely on it to collapse commentary before later tool calls.)
+            FinalizeThinking();
             EnsureExecutionVm();
             foreach (var block in toolBlocks)
             {
@@ -776,12 +803,47 @@ public partial class AiChatControl : UserControl
                 _executionVm!.Tools.Add(new ToolEntry(block.Name ?? "(unnamed)", inputStr));
             }
         }
+        else
+        {
+            // No tool calls — this text is (part of) the final answer. Collapse
+            // any open thinking and keep the response visible as an immutable
+            // AssistantMessage (gets the markdown toggle if multi-line).
+            FinalizeThinking();
+            FinalizeStreaming();
+        }
+    }
 
-        // The assistant message marks the end of one iteration's text content.
-        // Replace the streaming VM with an immutable AssistantMessage so the
-        // bubble stops re-rendering and (if multi-line) gets the markdown
-        // toggle button.
-        FinalizeStreaming();
+    /// <summary>
+    /// Reclassifies the current streaming assistant text as intermediate
+    /// commentary: drops its visible bubble and appends the text to the
+    /// thinking window (which is collapsed on finalize). No-op if there's no
+    /// streaming text or it's empty.
+    /// </summary>
+    private void FoldStreamingTextIntoThinking()
+    {
+        if (_streamingVm == null) return;
+
+        _streamingVm.Flush();
+        _streamingVm.PropertyChanged -= OnStreamingTextChanged;
+        var text = _streamingVm.Text;
+        var idx = Messages.IndexOf(_streamingVm);
+        if (idx >= 0) Messages.RemoveAt(idx);
+        _streamingVm = null;
+
+        if (string.IsNullOrWhiteSpace(text)) return;
+
+        if (_streamingThinkingVm == null)
+        {
+            _streamingThinkingVm = new StreamingThinkingMessage(Guid.NewGuid());
+            _streamingThinkingVm.PropertyChanged += OnStreamingTextChanged;
+            Messages.Add(_streamingThinkingVm);
+        }
+        else if (!string.IsNullOrEmpty(_streamingThinkingVm.Text))
+        {
+            // Separate commentary from any thinking text already in the window.
+            _streamingThinkingVm.AppendText("\n\n");
+        }
+        _streamingThinkingVm.AppendText(text);
     }
 
     private void OnResultReceived(ClaudeResultMessage result)
@@ -1238,6 +1300,69 @@ public partial class AiChatControl : UserControl
             if (found != null) return found;
         }
         return null;
+    }
+
+    // --- TEMP perf instrumentation (input-lag investigation) ---
+    // Times how long the UI thread stays busy from a keystroke in the prompt
+    // box until the resulting layout/render cycle completes, and reports how
+    // many heavy message visuals (MdXaml viewers, AvalonEdit editors) are
+    // realized at that moment. Only slow frames are logged, to avoid spam.
+    // Remove this block (and its call in InputBox_TextChanged) once the chat
+    // layout cost is understood.
+    private readonly System.Diagnostics.Stopwatch _keystrokeSw = new();
+    private bool _keystrokeSamplePending;
+    // Count of sessions (across all tabs) currently in the Working state.
+    private static int s_workingSessionCount;
+    private bool _countedAsWorking;
+
+    private void MeasureKeystrokeLatency()
+    {
+        if (_keystrokeSamplePending) return; // one sample in flight at a time
+        _keystrokeSamplePending = true;
+        _keystrokeSw.Restart();
+
+        // Loaded priority runs after the Render-priority layout pass for this
+        // dispatcher cycle, so the elapsed time covers the layout work the
+        // keystroke triggered.
+        Dispatcher.BeginInvoke(() =>
+        {
+            _keystrokeSamplePending = false;
+            var ms = _keystrokeSw.Elapsed.TotalMilliseconds;
+            if (ms < 20) return; // ignore snappy keystrokes
+
+            var (viewers, editors) = CountRealizedHeavyVisuals();
+            Log.Warn($"PERF keystroke->layout {ms:F0}ms | realized mdxaml={viewers}, " +
+                     $"avalonedit={editors}, total messages={Messages.Count}, " +
+                     $"input len={InputBox.Text.Length}, working sessions={s_workingSessionCount}");
+        }, DispatcherPriority.Loaded);
+    }
+
+    private (int viewers, int editors) CountRealizedHeavyVisuals()
+    {
+        int viewers = 0, editors = 0;
+        foreach (var d in EnumerateVisualTree(MessageList))
+        {
+            // Match by type name so we don't take a compile dependency on the
+            // MdXaml / AvalonEdit assemblies just for instrumentation.
+            switch (d.GetType().Name)
+            {
+                case "MarkdownScrollViewer": viewers++; break;
+                case "TextEditor": editors++; break;
+            }
+        }
+        return (viewers, editors);
+    }
+
+    private static IEnumerable<DependencyObject> EnumerateVisualTree(DependencyObject root)
+    {
+        var count = VisualTreeHelper.GetChildrenCount(root);
+        for (int i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            yield return child;
+            foreach (var d in EnumerateVisualTree(child))
+                yield return d;
+        }
     }
 
     private void ScrollToBottom()
