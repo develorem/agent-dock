@@ -28,6 +28,11 @@ public partial class AiChatControl : UserControl
     // collection, nulled on finalize / removal.
     private StreamingAssistantMessage? _streamingVm;
     private StreamingThinkingMessage? _streamingThinkingVm;
+    // Content-block index of the thinking deltas currently feeding
+    // _streamingThinkingVm. Lets consecutive thinking blocks (no intervening
+    // response/execution) merge into the one window instead of each opening a
+    // new one. Reset to -1 whenever the thinking window is finalized.
+    private int _lastThinkingBlockIndex = -1;
     private BuildingExecutionMessage? _executionVm;
     private WaitingMessage? _waitingVm;
     private InactivityWarning? _inactivityVm;
@@ -630,6 +635,7 @@ public partial class AiChatControl : UserControl
         Messages.Clear();
         _streamingVm = null;
         _streamingThinkingVm = null;
+        _lastThinkingBlockIndex = -1;
         _executionVm = null;
         _waitingVm = null;
         _inactivityVm = null;
@@ -639,27 +645,37 @@ public partial class AiChatControl : UserControl
 
     private void OnContentBlockStarted(ClaudeContentBlockEvent evt)
     {
-        // Keep the "Thinking..." placeholder while a thinking block is open.
-        // claude-opus-4-7 sends redacted thinking (signature_delta only, no
-        // thinking_delta), so this placeholder is the only signal the user
-        // gets that the model is working until the first text_delta arrives.
-        // OnStreamDelta removes it when any real delta (text or thinking)
-        // shows up; OnResultReceived is the defensive fallback.
-        if (evt.BlockType != "thinking")
-            RemoveWaitingBubble();
+        if (evt.BlockType == "thinking")
+        {
+            // Keep the single "Thinking..." placeholder visible through the
+            // thinking phase. claude-opus-4-7/4-8 send redacted thinking
+            // (signature_delta only, no thinking_delta), so the placeholder is
+            // the only "working" signal until real content arrives — and it
+            // must NOT be duplicated per thinking block. The thinking window
+            // itself is created lazily (on the first non-empty thinking_delta)
+            // by OnThinkingDelta, so empty/redacted thinking never spawns a
+            // window. Consecutive thinking blocks merge into one window there.
+            return;
+        }
+
+        // A non-thinking block (text / tool_use) ends the thinking phase, so
+        // drop the placeholder. Real content (response text via OnStreamDelta,
+        // execution via EnsureExecutionVm) takes over from here.
+        RemoveWaitingBubble();
     }
 
     private void OnContentBlockStopped(ClaudeContentBlockEvent evt)
     {
-        // The CLI marks the end of a thinking block here. Finalize the live
-        // thinking VM (if any) by swapping it for an immutable record.
-        if (_streamingThinkingVm != null)
-            FinalizeThinking();
+        // Intentionally does NOT finalize the thinking window. A thinking block
+        // ending does not mean the thinking phase is over — the model may open
+        // another thinking block immediately. We only finalize the thinking
+        // window when genuinely different content arrives (response text,
+        // execution) or the turn ends (OnResultReceived). This is what lets
+        // back-to-back thinking blocks share one window instead of stacking up.
     }
 
     private void OnStreamDelta(ClaudeStreamDelta delta)
     {
-        RemoveWaitingBubble();
         RemoveInactivityWarning();
 
         if (delta.DeltaType == "thinking_delta")
@@ -668,8 +684,10 @@ public partial class AiChatControl : UserControl
             return;
         }
 
-        // First text_delta of a new assistant block — finalize any open
-        // thinking first so it renders as a separate (collapsible) message.
+        // Real response text — the thinking phase is over. Drop the placeholder
+        // and finalize any open thinking window so it renders as a separate
+        // (collapsible) message above the response.
+        RemoveWaitingBubble();
         if (_streamingVm == null && _streamingThinkingVm != null)
             FinalizeThinking();
 
@@ -687,12 +705,32 @@ public partial class AiChatControl : UserControl
 
     private void OnThinkingDelta(ClaudeStreamDelta delta)
     {
+        // Redacted thinking emits empty/whitespace thinking_deltas with no real
+        // content. Don't open a thinking window for those — keep the single
+        // "Thinking..." placeholder instead. This is what stops empty thinking
+        // blocks from stacking up as blank windows.
+        if (_streamingThinkingVm == null && string.IsNullOrWhiteSpace(delta.Text))
+            return;
+
         if (_streamingThinkingVm == null)
         {
+            // First real thinking content — replace the placeholder with a live
+            // thinking window.
+            RemoveWaitingBubble();
             _streamingThinkingVm = new StreamingThinkingMessage(Guid.NewGuid());
             _streamingThinkingVm.PropertyChanged += OnStreamingTextChanged;
             Messages.Add(_streamingThinkingVm);
+            _lastThinkingBlockIndex = delta.ContentBlockIndex;
         }
+        else if (delta.ContentBlockIndex != _lastThinkingBlockIndex)
+        {
+            // A new thinking block opened with no intervening response/execution
+            // — merge it into the existing window (separated for readability)
+            // rather than opening a second one.
+            _streamingThinkingVm.AppendText("\n\n");
+            _lastThinkingBlockIndex = delta.ContentBlockIndex;
+        }
+
         _streamingThinkingVm.AppendText(delta.Text);
     }
 
@@ -781,6 +819,11 @@ public partial class AiChatControl : UserControl
     private void EnsureExecutionVm()
     {
         if (_executionVm != null) return;
+        // Execution output ends the thinking phase — drop the placeholder and
+        // finalize any open thinking window so it renders above the execution
+        // bubble (and so the next thinking block starts a fresh window).
+        RemoveWaitingBubble();
+        FinalizeThinking();
         _executionVm = new BuildingExecutionMessage(Guid.NewGuid());
         Messages.Add(_executionVm);
     }
@@ -833,12 +876,19 @@ public partial class AiChatControl : UserControl
         var idx = Messages.IndexOf(_streamingThinkingVm);
         if (idx >= 0)
         {
-            Messages[idx] = new ThinkingMessage(
-                _streamingThinkingVm.Id,
-                _streamingThinkingVm.Text,
-                isExpanded: false);
+            // Defensive: a window that somehow ended up with no real content
+            // (e.g. only whitespace separators) is dropped rather than left
+            // behind as an empty thinking bubble.
+            if (string.IsNullOrWhiteSpace(_streamingThinkingVm.Text))
+                Messages.RemoveAt(idx);
+            else
+                Messages[idx] = new ThinkingMessage(
+                    _streamingThinkingVm.Id,
+                    _streamingThinkingVm.Text,
+                    isExpanded: false);
         }
         _streamingThinkingVm = null;
+        _lastThinkingBlockIndex = -1;
     }
 
     private void FinalizeExecution()
