@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media.Imaging;
+using AgentDock.Models;
 using AgentDock.Services;
 
 namespace AgentDock.Controls;
@@ -45,11 +46,24 @@ public partial class FilePreviewControl : UserControl
     /// </summary>
     public event Action<string>? RevealInExplorerRequested;
 
+    // Stored so it can be detached in Cleanup — a lambda subscription to the
+    // static ThemeManager.ThemeChanged would root this control (and the AvalonEdit
+    // editor + any cached preview) for the whole app lifetime after project close.
+    private readonly Action<ThemeDescriptor> _themeChangedHandler;
+
     public FilePreviewControl()
     {
         InitializeComponent();
         ApplyLinkColor();
-        ThemeManager.ThemeChanged += _ => OnThemeChanged();
+        _themeChangedHandler = _ => OnThemeChanged();
+        ThemeManager.ThemeChanged += _themeChangedHandler;
+    }
+
+    /// <summary>Detaches the theme handler so this control can be GC'd after its
+    /// project is closed. Call from the project-removal path.</summary>
+    public void Cleanup()
+    {
+        ThemeManager.ThemeChanged -= _themeChangedHandler;
     }
 
     private void OnThemeChanged()

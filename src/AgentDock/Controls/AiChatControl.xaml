@@ -691,8 +691,7 @@
                                             Background="Transparent"
                                             BorderBrush="{DynamicResource ChatThinkingBorderBrush}"
                                             BorderThickness="1"
-                                            Padding="4,2"
-                                            Opacity="0.7">
+                                            Padding="4,2">
                                         <Button.Style>
                                             <Style TargetType="Button">
                                                 <Setter Property="Visibility" Value="Collapsed" />

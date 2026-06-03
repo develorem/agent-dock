@@ -192,8 +192,7 @@
                            FontSize="12"
                            Foreground="{DynamicResource TitleBarForeground}"
                            VerticalAlignment="Center"
-                           HorizontalAlignment="Center"
-                           Opacity="0.7" />
+                           HorizontalAlignment="Center" />
 
                 <!-- Usage indicator (5-hour session — click for details) -->
                 <Button x:Name="UsageButton" Grid.Column="5"
@@ -233,8 +232,7 @@
                     <TextBlock x:Name="UsageText"
                                Text="Session: —"
                                FontSize="11"
-                               Foreground="{DynamicResource TitleBarForeground}"
-                               Opacity="0.8" />
+                               Foreground="{DynamicResource TitleBarForeground}" />
                 </Button>
 
                 <!-- Usage detail popup -->
@@ -266,7 +264,6 @@
                             <TextBlock x:Name="UsageFooterText"
                                        FontSize="10"
                                        Margin="0,10,0,0"
-                                       Opacity="0.5"
                                        Foreground="{DynamicResource TitleBarForeground}" />
                         </StackPanel>
                     </Border>
@@ -278,8 +275,7 @@
                            FontSize="11"
                            Foreground="{DynamicResource TitleBarForeground}"
                            VerticalAlignment="Center"
-                           Margin="0,0,8,0"
-                           Opacity="0.5" />
+                           Margin="0,0,8,0" />
 
                 <!-- Window buttons (right side) -->
                 <Button Grid.Column="7"

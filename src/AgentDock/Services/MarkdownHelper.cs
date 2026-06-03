@@ -1,8 +1,11 @@
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Media;
 using ICSharpCode.AvalonEdit;
 using MdXaml;
 
@@ -127,6 +130,7 @@ public static partial class MarkdownHelper
     {
         viewer.Markdown = PreProcess(markdown);
         ApplyCodeBlockTheme(viewer.Document);
+        ConvertTablesToGrids(viewer.Document);
     }
 
     /// <summary>
@@ -149,22 +153,213 @@ public static partial class MarkdownHelper
         string projectPath,
         Action<string>? onFileLinkClicked)
     {
-        var linkified = string.IsNullOrEmpty(projectPath) ? markdown : LinkifyPaths(markdown, projectPath);
-        var preProcessed = PreProcess(linkified);
+        // Instrumentation: this runs synchronously (MdXaml parse + an AvalonEdit
+        // TextEditor per code block + table→Grid conversion) on the UI thread at
+        // every turn finalize, for every session including background tabs — a
+        // prime source of multi-hundred-ms UI freezes. Time it and count it.
+        PerfDiagnostics.MarkdownBuildDelta(1);
+        using var _ = PerfDiagnostics.Time("MarkdownHelper.BuildDocument", thresholdMs: 80);
+        try
+        {
+            var linkified = string.IsNullOrEmpty(projectPath) ? markdown : LinkifyPaths(markdown, projectPath);
+            var preProcessed = PreProcess(linkified);
 
-        var tmp = new MarkdownScrollViewer { MarkdownStyle = markdownStyle };
-        tmp.Markdown = preProcessed;
-        var doc = tmp.Document ?? new FlowDocument();
+            var tmp = new MarkdownScrollViewer { MarkdownStyle = markdownStyle };
+            tmp.Markdown = preProcessed;
+            var doc = tmp.Document ?? new FlowDocument();
 
-        ApplyCodeBlockTheme(doc);
-        if (onFileLinkClicked != null)
-            WireFileLinks(doc, onFileLinkClicked);
+            ApplyCodeBlockTheme(doc);
+            if (onFileLinkClicked != null)
+                WireFileLinks(doc, onFileLinkClicked);
 
-        // Detach from the temp viewer so the document can be re-parented to a
-        // real viewer when the chat container materializes.
-        tmp.Document = null;
+            // Replace FlowDocument tables with WPF Grids — see ConvertTablesToGrids.
+            // Runs AFTER WireFileLinks so any file-link Hyperlinks inside table cells
+            // keep their wired RequestNavigate handlers when moved into the Grid.
+            ConvertTablesToGrids(doc);
 
-        return doc;
+            // Detach from the temp viewer so the document can be re-parented to a
+            // real viewer when the chat container materializes.
+            tmp.Document = null;
+
+            return doc;
+        }
+        finally
+        {
+            PerfDiagnostics.MarkdownBuildDelta(-1);
+        }
+    }
+
+    /// <summary>
+    /// Replaces every FlowDocument <see cref="Table"/> in <paramref name="doc"/> with a
+    /// <see cref="BlockUIContainer"/> hosting an equivalent WPF <see cref="Grid"/>.
+    ///
+    /// WHY: WPF's PTS layout engine crashes the entire process via
+    /// <c>Invariant.FailFast</c> inside <c>TableParaClient.UpdateChunkInfo</c> when it
+    /// arranges certain FlowDocument tables (confirmed root cause of the long-standing
+    /// silent crash — a FailFast bypasses every managed exception handler). MdXaml renders
+    /// GitHub-flavored markdown tables as FlowDocument <see cref="Table"/>s, so any chat
+    /// reply or previewed file containing a table could hit it. A <see cref="Grid"/> inside
+    /// a <see cref="BlockUIContainer"/> lays out through the normal WPF layout system (the
+    /// same path the AvalonEdit code blocks already use) and never touches PTS table code.
+    /// </summary>
+    public static void ConvertTablesToGrids(FlowDocument? doc)
+    {
+        if (doc == null) return;
+        ConvertTablesInBlocks(doc.Blocks, doc.Foreground);
+    }
+
+    private static void ConvertTablesInBlocks(BlockCollection blocks, Brush foreground)
+    {
+        // Snapshot first: we mutate the collection (insert/remove) while walking it.
+        foreach (var block in blocks.ToList())
+        {
+            switch (block)
+            {
+                case Table table:
+                    var container = new BlockUIContainer(BuildTableGrid(table, foreground));
+                    blocks.InsertAfter(table, container);
+                    blocks.Remove(table);
+                    break;
+                case Section section:
+                    ConvertTablesInBlocks(section.Blocks, foreground);
+                    break;
+                case List list:
+                    foreach (var item in list.ListItems)
+                        ConvertTablesInBlocks(item.Blocks, foreground);
+                    break;
+            }
+        }
+    }
+
+    private static Grid BuildTableGrid(Table table, Brush foreground)
+    {
+        var rows = table.RowGroups
+            .SelectMany(rg => rg.Rows.Select(row => (row, isHeader: (rg.Tag as string) == "TableHeader")))
+            .ToList();
+
+        var columnCount = table.Columns.Count;
+        if (columnCount == 0)
+            columnCount = rows.Count == 0 ? 0 : rows.Max(r => r.row.Cells.Sum(c => c.ColumnSpan));
+
+        var grid = new Grid { Margin = new Thickness(0, 7, 0, 2), HorizontalAlignment = HorizontalAlignment.Left };
+        // Foreground inherits to every child TextBlock through the WPF element tree
+        // (TextElement.Foreground), so cell text matches the document's theme color.
+        grid.SetValue(TextElement.ForegroundProperty, foreground);
+
+        for (var c = 0; c < columnCount; c++)
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        for (var r = 0; r < rows.Count; r++)
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+        for (var r = 0; r < rows.Count; r++)
+        {
+            var (row, isHeader) = rows[r];
+            var isEvenRow = (row.Tag as string) == "EvenTableRow";
+            var col = 0;
+            foreach (var cell in row.Cells)
+            {
+                if (col >= columnCount) break;
+                var border = BuildCellBorder(cell, isHeader, isEvenRow);
+                Grid.SetRow(border, r);
+                Grid.SetColumn(border, col);
+                var span = Math.Max(1, cell.ColumnSpan);
+                if (span > 1) Grid.SetColumnSpan(border, Math.Min(span, columnCount - col));
+                grid.Children.Add(border);
+                col += span;
+            }
+        }
+
+        return grid;
+    }
+
+    private static Border BuildCellBorder(TableCell cell, bool isHeader, bool isEvenRow)
+    {
+        var text = new TextBlock { TextWrapping = TextWrapping.Wrap };
+        if (isHeader) text.FontWeight = FontWeights.Bold;
+        PopulateCellTextBlock(cell, text);
+
+        var border = new Border
+        {
+            BorderThickness = new Thickness(0.5),
+            Padding = new Thickness(13, 6, 13, 6),
+            Child = text,
+        };
+        border.SetResourceReference(Border.BorderBrushProperty, "MarkdownTableBorderBrush");
+        if (isHeader)
+            border.SetResourceReference(Border.BackgroundProperty, "MarkdownTableHeaderBackground");
+        else if (isEvenRow)
+            border.SetResourceReference(Border.BackgroundProperty, "MarkdownTableEvenRowBackground");
+
+        return border;
+    }
+
+    /// <summary>
+    /// Moves the inline content of a table cell's paragraphs into <paramref name="tb"/>.
+    /// Inlines are re-parented (cleared from their paragraph first) so existing formatting
+    /// and wired hyperlink handlers survive the move. Non-paragraph blocks are flattened to
+    /// plain text — GFM cells are inline-only, so that path is a defensive fallback.
+    /// </summary>
+    private static void PopulateCellTextBlock(TableCell cell, TextBlock tb)
+    {
+        var first = true;
+        foreach (var block in cell.Blocks)
+        {
+            if (!first) tb.Inlines.Add(new LineBreak());
+            first = false;
+
+            if (block is Paragraph p)
+            {
+                var inlines = p.Inlines.ToList();
+                p.Inlines.Clear();
+                foreach (var inl in inlines)
+                {
+                    if (inl is Hyperlink h)
+                    {
+                        // FlowDocument-scoped implicit styles don't reach a Hyperlink once
+                        // it's hosted in a TextBlock, so apply the link look explicitly.
+                        h.TextDecorations = null;
+                        h.SetResourceReference(Hyperlink.ForegroundProperty, "MarkdownLinkForeground");
+                    }
+                    tb.Inlines.Add(inl);
+                }
+            }
+            else
+            {
+                tb.Inlines.Add(new Run(GetBlockPlainText(block)));
+            }
+        }
+    }
+
+    private static string GetBlockPlainText(Block block)
+    {
+        var sb = new StringBuilder();
+        switch (block)
+        {
+            case Paragraph p:
+                AppendInlineText(p.Inlines, sb);
+                break;
+            case Section s:
+                foreach (var b in s.Blocks) sb.Append(GetBlockPlainText(b));
+                break;
+            case List list:
+                foreach (var item in list.ListItems)
+                    foreach (var b in item.Blocks) sb.Append(GetBlockPlainText(b));
+                break;
+        }
+        return sb.ToString();
+    }
+
+    private static void AppendInlineText(InlineCollection inlines, StringBuilder sb)
+    {
+        foreach (var inl in inlines)
+        {
+            switch (inl)
+            {
+                case Run run: sb.Append(run.Text); break;
+                case Span span: AppendInlineText(span.Inlines, sb); break;
+                case LineBreak: sb.Append(' '); break;
+            }
+        }
     }
 
     private static void ApplyCodeBlockStyle(

@@ -53,6 +53,15 @@ public partial class AiChatControl : UserControl
     // Inner ScrollViewer of the ItemsControl, cached after template is applied.
     private ScrollViewer? _scrollViewer;
 
+    // Sticky-bottom auto-scroll state. True while the chat should follow new
+    // content to the bottom; flipped to false when the user scrolls up to read
+    // history, and back to true when they return to the bottom (or send). It is
+    // maintained entirely from ScrollChanged event args (see OnScrollChanged) so
+    // the streaming hot path never reads ScrollableHeight/VerticalOffset, which
+    // would force a synchronous layout pass on every delta.
+    private bool _stickToBottom = true;
+    private const double StickyBottomThreshold = 16;
+
     /// <summary>
     /// Raised when session state changes (for toolbar icon updates).
     /// </summary>
@@ -239,18 +248,30 @@ public partial class AiChatControl : UserControl
     {
         if (_session == null) return;
 
-        _session.StateChanged += state => Dispatcher.BeginInvoke(() => OnStateChanged(state));
-        _session.Initialized += init => Dispatcher.BeginInvoke(() => OnInitialized(init));
-        _session.StreamDelta += delta => Dispatcher.BeginInvoke(() => OnStreamDelta(delta));
-        _session.AssistantMessageReceived += msg => Dispatcher.BeginInvoke(() => OnAssistantMessage(msg));
-        _session.ContentBlockStarted += evt => Dispatcher.BeginInvoke(() => OnContentBlockStarted(evt));
-        _session.ContentBlockStopped += evt => Dispatcher.BeginInvoke(() => OnContentBlockStopped(evt));
-        _session.PermissionRequested += req => Dispatcher.BeginInvoke(() => OnPermissionRequested(req));
-        _session.ResultReceived += result => Dispatcher.BeginInvoke(() => OnResultReceived(result));
-        _session.ErrorOutput += text => Dispatcher.BeginInvoke(() => OnErrorOutput(text));
-        _session.ProcessExited += code => Dispatcher.BeginInvoke(() => OnProcessExited(code));
-        _session.InactivityTimeout += () => Dispatcher.BeginInvoke(OnInactivityTimeout);
+        // All session UI updates are posted via Post(), which dispatches at
+        // DispatcherPriority.Background — below DispatcherPriority.Input. This
+        // makes WPF process prompt-box keystrokes ahead of the event flood from
+        // active sessions (the default BeginInvoke priority, Normal, outranks
+        // Input and was starving typing). Every event shares the one priority so
+        // their FIFO order — which the streaming state machine relies on — is
+        // preserved.
+        _session.StateChanged += state => Post(() => OnStateChanged(state));
+        _session.Initialized += init => Post(() => OnInitialized(init));
+        _session.StreamDelta += delta => Post(() => OnStreamDelta(delta));
+        _session.AssistantMessageReceived += msg => Post(() => OnAssistantMessage(msg));
+        _session.ContentBlockStarted += evt => Post(() => OnContentBlockStarted(evt));
+        _session.ContentBlockStopped += evt => Post(() => OnContentBlockStopped(evt));
+        _session.PermissionRequested += req => Post(() => OnPermissionRequested(req));
+        _session.ResultReceived += result => Post(() => OnResultReceived(result));
+        _session.ErrorOutput += text => Post(() => OnErrorOutput(text));
+        _session.ProcessExited += code => Post(() => OnProcessExited(code));
+        _session.InactivityTimeout += () => Post(OnInactivityTimeout);
     }
+
+    // Posts a session-driven UI update at Background priority so it yields to
+    // prompt-box input. See the priority rationale in WireSessionEvents.
+    private void Post(Action action)
+        => Dispatcher.BeginInvoke(action, DispatcherPriority.Background);
 
     // --- State Handling ---
 
@@ -258,14 +279,14 @@ public partial class AiChatControl : UserControl
     {
         StopWorkingAnimation();
 
-        // TEMP perf instrumentation — track how many sessions across all tabs
-        // are Working at once, so a slow keystroke can be correlated with
-        // background-tab contention. Remove with the rest of the PERF block.
+        // Track how many sessions across all tabs are Working at once, so the
+        // PerfDiagnostics stall/health log can correlate UI stalls with
+        // background-tab session contention.
         var nowWorking = state == ClaudeSessionState.Working;
         if (nowWorking != _countedAsWorking)
         {
             _countedAsWorking = nowWorking;
-            s_workingSessionCount += nowWorking ? 1 : -1;
+            PerfDiagnostics.WorkingSessionDelta(nowWorking ? 1 : -1);
         }
 
         if (state == ClaudeSessionState.Working)
@@ -385,10 +406,6 @@ public partial class AiChatControl : UserControl
 
     private void InputBox_TextChanged(object sender, TextChangedEventArgs e)
     {
-        // TEMP perf instrumentation (input-lag investigation) — remove once the
-        // chat-list layout cost is diagnosed.
-        MeasureKeystrokeLatency();
-
         var text = InputBox.Text;
 
         if (!text.StartsWith('/') || text.Any(char.IsWhiteSpace))
@@ -604,6 +621,9 @@ public partial class AiChatControl : UserControl
 
     private void AddUserMessage(string text)
     {
+        // Sending always snaps to the newest message, even if the user had
+        // scrolled up to read history.
+        _stickToBottom = true;
         Messages.Add(new UserMessage(Guid.NewGuid(), text));
     }
 
@@ -757,32 +777,37 @@ public partial class AiChatControl : UserControl
     private void OnStreamingTextChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (e.PropertyName != nameof(StreamingTextMessage.Text)) return;
-        var sv = GetScrollViewer();
-        if (sv == null) return;
-        var atBottom = sv.ScrollableHeight == 0 || sv.VerticalOffset >= sv.ScrollableHeight - 50;
-        if (atBottom)
-            Dispatcher.BeginInvoke(() => sv.ScrollToEnd(), DispatcherPriority.Background);
+        // Nudge to the bottom while following. ScrollToEnd only sets a pending
+        // offset (no forced layout); once the new text lays out and the extent
+        // grows, OnScrollChanged re-pins authoritatively. Cheap no-op when the
+        // user has scrolled up, and on background tabs whose extent isn't moving.
+        if (_stickToBottom)
+            GetScrollViewer()?.ScrollToEnd();
     }
 
     private void OnAssistantMessage(ClaudeAssistantMessage msg)
     {
-        // Apply the authoritative full text to the streaming VM.
         var fullText = string.Join("", msg.Content
             .Where(c => c.Type == "text" && c.Text != null)
             .Select(c => c.Text));
 
-        if (_streamingVm != null && !string.IsNullOrEmpty(fullText))
+        // Reconcile with the streamed text. Use the authoritative text only when
+        // it's at least as complete as what the deltas accumulated: Claude Code
+        // emits each content block of one turn as its OWN "assistant" line
+        // carrying only that block's text, so a later text block's line would
+        // otherwise clobber the delta-accumulated text of earlier blocks.
+        if (_streamingVm != null && fullText.Length > 0 && fullText.Length >= _streamingVm.Text.Length)
             _streamingVm.Text = fullText; // setter clears throttle buffer + timer
 
         var toolBlocks = msg.Content.Where(c => c.Type == "tool_use").ToList();
 
         if (toolBlocks.Count > 0)
         {
-            // This assistant message calls tools, so any text it produced is
-            // intermediate commentary ("let me check…", "now I'll…"), not the
-            // final answer. Fold that text into the collapsed thinking window
-            // so only executions and the final answer stay expanded — keeping
-            // the transcript short and cheap to render.
+            // This line calls tools, so any text streamed before it on this turn
+            // was intermediate commentary ("let me check…", "now I'll…"), not the
+            // final answer. Fold that text into the collapsed thinking window so
+            // only executions and the final answer stay expanded — keeping the
+            // transcript short and cheap to render.
             FoldStreamingTextIntoThinking();
 
             // Collapse the commentary immediately. (EnsureExecutionVm only
@@ -803,14 +828,13 @@ public partial class AiChatControl : UserControl
                 _executionVm!.Tools.Add(new ToolEntry(block.Name ?? "(unnamed)", inputStr));
             }
         }
-        else
-        {
-            // No tool calls — this text is (part of) the final answer. Collapse
-            // any open thinking and keep the response visible as an immutable
-            // AssistantMessage (gets the markdown toggle if multi-line).
-            FinalizeThinking();
-            FinalizeStreaming();
-        }
+        // No tool calls in THIS line — but we can't conclude the text is the
+        // final answer, because the tool_use for this turn arrives on a separate,
+        // later "assistant" line. Defer: leave the streamed text live. If a
+        // tool_use line follows, the branch above folds it into thinking; if the
+        // turn just ends, OnResultReceived finalizes it as the visible answer.
+        // (Thinking was already finalized by the first response delta in
+        // OnStreamDelta, so nothing to collapse here.)
     }
 
     /// <summary>
@@ -904,19 +928,21 @@ public partial class AiChatControl : UserControl
             var text = _streamingVm.Text;
             var hasNl = text.Contains('\n');
 
-            // Build the rendered FlowDocument exactly once, here at finalize.
-            // The same document instance is re-attached to whichever container
-            // realizes this message; scroll-past-and-back doesn't re-parse.
-            // Single-line messages render as plain text — markdown rendering
-            // would be no-op and the toggle is useless, so skip the build.
-            FlowDocument? document = null;
+            // Defer the rendered-FlowDocument build (MdXaml parse + an AvalonEdit
+            // editor per code block) instead of doing it synchronously here for
+            // every turn — including background tabs. We capture a memoizing
+            // closure that runs on the UI thread only when the bubble is actually
+            // realized in a visible tab (see AttachAssistantDocument), and at most
+            // once. Single-line messages render as plain text — no build at all.
+            Func<FlowDocument>? markdownBuilder = null;
             if (hasNl)
             {
-                document = MarkdownHelper.BuildDocument(
-                    text,
-                    markdownStyle: (System.Windows.Style)FindResource("ChatMarkdownStyle"),
-                    projectPath: _projectPath,
-                    onFileLinkClicked: p => FileReferenceClicked?.Invoke(p));
+                var style = (System.Windows.Style)FindResource("ChatMarkdownStyle");
+                var projectPath = _projectPath;
+                Action<string> onLink = p => FileReferenceClicked?.Invoke(p);
+                FlowDocument? cached = null;
+                markdownBuilder = () => cached ??= MarkdownHelper.BuildDocument(
+                    text, markdownStyle: style, projectPath: projectPath, onFileLinkClicked: onLink);
             }
 
             Messages[idx] = new AssistantMessage(
@@ -924,7 +950,7 @@ public partial class AiChatControl : UserControl
                 text: text,
                 isMarkdownView: hasNl,
                 hasMarkdownToggle: hasNl,
-                markdown: document);
+                markdownBuilder: markdownBuilder);
         }
         _streamingVm = null;
     }
@@ -1083,6 +1109,12 @@ public partial class AiChatControl : UserControl
 
         QuestionPanel.Visibility = Visibility.Collapsed;
         InputPanel.Visibility = Visibility.Visible;
+
+        // Echo the chosen/typed answer into the chat so the user sees what they
+        // submitted, mirroring the normal SendMessage flow.
+        _lastMessageSentTime = DateTime.UtcNow;
+        AddUserMessage(answer);
+        ShowWaitingBubble();
     }
 
     private void QuestionCustomSend_Click(object sender, RoutedEventArgs e)
@@ -1200,10 +1232,10 @@ public partial class AiChatControl : UserControl
             var idx = Messages.IndexOf(msg);
             if (idx >= 0)
             {
-                // Reuse the same FlowDocument — toggling the view doesn't
-                // re-parse markdown.
+                // Pass the same memoizing builder — toggling the view doesn't
+                // re-parse markdown (the closure caches the built document).
                 Messages[idx] = new AssistantMessage(
-                    msg.Id, msg.Text, !msg.IsMarkdownView, msg.HasMarkdownToggle, msg.Markdown);
+                    msg.Id, msg.Text, !msg.IsMarkdownView, msg.HasMarkdownToggle, msg.MarkdownBuilder);
             }
         }
     }
@@ -1262,23 +1294,26 @@ public partial class AiChatControl : UserControl
 
     private static void AttachAssistantDocument(MarkdownScrollViewer viewer, AssistantMessage? msg)
     {
-        if (msg?.Markdown == null)
+        // GetMarkdown builds the document on first realize (UI thread) and caches
+        // it; subsequent realizations of the same message reuse the instance.
+        var doc = msg?.GetMarkdown();
+        if (doc == null)
         {
             viewer.Document = null;
             return;
         }
-        if (ReferenceEquals(viewer.Document, msg.Markdown))
+        if (ReferenceEquals(viewer.Document, doc))
             return;
 
         // FlowDocument has at most one logical parent. If our cached document
         // is currently attached to another (recycled) viewer, detach it first.
-        if (msg.Markdown.Parent is System.Windows.Controls.FlowDocumentScrollViewer prev
+        if (doc.Parent is System.Windows.Controls.FlowDocumentScrollViewer prev
             && !ReferenceEquals(prev, viewer))
         {
             prev.Document = null;
         }
 
-        viewer.Document = msg.Markdown;
+        viewer.Document = doc;
     }
 
     // --- Scroll + Wheel ---
@@ -1287,6 +1322,8 @@ public partial class AiChatControl : UserControl
     {
         if (_scrollViewer != null) return _scrollViewer;
         _scrollViewer = FindVisualChild<ScrollViewer>(MessageList);
+        if (_scrollViewer != null)
+            _scrollViewer.ScrollChanged += OnScrollChanged;
         return _scrollViewer;
     }
 
@@ -1302,74 +1339,41 @@ public partial class AiChatControl : UserControl
         return null;
     }
 
-    // --- TEMP perf instrumentation (input-lag investigation) ---
-    // Times how long the UI thread stays busy from a keystroke in the prompt
-    // box until the resulting layout/render cycle completes, and reports how
-    // many heavy message visuals (MdXaml viewers, AvalonEdit editors) are
-    // realized at that moment. Only slow frames are logged, to avoid spam.
-    // Remove this block (and its call in InputBox_TextChanged) once the chat
-    // layout cost is understood.
-    private readonly System.Diagnostics.Stopwatch _keystrokeSw = new();
-    private bool _keystrokeSamplePending;
-    // Count of sessions (across all tabs) currently in the Working state.
-    private static int s_workingSessionCount;
+    // Whether this control's session is currently counted in the global
+    // "working sessions" tally (see OnStateChanged / PerfDiagnostics).
     private bool _countedAsWorking;
-
-    private void MeasureKeystrokeLatency()
-    {
-        if (_keystrokeSamplePending) return; // one sample in flight at a time
-        _keystrokeSamplePending = true;
-        _keystrokeSw.Restart();
-
-        // Loaded priority runs after the Render-priority layout pass for this
-        // dispatcher cycle, so the elapsed time covers the layout work the
-        // keystroke triggered.
-        Dispatcher.BeginInvoke(() =>
-        {
-            _keystrokeSamplePending = false;
-            var ms = _keystrokeSw.Elapsed.TotalMilliseconds;
-            if (ms < 20) return; // ignore snappy keystrokes
-
-            var (viewers, editors) = CountRealizedHeavyVisuals();
-            Log.Warn($"PERF keystroke->layout {ms:F0}ms | realized mdxaml={viewers}, " +
-                     $"avalonedit={editors}, total messages={Messages.Count}, " +
-                     $"input len={InputBox.Text.Length}, working sessions={s_workingSessionCount}");
-        }, DispatcherPriority.Loaded);
-    }
-
-    private (int viewers, int editors) CountRealizedHeavyVisuals()
-    {
-        int viewers = 0, editors = 0;
-        foreach (var d in EnumerateVisualTree(MessageList))
-        {
-            // Match by type name so we don't take a compile dependency on the
-            // MdXaml / AvalonEdit assemblies just for instrumentation.
-            switch (d.GetType().Name)
-            {
-                case "MarkdownScrollViewer": viewers++; break;
-                case "TextEditor": editors++; break;
-            }
-        }
-        return (viewers, editors);
-    }
-
-    private static IEnumerable<DependencyObject> EnumerateVisualTree(DependencyObject root)
-    {
-        var count = VisualTreeHelper.GetChildrenCount(root);
-        for (int i = 0; i < count; i++)
-        {
-            var child = VisualTreeHelper.GetChild(root, i);
-            yield return child;
-            foreach (var d in EnumerateVisualTree(child))
-                yield return d;
-        }
-    }
 
     private void ScrollToBottom()
     {
         var sv = GetScrollViewer();
         if (sv != null)
             sv.ScrollToEnd();
+    }
+
+    /// <summary>
+    /// Single source of truth for sticky-bottom follow. Runs whenever the chat
+    /// scroll state changes. All decisions use the event's precomputed metrics —
+    /// reading the ScrollViewer's live ScrollableHeight/VerticalOffset here (or
+    /// on the streaming hot path) would force a layout pass and was a measured
+    /// contributor to prompt-box lag.
+    /// </summary>
+    private void OnScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        var sv = (ScrollViewer)sender;
+        if (e.ExtentHeightChange != 0)
+        {
+            // Content grew or shrank (a streaming delta, a new bubble). If we
+            // were following the bottom, re-pin to the new bottom. Don't touch
+            // the flag — growth alone must not unstick us.
+            if (_stickToBottom) sv.ScrollToEnd();
+        }
+        else if (e.VerticalChange != 0 || e.ViewportHeightChange != 0)
+        {
+            // The viewport position changed without the content changing — i.e.
+            // the user scrolled, or the pane was resized. Follow only while the
+            // bottom is (near) in view.
+            _stickToBottom = e.VerticalOffset >= e.ExtentHeight - e.ViewportHeight - StickyBottomThreshold;
+        }
     }
 
     /// <summary>
@@ -1382,6 +1386,8 @@ public partial class AiChatControl : UserControl
         if (e.Action != NotifyCollectionChangedAction.Add)
             return;
 
+        if (!_stickToBottom) return;
+
         var sv = GetScrollViewer();
         if (sv == null)
         {
@@ -1390,13 +1396,9 @@ public partial class AiChatControl : UserControl
             return;
         }
 
-        var atBottom = sv.ScrollableHeight == 0
-            || sv.VerticalOffset >= sv.ScrollableHeight - 50;
-        if (atBottom)
-        {
-            // Defer until after the new container is realized & measured.
-            Dispatcher.BeginInvoke(() => sv.ScrollToEnd(), DispatcherPriority.Background);
-        }
+        // Defer until after the new container is realized & measured; the
+        // resulting extent change also re-pins via OnScrollChanged.
+        Dispatcher.BeginInvoke(() => sv.ScrollToEnd(), DispatcherPriority.Background);
     }
 
     private void MessageList_PreviewMouseWheel(object sender, MouseWheelEventArgs e)

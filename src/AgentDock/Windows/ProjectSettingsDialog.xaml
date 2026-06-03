@@ -97,7 +97,6 @@
                          Padding="6,0" />
                 <TextBlock x:Name="NameHintText"
                            FontSize="10"
-                           Opacity="0.6"
                            Margin="0,4,0,0"
                            Foreground="{DynamicResource HelpForeground}" />
             </StackPanel>
@@ -145,14 +144,12 @@
                         <TextBlock Text="Built-in"
                                    FontSize="11"
                                    Foreground="{DynamicResource HelpForeground}"
-                                   Opacity="0.7"
                                    Margin="0,0,0,4" />
                         <WrapPanel x:Name="BuiltInPanel" />
                         <StackPanel x:Name="DiscoveredSection" Visibility="Collapsed" Margin="0,8,0,0">
                             <TextBlock Text="Discovered"
                                        FontSize="11"
                                        Foreground="{DynamicResource HelpForeground}"
-                                       Opacity="0.7"
                                        Margin="0,0,0,4" />
                             <WrapPanel x:Name="DiscoveredPanel" />
                         </StackPanel>

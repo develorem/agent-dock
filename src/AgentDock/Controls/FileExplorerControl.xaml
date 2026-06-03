@@ -134,8 +134,7 @@
                                                                               HorizontalAlignment="Center"
                                                                               VerticalAlignment="Center"
                                                                               Width="8" Height="8"
-                                                                              Stretch="Uniform"
-                                                                              Opacity="0.6" />
+                                                                              Stretch="Uniform" />
                                                                     </Border>
                                                                     <ControlTemplate.Triggers>
                                                                         <Trigger Property="IsChecked" Value="True">

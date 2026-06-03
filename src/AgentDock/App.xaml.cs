@@ -60,6 +60,12 @@ public partial class App : Application
         Log.Init(StartupLogsFolder, sessionContext);
         Log.Info("Application starting");
 
+        // Performance instrumentation: log the rendering/machine environment once
+        // (catches software-rendering fallback) and start the UI-thread stall +
+        // health monitors. See PerfDiagnostics.
+        PerfDiagnostics.LogEnvironment();
+        PerfDiagnostics.Start();
+
         if (StartupWorkspacePath != null)
             Log.Info($"Startup workspace: {StartupWorkspacePath}");
         foreach (var folder in StartupProjectFolders)

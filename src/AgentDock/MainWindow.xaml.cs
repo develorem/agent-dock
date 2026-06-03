@@ -37,6 +37,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<ProjectInfo, UIElement> _projectContents = [];
     private readonly Dictionary<ProjectInfo, AiChatControl> _projectChatControls = [];
     private readonly Dictionary<ProjectInfo, GitStatusControl> _projectGitControls = [];
+    private readonly Dictionary<ProjectInfo, FilePreviewControl> _projectPreviewControls = [];
     private readonly Dictionary<ProjectInfo, Grid> _projectTabIcons = [];
     private readonly Dictionary<ProjectInfo, DispatcherTimer> _tabIconTimers = [];
     private readonly Dictionary<ProjectInfo, ClaudeSessionState> _previousTabStates = [];
@@ -1708,6 +1709,7 @@ public partial class MainWindow : Window
         gitStatusControl.LoadRepository(project.FolderPath);
 
         var filePreviewControl = new FilePreviewControl();
+        _projectPreviewControls[project] = filePreviewControl;
 
         var descriptionControl = new ProjectDescriptionControl();
         descriptionControl.LoadProject(project.FolderPath);
@@ -1941,14 +1943,25 @@ public partial class MainWindow : Window
         _projectDockingManagers[project] = dockingManager;
 
         // Track layout changes (panel rearrangement) for dirty state.
-        // Subscribe to Layout.Updated, and re-subscribe if AvalonDock replaces the Layout.
-        void SubscribeLayoutUpdated(LayoutRoot layout)
-            => layout.Updated += (_, _) => SetWorkspaceDirty();
+        // AvalonDock can swap the LayoutRoot (LayoutChanged), so we move the single
+        // Updated handler to the new root each time. The previous version added a
+        // NEW handler on every LayoutChanged without removing the old one, so
+        // handlers multiplied for the life of the app and every layout tick fired
+        // all of them. Track the currently-subscribed root and detach before
+        // re-attaching so there is ever only one subscription.
+        LayoutRoot? subscribedLayout = null;
+        EventHandler updatedHandler = (_, _) => SetWorkspaceDirty();
+        void SubscribeLayoutUpdated(LayoutRoot? layout)
+        {
+            if (ReferenceEquals(subscribedLayout, layout)) return;
+            if (subscribedLayout != null) subscribedLayout.Updated -= updatedHandler;
+            subscribedLayout = layout;
+            if (layout != null) layout.Updated += updatedHandler;
+        }
         SubscribeLayoutUpdated(dockingManager.Layout);
         dockingManager.LayoutChanged += (_, _) =>
         {
-            if (dockingManager.Layout != null)
-                SubscribeLayoutUpdated(dockingManager.Layout);
+            SubscribeLayoutUpdated(dockingManager.Layout);
             SetWorkspaceDirty();
         };
 
@@ -2107,6 +2120,7 @@ public partial class MainWindow : Window
 
     private void SwitchToProject(ProjectInfo project)
     {
+        using var _perf = PerfDiagnostics.Time("SwitchToProject");
         Log.Info($"SwitchToProject: '{project.FolderName}' — entry (prev='{_activeProject?.FolderName ?? "(none)"}', projects={_projects.Count}, groups={_groups.Count})");
         if (_activeProject == project)
         {
@@ -2128,10 +2142,19 @@ public partial class MainWindow : Window
         if (_activeProject != null && _projectTabButtons.TryGetValue(_activeProject, out var prevButton))
             SetTabButtonActive(prevButton, false);
 
+        // Suspend the outgoing tab's git work — only the active tab watches files
+        // and refreshes status (the diamond keeps updating via session state).
+        if (_activeProject != null && _projectGitControls.TryGetValue(_activeProject, out var prevGit))
+            prevGit.Deactivate();
+
         _activeProject = project;
 
         if (_projectTabButtons.TryGetValue(project, out var newButton))
             SetTabButtonActive(newButton, true);
+
+        // Activate the incoming tab's git work: one refresh + start watching.
+        if (_projectGitControls.TryGetValue(project, out var newGit))
+            newGit.Activate();
 
         // User is now viewing this tab — clear any attention flash on its diamond.
         StopAttentionPulseIfAny(project);
@@ -2302,11 +2325,19 @@ public partial class MainWindow : Window
             _tabIconTimers.Remove(project);
         }
 
-        // Stop file system watcher for git status
+        // Stop git watcher AND detach its theme handler (Cleanup), else the static
+        // ThemeManager.ThemeChanged event keeps the control + its visuals alive.
         if (_projectGitControls.TryGetValue(project, out var gitControl))
         {
-            gitControl.StopWatching();
+            gitControl.Cleanup();
             _projectGitControls.Remove(project);
+        }
+
+        // Detach the preview control's theme handler so it can be GC'd.
+        if (_projectPreviewControls.TryGetValue(project, out var previewControl))
+        {
+            previewControl.Cleanup();
+            _projectPreviewControls.Remove(project);
         }
 
         // Shutdown AI chat session
@@ -2324,6 +2355,7 @@ public partial class MainWindow : Window
         }
 
         _projectTabIcons.Remove(project);
+        _previousTabStates.Remove(project);
         _projectDockingManagers.Remove(project);
         _projectDescriptionControls.Remove(project);
         _projectTodoListControls.Remove(project);
@@ -2384,8 +2416,14 @@ public partial class MainWindow : Window
 
             if (_projectGitControls.TryGetValue(project, out var gitControl))
             {
-                gitControl.StopWatching();
+                gitControl.Cleanup();
                 _projectGitControls.Remove(project);
+            }
+
+            if (_projectPreviewControls.TryGetValue(project, out var previewControl))
+            {
+                previewControl.Cleanup();
+                _projectPreviewControls.Remove(project);
             }
 
             if (_projectChatControls.TryGetValue(project, out var chatControl))
@@ -2401,12 +2439,15 @@ public partial class MainWindow : Window
             }
 
             _projectTabIcons.Remove(project);
+            _previousTabStates.Remove(project);
             _projectDockingManagers.Remove(project);
             _projectDescriptionControls.Remove(project);
             _projectTodoListControls.Remove(project);
             _projectContents.Remove(project);
         }
 
+        _projectPreviewControls.Clear();
+        _previousTabStates.Clear();
         _projects.Clear();
         _activeProject = null;
         _groups.Clear();
@@ -2467,8 +2508,7 @@ public partial class MainWindow : Window
 
         // Reset
         statusBadge.Visibility = Visibility.Collapsed;
-        statusBadge.Opacity = 1.0;
-        diamondIcon.Opacity = 1.0;
+        diamondIcon.Visibility = Visibility.Visible;
 
         switch (state)
         {
@@ -2525,7 +2565,8 @@ public partial class MainWindow : Window
         timer.Tick += (_, _) =>
         {
             bright = !bright;
-            diamondIcon.Opacity = bright ? 1.0 : 0.3;
+            // Blink via Visibility (Hidden keeps layout) instead of Opacity.
+            diamondIcon.Visibility = bright ? Visibility.Visible : Visibility.Hidden;
         };
         timer.Start();
         _tabIconTimers[project] = timer;
@@ -2543,7 +2584,7 @@ public partial class MainWindow : Window
         timer.Tick += (_, _) =>
         {
             bright = !bright;
-            diamondIcon.Opacity = bright ? 1.0 : 0.55;
+            diamondIcon.Visibility = bright ? Visibility.Visible : Visibility.Hidden;
         };
         timer.Start();
         _tabIconTimers[project] = timer;
@@ -2569,7 +2610,7 @@ public partial class MainWindow : Window
             grid.Children.Count > 0 &&
             grid.Children[0] is TextBlock diamond)
         {
-            diamond.Opacity = 1.0;
+            diamond.Visibility = Visibility.Visible;
         }
     }
 
@@ -2577,6 +2618,10 @@ public partial class MainWindow : Window
 
     private void SetWorkspaceDirty()
     {
+        // Counts every call, including the early-return no-ops below. A climbing
+        // per-interval count in the PERF health log means Layout.Updated handlers
+        // are accumulating (the per-project subscription leak in CreateDockingLayout).
+        PerfDiagnostics.NoteWorkspaceDirty();
         if (_suppressDirty || _workspaceDirty)
             return;
         _workspaceDirty = true;
@@ -2983,10 +3028,14 @@ public partial class MainWindow : Window
             timer.Stop();
         _tabIconTimers.Clear();
 
-        // Stop all file system watchers
+        // Stop all file system watchers + detach theme handlers
         foreach (var gitControl in _projectGitControls.Values)
-            gitControl.StopWatching();
+            gitControl.Cleanup();
         _projectGitControls.Clear();
+
+        foreach (var previewControl in _projectPreviewControls.Values)
+            previewControl.Cleanup();
+        _projectPreviewControls.Clear();
 
         // Kill all Claude sessions gracefully
         foreach (var chatControl in _projectChatControls.Values)
@@ -3000,6 +3049,7 @@ public partial class MainWindow : Window
 
     private void OnThemeChanged(ThemeDescriptor theme)
     {
+        using var _perf = PerfDiagnostics.Time("OnThemeChanged");
         // Update AvalonDock theme on all DockingManagers
         var dockTheme = theme.BaseVariant == ThemeBaseVariant.Dark
             ? (Theme)new Vs2013DarkTheme()
@@ -3188,7 +3238,6 @@ public partial class MainWindow : Window
                 Text = "Loading…",
                 FontSize = 11,
                 Foreground = (Brush)FindResource("TitleBarForeground"),
-                Opacity = 0.7,
             });
             UsageFooterText.Text = "";
             return;
@@ -3214,7 +3263,6 @@ public partial class MainWindow : Window
                 FontSize = 11,
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = (Brush)FindResource("TitleBarForeground"),
-                Opacity = 0.7,
                 Margin = new Thickness(0, 0, 0, summary != null ? 10 : 0),
             });
         }
@@ -3248,7 +3296,6 @@ public partial class MainWindow : Window
                 FontSize = 11,
                 Margin = new Thickness(0, 8, 0, 0),
                 Foreground = (Brush)FindResource("TitleBarForeground"),
-                Opacity = 0.7,
             });
         }
 
@@ -3294,7 +3341,6 @@ public partial class MainWindow : Window
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Center,
             Foreground = (Brush)FindResource("TitleBarForeground"),
-            Opacity = 0.6,
         };
         Grid.SetColumn(resetBlock, 1);
         header.Children.Add(resetBlock);
@@ -3319,7 +3365,6 @@ public partial class MainWindow : Window
             FontSize = 10,
             Margin = new Thickness(0, 2, 0, 0),
             Foreground = (Brush)FindResource("TitleBarForeground"),
-            Opacity = 0.7,
         };
         container.Children.Add(pctBlock);
 

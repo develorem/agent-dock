@@ -33,17 +33,19 @@ public sealed class UserMessage(Guid id, string text) : ChatMessageVm(id)
 /// is part of the immutable identity; toggling the view replaces this VM in
 /// the collection with a new instance carrying the flipped flag. No INPC.
 ///
-/// <see cref="Markdown"/> is the pre-rendered FlowDocument, built once at
-/// finalize time. The same document instance is re-attached to whichever
-/// MarkdownScrollViewer realizes its container — no markdown re-parse on
-/// scroll. May be null for single-line messages (rendered as plain text).
+/// The rendered FlowDocument is built <i>lazily</i> via <see cref="MarkdownBuilder"/>
+/// — a memoizing closure created at finalize time. It is invoked (and the result
+/// cached) only when the bubble is actually realized in a visible tab, so
+/// background tabs and off-screen messages never pay the MdXaml + AvalonEdit build
+/// cost. The same closure is passed to the toggled instance so flipping the view
+/// doesn't re-parse. Null for single-line messages (rendered as plain text).
 /// </summary>
 public sealed class AssistantMessage(
     Guid id,
     string text,
     bool isMarkdownView,
     bool hasMarkdownToggle,
-    FlowDocument? markdown) : ChatMessageVm(id)
+    Func<FlowDocument>? markdownBuilder) : ChatMessageVm(id)
 {
     public string Text { get; } = text;
     public bool IsMarkdownView { get; } = isMarkdownView;
@@ -51,7 +53,14 @@ public sealed class AssistantMessage(
     /// source/rendered toggle button is meaningful (single-line messages have
     /// nothing for the renderer to add).</summary>
     public bool HasMarkdownToggle { get; } = hasMarkdownToggle;
-    public FlowDocument? Markdown { get; } = markdown;
+
+    /// <summary>Memoizing factory for the rendered document; null if this message
+    /// has no markdown. Shared across toggled instances so it builds at most once.</summary>
+    public Func<FlowDocument>? MarkdownBuilder { get; } = markdownBuilder;
+
+    /// <summary>Builds (first call) or returns the cached rendered FlowDocument,
+    /// or null if this message renders as plain text.</summary>
+    public FlowDocument? GetMarkdown() => MarkdownBuilder?.Invoke();
 }
 
 public sealed class ThinkingMessage(Guid id, string text, bool isExpanded) : ChatMessageVm(id)
@@ -91,8 +100,15 @@ public sealed class WaitingMessage(Guid id) : ChatMessageVm(id);
 /// </summary>
 public abstract class StreamingTextMessage(Guid id) : ChatMessageVm(id), INotifyPropertyChanged
 {
+    // ONE shared flush timer drives every streaming VM across all sessions/tabs,
+    // instead of one DispatcherTimer per VM. Deltas accumulate in each VM's
+    // buffer; the timer flushes all dirty VMs at ~10 fps. All access is on the UI
+    // thread (deltas are posted there), so the static set needs no locking.
+    private static readonly HashSet<StreamingTextMessage> s_dirty = [];
+    private static DispatcherTimer? s_timer;
+    private const int FlushIntervalMs = 100;
+
     private readonly StringBuilder _buffer = new();
-    private DispatcherTimer? _flushTimer;
     private string _text = "";
 
     public string Text
@@ -102,40 +118,53 @@ public abstract class StreamingTextMessage(Guid id) : ChatMessageVm(id), INotify
         {
             // Authoritative reset (e.g. when the final assistant message arrives
             // with the full text — supersedes anything we'd accumulated).
-            _flushTimer?.Stop();
-            _flushTimer = null;
             _buffer.Clear();
+            s_dirty.Remove(this);
             if (_text == value) return;
             _text = value;
             OnPropertyChanged(nameof(Text));
         }
     }
 
-    /// <summary>Append a stream delta. Coalesced to ~30 fps via the throttle timer.</summary>
+    /// <summary>Append a stream delta. Coalesced via the shared flush timer.</summary>
     public void AppendText(string text)
     {
         if (string.IsNullOrEmpty(text)) return;
         _buffer.Append(text);
-        if (_flushTimer != null) return;
+        s_dirty.Add(this);
+        if (s_timer != null) return;
 
-        _flushTimer = new DispatcherTimer(DispatcherPriority.Background)
+        s_timer = new DispatcherTimer(DispatcherPriority.Background)
         {
-            Interval = TimeSpan.FromMilliseconds(33)
+            Interval = TimeSpan.FromMilliseconds(FlushIntervalMs)
         };
-        _flushTimer.Tick += (_, _) => Flush();
-        _flushTimer.Start();
+        s_timer.Tick += (_, _) => FlushAll();
+        s_timer.Start();
+    }
+
+    private static void FlushAll()
+    {
+        // Snapshot: flushing fires PropertyChanged, which we don't want to race
+        // against set mutation. Buffers are drained, so the set is then empty.
+        foreach (var vm in s_dirty.ToList())
+            vm.Flush();
+        s_dirty.Clear();
+        if (s_timer != null)
+        {
+            s_timer.Stop();
+            s_timer = null;
+        }
     }
 
     /// <summary>
     /// Drains the buffer into <see cref="Text"/> and fires a single
-    /// <see cref="PropertyChanged"/>. Called automatically by the timer and
-    /// must also be called from <c>FinalizeStreaming</c> so the trailing
-    /// delta isn't dropped when the turn completes between timer ticks.
+    /// <see cref="PropertyChanged"/>. Called by the shared timer and also from
+    /// <c>FinalizeStreaming</c> so the trailing delta isn't dropped when the turn
+    /// completes between timer ticks.
     /// </summary>
     public void Flush()
     {
-        _flushTimer?.Stop();
-        _flushTimer = null;
+        s_dirty.Remove(this);
         if (_buffer.Length == 0) return;
         _text += _buffer.ToString();
         _buffer.Clear();
