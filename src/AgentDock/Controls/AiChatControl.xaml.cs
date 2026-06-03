@@ -302,6 +302,11 @@ public partial class AiChatControl : UserControl
     {
         if (_streamingThinkingVm == null)
         {
+            // Grouping rule: opening a thinking group closes any open execution
+            // group (symmetric to EnsureExecutionVm closing thinking). Because we
+            // only append, the open group is always the last one — so this is the
+            // "is the last group the same type? merge : start a new group" check.
+            FinalizeExecution();
             RemoveWaitingBubble();
             _streamingThinkingVm = new StreamingThinkingMessage(Guid.NewGuid());
             _streamingThinkingVm.PropertyChanged += OnStreamingTextChanged;
@@ -318,6 +323,9 @@ public partial class AiChatControl : UserControl
         RemoveWaitingBubble();
         if (_streamingThinkingVm == null)
         {
+            // Opening a thinking group closes any open execution group, so groups
+            // stay chronological and consecutive same-type content coalesces.
+            FinalizeExecution();
             _streamingThinkingVm = new StreamingThinkingMessage(Guid.NewGuid());
             _streamingThinkingVm.PropertyChanged += OnStreamingTextChanged;
             Messages.Add(_streamingThinkingVm);
