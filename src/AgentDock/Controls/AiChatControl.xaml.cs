@@ -17,6 +17,9 @@ namespace AgentDock.Controls;
 public partial class AiChatControl : UserControl
 {
     private ClaudeSession? _session;
+    // Runs the turn state machine on the session's background read-loop thread and
+    // emits classified ops we merge into Messages on the UI thread. See ApplyOps.
+    private ChatTurnProcessor? _processor;
     private string _projectPath = "";
 
     // The virtualized chat list. Past messages are immutable VM classes;
@@ -29,11 +32,6 @@ public partial class AiChatControl : UserControl
     // collection, nulled on finalize / removal.
     private StreamingAssistantMessage? _streamingVm;
     private StreamingThinkingMessage? _streamingThinkingVm;
-    // Content-block index of the thinking deltas currently feeding
-    // _streamingThinkingVm. Lets consecutive thinking blocks (no intervening
-    // response/execution) merge into the one window instead of each opening a
-    // new one. Reset to -1 whenever the thinking window is finalized.
-    private int _lastThinkingBlockIndex = -1;
     private BuildingExecutionMessage? _executionVm;
     private WaitingMessage? _waitingVm;
     private InactivityWarning? _inactivityVm;
@@ -148,6 +146,7 @@ public partial class AiChatControl : UserControl
     {
         _session?.Dispose();
         _session = null;
+        _processor = null;
         _dictation?.Dispose();
         _dictation = null;
     }
@@ -248,24 +247,91 @@ public partial class AiChatControl : UserControl
     {
         if (_session == null) return;
 
-        // All session UI updates are posted via Post(), which dispatches at
-        // DispatcherPriority.Background — below DispatcherPriority.Input. This
-        // makes WPF process prompt-box keystrokes ahead of the event flood from
-        // active sessions (the default BeginInvoke priority, Normal, outranks
-        // Input and was starving typing). Every event shares the one priority so
-        // their FIFO order — which the streaming state machine relies on — is
-        // preserved.
+        // UI-only session reactions (status bar, panels, system messages) are
+        // posted via Post(), which dispatches at DispatcherPriority.Background —
+        // below DispatcherPriority.Input — so WPF processes prompt-box keystrokes
+        // ahead of the session-event flood (the default Normal priority outranks
+        // Input and was starving typing). All share the one priority, preserving
+        // FIFO order.
         _session.StateChanged += state => Post(() => OnStateChanged(state));
         _session.Initialized += init => Post(() => OnInitialized(init));
-        _session.StreamDelta += delta => Post(() => OnStreamDelta(delta));
-        _session.AssistantMessageReceived += msg => Post(() => OnAssistantMessage(msg));
-        _session.ContentBlockStarted += evt => Post(() => OnContentBlockStarted(evt));
-        _session.ContentBlockStopped += evt => Post(() => OnContentBlockStopped(evt));
         _session.PermissionRequested += req => Post(() => OnPermissionRequested(req));
-        _session.ResultReceived += result => Post(() => OnResultReceived(result));
         _session.ErrorOutput += text => Post(() => OnErrorOutput(text));
         _session.ProcessExited += code => Post(() => OnProcessExited(code));
         _session.InactivityTimeout += () => Post(OnInactivityTimeout);
+
+        // Transcript classification (thinking / commentary / execution / answer)
+        // runs on the session's background read-loop thread via the processor — no
+        // UI work there. It emits already-classified ops; we merge them into the
+        // message list on the UI thread (ApplyOps). This is the "post-process off
+        // the UI thread, then merge deltas into the observable" pattern: the only
+        // thing on the UI thread is the collection mutation itself.
+        _processor = new ChatTurnProcessor();
+        _processor.Ops += ops => Post(() => ApplyOps(ops));
+        _processor.Attach(_session);
+    }
+
+    // Applies a batch of classified ops to the message list on the UI thread.
+    // Dropped if the session has gone away (e.g. Stop ran while ops were queued),
+    // so late ops can't resurrect content into a cleared transcript.
+    private void ApplyOps(IReadOnlyList<ChatOp> ops)
+    {
+        if (_session == null) return;
+        foreach (var op in ops)
+            ApplyOp(op);
+    }
+
+    private void ApplyOp(ChatOp op)
+    {
+        switch (op)
+        {
+            case RemoveWaitingOp: RemoveWaitingBubble(); break;
+            case RemoveInactivityOp: RemoveInactivityWarning(); break;
+            case AppendThinkingOp a: ApplyAppendThinking(a.Text); break;
+            case AppendResponseOp a: ApplyAppendResponse(a.Text); break;
+            case ReconcileResponseOp r: ApplyReconcileResponse(r.FullText); break;
+            case FoldResponseIntoThinkingOp: FoldStreamingTextIntoThinking(); break;
+            case FinalizeThinkingOp: FinalizeThinking(); break;
+            case FinalizeResponseOp: FinalizeStreaming(); break;
+            case EnsureExecutionOp: EnsureExecutionVm(); break;
+            case AddToolOp t: _executionVm?.Tools.Add(new ToolEntry(t.Name, t.FormattedInput)); break;
+            case FinalizeExecutionOp: FinalizeExecution(); break;
+            case TurnCompleteOp tc: ApplyTurnComplete(tc.Result); break;
+        }
+    }
+
+    // Ensures the live thinking window exists, then appends. The processor has
+    // already applied block separators and the redacted-thinking skip.
+    private void ApplyAppendThinking(string text)
+    {
+        if (_streamingThinkingVm == null)
+        {
+            RemoveWaitingBubble();
+            _streamingThinkingVm = new StreamingThinkingMessage(Guid.NewGuid());
+            _streamingThinkingVm.PropertyChanged += OnStreamingTextChanged;
+            Messages.Add(_streamingThinkingVm);
+        }
+        _streamingThinkingVm.AppendText(text);
+    }
+
+    // Ensures the live response bubble exists, then appends.
+    private void ApplyAppendResponse(string text)
+    {
+        if (_streamingVm == null)
+        {
+            _streamingVm = new StreamingAssistantMessage(Guid.NewGuid());
+            _streamingVm.PropertyChanged += OnStreamingTextChanged;
+            Messages.Add(_streamingVm);
+        }
+        _streamingVm.AppendText(text);
+    }
+
+    private void ApplyReconcileResponse(string fullText)
+    {
+        // Use the authoritative text only when it's at least as complete as what
+        // the deltas accumulated, so a later short block can't clobber earlier text.
+        if (_streamingVm != null && fullText.Length > 0 && fullText.Length >= _streamingVm.Text.Length)
+            _streamingVm.Text = fullText; // setter clears throttle buffer
     }
 
     // Posts a session-driven UI update at Background priority so it yields to
@@ -381,6 +447,7 @@ public partial class AiChatControl : UserControl
 
         var session = _session;
         _session = null;
+        _processor = null; // queued ops are dropped by ApplyOps once _session is null
         if (session != null)
         {
             await session.StopAsync();
@@ -548,6 +615,7 @@ public partial class AiChatControl : UserControl
         // the previous result, but covers edge cases (manual /compact mid-stream etc.).
         FinalizeStreaming();
         FinalizeExecution();
+        _processor?.Reset();
 
         _lastMessageSentTime = DateTime.UtcNow;
         AddUserMessage(text);
@@ -594,6 +662,7 @@ public partial class AiChatControl : UserControl
                 {
                     FinalizeStreaming();
                     FinalizeExecution();
+                    _processor?.Reset();
                     _lastMessageSentTime = DateTime.UtcNow;
                     AddUserMessage("/compact");
                     ShowWaitingBubble();
@@ -670,104 +739,13 @@ public partial class AiChatControl : UserControl
         Messages.Clear();
         _streamingVm = null;
         _streamingThinkingVm = null;
-        _lastThinkingBlockIndex = -1;
         _executionVm = null;
         _waitingVm = null;
         _inactivityVm = null;
+        _processor?.Reset();
     }
 
     // --- Content Block / Stream Events ---
-
-    private void OnContentBlockStarted(ClaudeContentBlockEvent evt)
-    {
-        if (evt.BlockType == "thinking")
-        {
-            // Keep the single "Thinking..." placeholder visible through the
-            // thinking phase. claude-opus-4-7/4-8 send redacted thinking
-            // (signature_delta only, no thinking_delta), so the placeholder is
-            // the only "working" signal until real content arrives — and it
-            // must NOT be duplicated per thinking block. The thinking window
-            // itself is created lazily (on the first non-empty thinking_delta)
-            // by OnThinkingDelta, so empty/redacted thinking never spawns a
-            // window. Consecutive thinking blocks merge into one window there.
-            return;
-        }
-
-        // A non-thinking block (text / tool_use) ends the thinking phase, so
-        // drop the placeholder. Real content (response text via OnStreamDelta,
-        // execution via EnsureExecutionVm) takes over from here.
-        RemoveWaitingBubble();
-    }
-
-    private void OnContentBlockStopped(ClaudeContentBlockEvent evt)
-    {
-        // Intentionally does NOT finalize the thinking window. A thinking block
-        // ending does not mean the thinking phase is over — the model may open
-        // another thinking block immediately. We only finalize the thinking
-        // window when genuinely different content arrives (response text,
-        // execution) or the turn ends (OnResultReceived). This is what lets
-        // back-to-back thinking blocks share one window instead of stacking up.
-    }
-
-    private void OnStreamDelta(ClaudeStreamDelta delta)
-    {
-        RemoveInactivityWarning();
-
-        if (delta.DeltaType == "thinking_delta")
-        {
-            OnThinkingDelta(delta);
-            return;
-        }
-
-        // Real response text — the thinking phase is over. Drop the placeholder
-        // and finalize any open thinking window so it renders as a separate
-        // (collapsible) message above the response.
-        RemoveWaitingBubble();
-        if (_streamingVm == null && _streamingThinkingVm != null)
-            FinalizeThinking();
-
-        if (_streamingVm == null)
-        {
-            _streamingVm = new StreamingAssistantMessage(Guid.NewGuid());
-            _streamingVm.PropertyChanged += OnStreamingTextChanged;
-            Messages.Add(_streamingVm);
-        }
-
-        // Coalesced through a ~30 fps throttle inside the VM so a fast model
-        // stream doesn't flood the binding system.
-        _streamingVm.AppendText(delta.Text);
-    }
-
-    private void OnThinkingDelta(ClaudeStreamDelta delta)
-    {
-        // Redacted thinking emits empty/whitespace thinking_deltas with no real
-        // content. Don't open a thinking window for those — keep the single
-        // "Thinking..." placeholder instead. This is what stops empty thinking
-        // blocks from stacking up as blank windows.
-        if (_streamingThinkingVm == null && string.IsNullOrWhiteSpace(delta.Text))
-            return;
-
-        if (_streamingThinkingVm == null)
-        {
-            // First real thinking content — replace the placeholder with a live
-            // thinking window.
-            RemoveWaitingBubble();
-            _streamingThinkingVm = new StreamingThinkingMessage(Guid.NewGuid());
-            _streamingThinkingVm.PropertyChanged += OnStreamingTextChanged;
-            Messages.Add(_streamingThinkingVm);
-            _lastThinkingBlockIndex = delta.ContentBlockIndex;
-        }
-        else if (delta.ContentBlockIndex != _lastThinkingBlockIndex)
-        {
-            // A new thinking block opened with no intervening response/execution
-            // — merge it into the existing window (separated for readability)
-            // rather than opening a second one.
-            _streamingThinkingVm.AppendText("\n\n");
-            _lastThinkingBlockIndex = delta.ContentBlockIndex;
-        }
-
-        _streamingThinkingVm.AppendText(delta.Text);
-    }
 
     /// <summary>
     /// Sticky-bottom follow during streaming: when a live VM's text changes,
@@ -783,58 +761,6 @@ public partial class AiChatControl : UserControl
         // user has scrolled up, and on background tabs whose extent isn't moving.
         if (_stickToBottom)
             GetScrollViewer()?.ScrollToEnd();
-    }
-
-    private void OnAssistantMessage(ClaudeAssistantMessage msg)
-    {
-        var fullText = string.Join("", msg.Content
-            .Where(c => c.Type == "text" && c.Text != null)
-            .Select(c => c.Text));
-
-        // Reconcile with the streamed text. Use the authoritative text only when
-        // it's at least as complete as what the deltas accumulated: Claude Code
-        // emits each content block of one turn as its OWN "assistant" line
-        // carrying only that block's text, so a later text block's line would
-        // otherwise clobber the delta-accumulated text of earlier blocks.
-        if (_streamingVm != null && fullText.Length > 0 && fullText.Length >= _streamingVm.Text.Length)
-            _streamingVm.Text = fullText; // setter clears throttle buffer + timer
-
-        var toolBlocks = msg.Content.Where(c => c.Type == "tool_use").ToList();
-
-        if (toolBlocks.Count > 0)
-        {
-            // This line calls tools, so any text streamed before it on this turn
-            // was intermediate commentary ("let me check…", "now I'll…"), not the
-            // final answer. Fold that text into the collapsed thinking window so
-            // only executions and the final answer stay expanded — keeping the
-            // transcript short and cheap to render.
-            FoldStreamingTextIntoThinking();
-
-            // Collapse the commentary immediately. (EnsureExecutionVm only
-            // finalizes thinking when it creates the turn's first execution
-            // bubble; tools after that reuse the existing bubble, so we can't
-            // rely on it to collapse commentary before later tool calls.)
-            FinalizeThinking();
-            EnsureExecutionVm();
-            foreach (var block in toolBlocks)
-            {
-                var inputStr = "";
-                if (block.Input is JsonElement input)
-                {
-                    inputStr = input.ValueKind == JsonValueKind.Object
-                        ? FormatToolInput(input)
-                        : input.ToString();
-                }
-                _executionVm!.Tools.Add(new ToolEntry(block.Name ?? "(unnamed)", inputStr));
-            }
-        }
-        // No tool calls in THIS line — but we can't conclude the text is the
-        // final answer, because the tool_use for this turn arrives on a separate,
-        // later "assistant" line. Defer: leave the streamed text live. If a
-        // tool_use line follows, the branch above folds it into thinking; if the
-        // turn just ends, OnResultReceived finalizes it as the visible answer.
-        // (Thinking was already finalized by the first response delta in
-        // OnStreamDelta, so nothing to collapse here.)
     }
 
     /// <summary>
@@ -870,14 +796,10 @@ public partial class AiChatControl : UserControl
         _streamingThinkingVm.AppendText(text);
     }
 
-    private void OnResultReceived(ClaudeResultMessage result)
+    // Applies the TurnComplete op: the finalizes already ran as preceding ops, so
+    // this only surfaces errors and the cost/token summary and updates stats.
+    private void ApplyTurnComplete(ClaudeResultMessage result)
     {
-        RemoveWaitingBubble();
-        RemoveInactivityWarning();
-        FinalizeThinking();
-        FinalizeStreaming();
-        FinalizeExecution();
-
         if (result.IsError && result.Errors?.Count > 0)
             AddSystemMessage($"Error: {string.Join("; ", result.Errors)}", isWarning: true);
 
@@ -976,7 +898,6 @@ public partial class AiChatControl : UserControl
                     isExpanded: false);
         }
         _streamingThinkingVm = null;
-        _lastThinkingBlockIndex = -1;
     }
 
     private void FinalizeExecution()
