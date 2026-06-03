@@ -8,15 +8,18 @@ namespace AgentDock.Services;
 /// <see cref="ClaudeSession"/> (thinking vs. intermediate commentary vs. tool
 /// executions vs. the final answer) and emits already-classified <see cref="ChatOp"/>s.
 ///
-/// CRUCIALLY this runs on the session's background read-loop thread — it subscribes
-/// to the session events directly (no Dispatcher), does the "decide where this
-/// content goes" work there, and hands the UI a finished list of ops. The UI only
-/// performs the observable mutation. Nothing here touches WPF objects, so it is
-/// safe off the UI thread; the processor holds plain classification state only.
+/// Classification is DEFERRED: a text block can't be identified as commentary or as
+/// the final answer until we see what follows it (a tool call / more text → it was
+/// commentary; end-of-turn → it was the answer). So a text block is BUFFERED and
+/// only emitted once the next block (or the result) classifies it. This places each
+/// piece of content correctly the first time — nothing is rendered then moved.
+/// Live thinking still streams as it arrives (its placement is never ambiguous);
+/// the final answer appears, complete, when the turn ends.
 ///
-/// Threading: the session raises its events sequentially from the one read loop,
-/// so this type is single-threaded in practice and needs no locking. Each batch of
-/// ops for one source event is delivered via <see cref="Ops"/> in order.
+/// CRUCIALLY this runs on the session's background read-loop thread — no UI work
+/// here, no WPF objects, just classification state and plain-data ops. The session
+/// raises its events sequentially from the one read loop, so this is effectively
+/// single-threaded and needs no locking.
 /// </summary>
 public sealed class ChatTurnProcessor
 {
@@ -24,16 +27,17 @@ public sealed class ChatTurnProcessor
     /// by a single source event, in application order.</summary>
     public event Action<IReadOnlyList<ChatOp>>? Ops;
 
-    // Classification state. Mirrors the live-tail the UI is showing, but holds no
-    // VM references — only enough to decide the next op.
+    // Live thinking state (thinking is shown as it streams — placement is known).
     private bool _thinkingOpen;
     private int _lastThinkingBlockIndex = -1;
-    private bool _responseOpen;
+
+    // The text block we've seen but not yet classified. Held until the next block
+    // (commentary) or the result (answer) tells us where it belongs.
+    private string _pendingText = "";
+    private bool _pendingHasText;
 
     public void Attach(ClaudeSession session)
     {
-        session.ContentBlockStarted += OnContentBlockStarted;
-        session.ContentBlockStopped += OnContentBlockStopped;
         session.StreamDelta += OnStreamDelta;
         session.AssistantMessageReceived += OnAssistantMessage;
         session.ResultReceived += OnResult;
@@ -45,30 +49,14 @@ public sealed class ChatTurnProcessor
     {
         _thinkingOpen = false;
         _lastThinkingBlockIndex = -1;
-        _responseOpen = false;
+        _pendingText = "";
+        _pendingHasText = false;
     }
 
     private void Emit(List<ChatOp> ops)
     {
         if (ops.Count > 0)
             Ops?.Invoke(ops);
-    }
-
-    private void OnContentBlockStarted(ClaudeContentBlockEvent evt)
-    {
-        // A thinking block keeps the "Thinking…" placeholder; the window itself is
-        // created lazily on the first real thinking delta. A non-thinking block
-        // (text/tool_use) ends the placeholder.
-        if (evt.BlockType == "thinking")
-            return;
-        Emit([new RemoveWaitingOp()]);
-    }
-
-    private void OnContentBlockStopped(ClaudeContentBlockEvent evt)
-    {
-        // A thinking block ending does NOT end the thinking phase — the model may
-        // open another immediately. Thinking is only finalized when genuinely
-        // different content arrives (response/execution) or the turn ends.
     }
 
     private void OnStreamDelta(ClaudeStreamDelta delta)
@@ -78,7 +66,7 @@ public sealed class ChatTurnProcessor
         if (delta.DeltaType == "thinking_delta")
         {
             // Redacted thinking emits empty/whitespace deltas — don't open a window
-            // for those (keeps the placeholder instead).
+            // for those (the "Thinking…" placeholder stays instead).
             if (!_thinkingOpen && string.IsNullOrWhiteSpace(delta.Text))
             {
                 Emit(ops);
@@ -87,15 +75,14 @@ public sealed class ChatTurnProcessor
 
             if (!_thinkingOpen)
             {
-                ops.Add(new RemoveWaitingOp());
                 _thinkingOpen = true;
                 _lastThinkingBlockIndex = delta.ContentBlockIndex;
                 ops.Add(new AppendThinkingOp(delta.Text));
             }
             else if (delta.ContentBlockIndex != _lastThinkingBlockIndex)
             {
-                // A new thinking block with no intervening response/execution —
-                // merge into the existing window, separated for readability.
+                // A new thinking block with no intervening content — merge into the
+                // existing window, separated for readability.
                 _lastThinkingBlockIndex = delta.ContentBlockIndex;
                 ops.Add(new AppendThinkingOp("\n\n" + delta.Text));
             }
@@ -103,42 +90,26 @@ public sealed class ChatTurnProcessor
             {
                 ops.Add(new AppendThinkingOp(delta.Text));
             }
-
-            Emit(ops);
-            return;
         }
+        // text_delta: deliberately NOT rendered live. The authoritative text arrives
+        // on the assistant line (OnAssistantMessage), where it's buffered and
+        // classified once we see what follows. We only note output resumed (above).
 
-        // Real response text. NOTE: unlike the old UI-thread path, we deliberately
-        // do NOT finalize the thinking window here. Keeping it open means that if
-        // this text turns out to be intermediate commentary (a tool_use follows),
-        // it folds back into the SAME thinking window instead of spawning a second
-        // one — which is what produced the "lots of thinking windows" pile-up.
-        ops.Add(new RemoveWaitingOp());
-        _responseOpen = true;
-        ops.Add(new AppendResponseOp(delta.Text));
         Emit(ops);
     }
 
     private void OnAssistantMessage(ClaudeAssistantMessage msg)
     {
-        var ops = new List<ChatOp>();
-
-        var fullText = string.Concat(msg.Content
-            .Where(c => c.Type == "text" && c.Text != null)
-            .Select(c => c.Text));
-
-        // Reconcile the streamed text with the authoritative block text.
-        if (_responseOpen && fullText.Length > 0)
-            ops.Add(new ReconcileResponseOp(fullText));
+        var ops = new List<ChatOp> { new RemoveInactivityOp() };
 
         var toolBlocks = msg.Content.Where(c => c.Type == "tool_use").ToList();
         if (toolBlocks.Count > 0)
         {
-            // This line calls tools, so any text streamed before it this turn was
-            // intermediate commentary, not the answer. Fold it into thinking, then
-            // collapse and start the execution bubble.
-            ops.Add(new FoldResponseIntoThinkingOp());
-            _responseOpen = false;
+            // A tool call follows — so any buffered text was intermediate commentary.
+            FlushPendingAsCommentary(ops);
+
+            // Collapse the thinking window (now incl. that commentary) and start /
+            // extend the execution bubble.
             ops.Add(new FinalizeThinkingOp());
             _thinkingOpen = false;
             _lastThinkingBlockIndex = -1;
@@ -155,25 +126,52 @@ public sealed class ChatTurnProcessor
                 }
                 ops.Add(new AddToolOp(block.Name ?? "(unnamed)", inputStr));
             }
+
+            Emit(ops);
+            return;
         }
-        // No tool calls in THIS line: we can't conclude the text is the final
-        // answer (the tool_use for this turn may arrive on a later line). Leave the
-        // response live; the turn end (OnResult) finalizes it as the answer.
+
+        var fullText = string.Concat(msg.Content
+            .Where(c => c.Type == "text" && c.Text != null)
+            .Select(c => c.Text));
+
+        if (fullText.Length > 0)
+        {
+            // A completed text block. We can't tell yet whether it's the answer or
+            // commentary, so buffer it. If we were already holding a text block, the
+            // arrival of this one means the previous was NOT the answer — fold it.
+            FlushPendingAsCommentary(ops);
+            _pendingText = fullText;
+            _pendingHasText = true;
+        }
 
         Emit(ops);
     }
 
     private void OnResult(ClaudeResultMessage result)
     {
-        Emit([
-            new RemoveWaitingOp(),
+        var ops = new List<ChatOp>
+        {
             new RemoveInactivityOp(),
             new FinalizeThinkingOp(),
-            new FinalizeResponseOp(),
             new FinalizeExecutionOp(),
-            new TurnCompleteOp(result),
-        ]);
+        };
+
+        // The text block we were holding when the turn ended IS the final answer.
+        if (_pendingHasText)
+            ops.Add(new PostAnswerOp(_pendingText));
+
+        ops.Add(new TurnCompleteOp(result));
+        Emit(ops);
         Reset();
+    }
+
+    private void FlushPendingAsCommentary(List<ChatOp> ops)
+    {
+        if (!_pendingHasText) return;
+        ops.Add(new CommentaryOp(_pendingText));
+        _pendingText = "";
+        _pendingHasText = false;
     }
 
     internal static string FormatToolInput(JsonElement input)

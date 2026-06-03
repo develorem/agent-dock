@@ -30,7 +30,6 @@ public partial class AiChatControl : UserControl
 
     // Live-tail references — set when the corresponding VM is in the
     // collection, nulled on finalize / removal.
-    private StreamingAssistantMessage? _streamingVm;
     private StreamingThinkingMessage? _streamingThinkingVm;
     private BuildingExecutionMessage? _executionVm;
     private WaitingMessage? _waitingVm;
@@ -285,17 +284,14 @@ public partial class AiChatControl : UserControl
     {
         switch (op)
         {
-            case RemoveWaitingOp: RemoveWaitingBubble(); break;
             case RemoveInactivityOp: RemoveInactivityWarning(); break;
             case AppendThinkingOp a: ApplyAppendThinking(a.Text); break;
-            case AppendResponseOp a: ApplyAppendResponse(a.Text); break;
-            case ReconcileResponseOp r: ApplyReconcileResponse(r.FullText); break;
-            case FoldResponseIntoThinkingOp: FoldStreamingTextIntoThinking(); break;
+            case CommentaryOp c: ApplyCommentary(c.Text); break;
             case FinalizeThinkingOp: FinalizeThinking(); break;
-            case FinalizeResponseOp: FinalizeStreaming(); break;
             case EnsureExecutionOp: EnsureExecutionVm(); break;
             case AddToolOp t: _executionVm?.Tools.Add(new ToolEntry(t.Name, t.FormattedInput)); break;
             case FinalizeExecutionOp: FinalizeExecution(); break;
+            case PostAnswerOp p: ApplyPostAnswer(p.Text); break;
             case TurnCompleteOp tc: ApplyTurnComplete(tc.Result); break;
         }
     }
@@ -314,24 +310,50 @@ public partial class AiChatControl : UserControl
         _streamingThinkingVm.AppendText(text);
     }
 
-    // Ensures the live response bubble exists, then appends.
-    private void ApplyAppendResponse(string text)
+    // A buffered text block that turned out to be commentary — append it to the
+    // thinking window (created if needed), separated from any existing content.
+    private void ApplyCommentary(string text)
     {
-        if (_streamingVm == null)
+        if (string.IsNullOrWhiteSpace(text)) return;
+        RemoveWaitingBubble();
+        if (_streamingThinkingVm == null)
         {
-            _streamingVm = new StreamingAssistantMessage(Guid.NewGuid());
-            _streamingVm.PropertyChanged += OnStreamingTextChanged;
-            Messages.Add(_streamingVm);
+            _streamingThinkingVm = new StreamingThinkingMessage(Guid.NewGuid());
+            _streamingThinkingVm.PropertyChanged += OnStreamingTextChanged;
+            Messages.Add(_streamingThinkingVm);
         }
-        _streamingVm.AppendText(text);
+        else if (!string.IsNullOrEmpty(_streamingThinkingVm.Text))
+        {
+            _streamingThinkingVm.AppendText("\n\n");
+        }
+        _streamingThinkingVm.AppendText(text);
     }
 
-    private void ApplyReconcileResponse(string fullText)
+    // The buffered text was the final answer — post it as a standalone, always-shown
+    // assistant bubble (never inside the thinking group). The rendered FlowDocument
+    // is built lazily on realize in a visible tab (see AttachAssistantDocument).
+    private void ApplyPostAnswer(string text)
     {
-        // Use the authoritative text only when it's at least as complete as what
-        // the deltas accumulated, so a later short block can't clobber earlier text.
-        if (_streamingVm != null && fullText.Length > 0 && fullText.Length >= _streamingVm.Text.Length)
-            _streamingVm.Text = fullText; // setter clears throttle buffer
+        RemoveWaitingBubble();
+
+        var hasNl = text.Contains('\n');
+        Func<FlowDocument>? markdownBuilder = null;
+        if (hasNl)
+        {
+            var style = (System.Windows.Style)FindResource("ChatMarkdownStyle");
+            var projectPath = _projectPath;
+            Action<string> onLink = p => FileReferenceClicked?.Invoke(p);
+            FlowDocument? cached = null;
+            markdownBuilder = () => cached ??= MarkdownHelper.BuildDocument(
+                text, markdownStyle: style, projectPath: projectPath, onFileLinkClicked: onLink);
+        }
+
+        Messages.Add(new AssistantMessage(
+            id: Guid.NewGuid(),
+            text: text,
+            isMarkdownView: hasNl,
+            hasMarkdownToggle: hasNl,
+            markdownBuilder: markdownBuilder));
     }
 
     // Posts a session-driven UI update at Background priority so it yields to
@@ -442,7 +464,6 @@ public partial class AiChatControl : UserControl
         RemoveWaitingBubble();
         RemoveInactivityWarning();
         FinalizeThinking();
-        FinalizeStreaming();
         FinalizeExecution();
 
         var session = _session;
@@ -613,7 +634,7 @@ public partial class AiChatControl : UserControl
 
         // Defensive turn-boundary finalize — should already have happened on
         // the previous result, but covers edge cases (manual /compact mid-stream etc.).
-        FinalizeStreaming();
+        FinalizeThinking();
         FinalizeExecution();
         _processor?.Reset();
 
@@ -660,7 +681,7 @@ public partial class AiChatControl : UserControl
             case "/compact":
                 if (_session != null && _session.State == ClaudeSessionState.Idle)
                 {
-                    FinalizeStreaming();
+                    FinalizeThinking();
                     FinalizeExecution();
                     _processor?.Reset();
                     _lastMessageSentTime = DateTime.UtcNow;
@@ -726,18 +747,12 @@ public partial class AiChatControl : UserControl
         _inactivityElapsedTimer = null;
         // Stop streaming VMs' internal throttle timers and unsubscribe so the
         // VMs (and this control) become GC-eligible together.
-        if (_streamingVm != null)
-        {
-            _streamingVm.Flush();
-            _streamingVm.PropertyChanged -= OnStreamingTextChanged;
-        }
         if (_streamingThinkingVm != null)
         {
             _streamingThinkingVm.Flush();
             _streamingThinkingVm.PropertyChanged -= OnStreamingTextChanged;
         }
         Messages.Clear();
-        _streamingVm = null;
         _streamingThinkingVm = null;
         _executionVm = null;
         _waitingVm = null;
@@ -761,39 +776,6 @@ public partial class AiChatControl : UserControl
         // user has scrolled up, and on background tabs whose extent isn't moving.
         if (_stickToBottom)
             GetScrollViewer()?.ScrollToEnd();
-    }
-
-    /// <summary>
-    /// Reclassifies the current streaming assistant text as intermediate
-    /// commentary: drops its visible bubble and appends the text to the
-    /// thinking window (which is collapsed on finalize). No-op if there's no
-    /// streaming text or it's empty.
-    /// </summary>
-    private void FoldStreamingTextIntoThinking()
-    {
-        if (_streamingVm == null) return;
-
-        _streamingVm.Flush();
-        _streamingVm.PropertyChanged -= OnStreamingTextChanged;
-        var text = _streamingVm.Text;
-        var idx = Messages.IndexOf(_streamingVm);
-        if (idx >= 0) Messages.RemoveAt(idx);
-        _streamingVm = null;
-
-        if (string.IsNullOrWhiteSpace(text)) return;
-
-        if (_streamingThinkingVm == null)
-        {
-            _streamingThinkingVm = new StreamingThinkingMessage(Guid.NewGuid());
-            _streamingThinkingVm.PropertyChanged += OnStreamingTextChanged;
-            Messages.Add(_streamingThinkingVm);
-        }
-        else if (!string.IsNullOrEmpty(_streamingThinkingVm.Text))
-        {
-            // Separate commentary from any thinking text already in the window.
-            _streamingThinkingVm.AppendText("\n\n");
-        }
-        _streamingThinkingVm.AppendText(text);
     }
 
     // Applies the TurnComplete op: the finalizes already ran as preceding ops, so
@@ -834,47 +816,6 @@ public partial class AiChatControl : UserControl
         FinalizeThinking();
         _executionVm = new BuildingExecutionMessage(Guid.NewGuid());
         Messages.Add(_executionVm);
-    }
-
-    private void FinalizeStreaming()
-    {
-        if (_streamingVm == null) return;
-        // Drain any buffered deltas the throttle timer hasn't flushed yet,
-        // then drop the PropertyChanged subscription so the VM is GC-eligible.
-        _streamingVm.Flush();
-        _streamingVm.PropertyChanged -= OnStreamingTextChanged;
-
-        var idx = Messages.IndexOf(_streamingVm);
-        if (idx >= 0)
-        {
-            var text = _streamingVm.Text;
-            var hasNl = text.Contains('\n');
-
-            // Defer the rendered-FlowDocument build (MdXaml parse + an AvalonEdit
-            // editor per code block) instead of doing it synchronously here for
-            // every turn — including background tabs. We capture a memoizing
-            // closure that runs on the UI thread only when the bubble is actually
-            // realized in a visible tab (see AttachAssistantDocument), and at most
-            // once. Single-line messages render as plain text — no build at all.
-            Func<FlowDocument>? markdownBuilder = null;
-            if (hasNl)
-            {
-                var style = (System.Windows.Style)FindResource("ChatMarkdownStyle");
-                var projectPath = _projectPath;
-                Action<string> onLink = p => FileReferenceClicked?.Invoke(p);
-                FlowDocument? cached = null;
-                markdownBuilder = () => cached ??= MarkdownHelper.BuildDocument(
-                    text, markdownStyle: style, projectPath: projectPath, onFileLinkClicked: onLink);
-            }
-
-            Messages[idx] = new AssistantMessage(
-                id: _streamingVm.Id,
-                text: text,
-                isMarkdownView: hasNl,
-                hasMarkdownToggle: hasNl,
-                markdownBuilder: markdownBuilder);
-        }
-        _streamingVm = null;
     }
 
     private void FinalizeThinking()
