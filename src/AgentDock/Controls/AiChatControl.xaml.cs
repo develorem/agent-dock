@@ -30,11 +30,29 @@ public partial class AiChatControl : UserControl
 
     // Live-tail references — set when the corresponding VM is in the
     // collection, nulled on finalize / removal.
-    private StreamingThinkingMessage? _streamingThinkingVm;
-    private BuildingExecutionMessage? _executionVm;
+    //
+    // The one unified activity bubble for the current turn (gray thinking +
+    // green execution interleaved). Created on the first thinking/tool/commentary
+    // op, finalized (collapsed, header → duration summary) at turn end.
+    private ActivityMessage? _activityVm;
     private WaitingMessage? _waitingVm;
     private InactivityWarning? _inactivityVm;
     private DispatcherTimer? _inactivityElapsedTimer;
+
+    // Animated "still working" header for the active activity bubble: a whimsical
+    // verb with cycling dots (e.g. "Pondering…"), refreshed by a timer while the
+    // turn runs. One timer per control (so each tab animates independently).
+    private DispatcherTimer? _activityHeaderTimer;
+    private int _activityTick;
+    private string _activityVerb = "";
+    private static readonly Random s_rng = new();
+    private static readonly string[] ActivityVerbs =
+    [
+        "Thinking", "Pondering", "Conjuring", "Finagling", "Noodling", "Cogitating",
+        "Ruminating", "Tinkering", "Wrangling", "Percolating", "Synthesizing",
+        "Deliberating", "Scheming", "Computing", "Mulling", "Brewing", "Whirring",
+        "Crunching", "Untangling", "Spelunking", "Marinating", "Puzzling",
+    ];
 
     // Animated working indicator in the status bar (not a message).
     private DispatcherTimer? _workingTimer;
@@ -287,54 +305,35 @@ public partial class AiChatControl : UserControl
             case RemoveInactivityOp: RemoveInactivityWarning(); break;
             case AppendThinkingOp a: ApplyAppendThinking(a.Text); break;
             case CommentaryOp c: ApplyCommentary(c.Text); break;
-            case FinalizeThinkingOp: FinalizeThinking(); break;
-            case EnsureExecutionOp: EnsureExecutionVm(); break;
-            case AddToolOp t: _executionVm?.Tools.Add(new ToolEntry(t.Name, t.FormattedInput)); break;
-            case FinalizeExecutionOp: FinalizeExecution(); break;
+            // Thinking and execution now share one bubble: "finalize thinking" just
+            // closes the current gray block so a following tool / fresh thinking
+            // starts a new block. The bubble itself is finalized at TurnComplete.
+            case FinalizeThinkingOp: _activityVm?.CloseThinking(); break;
+            case EnsureExecutionOp: EnsureActivityVm(); _activityVm!.CloseThinking(); break;
+            case AddToolOp t: EnsureActivityVm(); _activityVm!.AddTool(t.Name, t.FormattedInput); break;
+            case FinalizeExecutionOp: break; // no-op — see TurnComplete
             case PostAnswerOp p: ApplyPostAnswer(p.Text); break;
             case TurnCompleteOp tc: ApplyTurnComplete(tc.Result); break;
         }
     }
 
-    // Ensures the live thinking window exists, then appends. The processor has
-    // already applied block separators and the redacted-thinking skip.
+    // Ensures the activity bubble exists, then streams a thinking delta into its
+    // open gray block. The processor has already applied block separators and the
+    // redacted-thinking skip.
     private void ApplyAppendThinking(string text)
     {
-        if (_streamingThinkingVm == null)
-        {
-            // Grouping rule: opening a thinking group closes any open execution
-            // group (symmetric to EnsureExecutionVm closing thinking). Because we
-            // only append, the open group is always the last one — so this is the
-            // "is the last group the same type? merge : start a new group" check.
-            FinalizeExecution();
-            RemoveWaitingBubble();
-            _streamingThinkingVm = new StreamingThinkingMessage(Guid.NewGuid());
-            _streamingThinkingVm.PropertyChanged += OnStreamingTextChanged;
-            Messages.Add(_streamingThinkingVm);
-        }
-        _streamingThinkingVm.AppendText(text);
+        EnsureActivityVm();
+        _activityVm!.AppendThinking(text);
     }
 
     // A buffered text block that turned out to be commentary — append it to the
-    // thinking window (created if needed), separated from any existing content.
+    // activity bubble's open gray block (created if needed), coalesced with any
+    // existing thinking content.
     private void ApplyCommentary(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) return;
-        RemoveWaitingBubble();
-        if (_streamingThinkingVm == null)
-        {
-            // Opening a thinking group closes any open execution group, so groups
-            // stay chronological and consecutive same-type content coalesces.
-            FinalizeExecution();
-            _streamingThinkingVm = new StreamingThinkingMessage(Guid.NewGuid());
-            _streamingThinkingVm.PropertyChanged += OnStreamingTextChanged;
-            Messages.Add(_streamingThinkingVm);
-        }
-        else if (!string.IsNullOrEmpty(_streamingThinkingVm.Text))
-        {
-            _streamingThinkingVm.AppendText("\n\n");
-        }
-        _streamingThinkingVm.AppendText(text);
+        EnsureActivityVm();
+        _activityVm!.AddCommentary(text);
     }
 
     // The buffered text was the final answer — post it as a standalone, always-shown
@@ -352,8 +351,7 @@ public partial class AiChatControl : UserControl
             var projectPath = _projectPath;
             Action<string> onLink = p => FileReferenceClicked?.Invoke(p);
             FlowDocument? cached = null;
-            markdownBuilder = () => cached ??= MarkdownHelper.BuildDocument(
-                text, markdownStyle: style, projectPath: projectPath, onFileLinkClicked: onLink);
+            markdownBuilder = () => cached ??= BuildAnswerDocument(text, style, projectPath, onLink);
         }
 
         Messages.Add(new AssistantMessage(
@@ -362,6 +360,26 @@ public partial class AiChatControl : UserControl
             isMarkdownView: hasNl,
             hasMarkdownToggle: hasNl,
             markdownBuilder: markdownBuilder));
+    }
+
+    // Builds the rendered answer document, degrading to plain text if markdown rendering
+    // throws. Without this, a render bug re-throws on every tab realize (the builder is
+    // memoized with ??=, so a throw never caches and runs again next time). We log the
+    // failure with the source text — that's the only copy that reproduces it — so the
+    // underlying render bug stays visible and fixable rather than being silently swallowed.
+    private static FlowDocument BuildAnswerDocument(
+        string text, System.Windows.Style style, string projectPath, Action<string> onLink)
+    {
+        try
+        {
+            return MarkdownHelper.BuildDocument(
+                text, markdownStyle: style, projectPath: projectPath, onFileLinkClicked: onLink);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Markdown render failed; showing plain text. Source markdown:\n{text}", ex);
+            return MarkdownHelper.BuildPlainTextFallback(text, style);
+        }
     }
 
     // Posts a session-driven UI update at Background priority so it yields to
@@ -416,11 +434,11 @@ public partial class AiChatControl : UserControl
         DangerIcon.Visibility = showDanger ? Visibility.Visible : Visibility.Collapsed;
 
         var canSend = state == ClaudeSessionState.Idle;
-        InputBox.IsEnabled = canSend;
+        // Keep the input box and mic usable while a turn is running so the user can
+        // draft follow-up notes; only the Send button is gated on Idle.
+        // SendCurrentMessage re-checks the session state, so an Enter press can't
+        // actually dispatch a message mid-turn.
         SendButton.IsEnabled = canSend;
-        MicButton.IsEnabled = canSend;
-        if (!canSend && _dictation?.IsActive == true)
-            _ = _dictation.StopAsync();
 
         if (canSend)
             FocusInput();
@@ -464,15 +482,13 @@ public partial class AiChatControl : UserControl
     {
         StopWorkingAnimation();
         StopButton.IsEnabled = false;
-        InputBox.IsEnabled = false;
         SendButton.IsEnabled = false;
         StatusText.Text = "Stopping...";
         StatusText.Foreground = ThemeManager.GetBrush("ChatMutedForeground");
 
         RemoveWaitingBubble();
         RemoveInactivityWarning();
-        FinalizeThinking();
-        FinalizeExecution();
+        FinalizeActivity(null);
 
         var session = _session;
         _session = null;
@@ -629,21 +645,24 @@ public partial class AiChatControl : UserControl
         if (string.IsNullOrEmpty(text))
             return;
 
-        InputBox.Text = "";
-
-        if (text.StartsWith('/'))
+        // Local commands are handled regardless of session state; consume the input.
+        if (text.StartsWith('/') && TryHandleLocalCommand(text))
         {
-            if (TryHandleLocalCommand(text))
-                return;
+            InputBox.Text = "";
+            return;
         }
 
+        // Can't dispatch to Claude unless the session is idle. The input box stays
+        // enabled mid-turn so the user can draft notes — leave their text in place
+        // rather than clearing it on an Enter that can't send yet.
         if (_session == null || _session.State != ClaudeSessionState.Idle)
             return;
 
+        InputBox.Text = "";
+
         // Defensive turn-boundary finalize — should already have happened on
         // the previous result, but covers edge cases (manual /compact mid-stream etc.).
-        FinalizeThinking();
-        FinalizeExecution();
+        FinalizeActivity(null);
         _processor?.Reset();
 
         _lastMessageSentTime = DateTime.UtcNow;
@@ -689,8 +708,7 @@ public partial class AiChatControl : UserControl
             case "/compact":
                 if (_session != null && _session.State == ClaudeSessionState.Idle)
                 {
-                    FinalizeThinking();
-                    FinalizeExecution();
+                    FinalizeActivity(null);
                     _processor?.Reset();
                     _lastMessageSentTime = DateTime.UtcNow;
                     AddUserMessage("/compact");
@@ -753,16 +771,12 @@ public partial class AiChatControl : UserControl
     {
         _inactivityElapsedTimer?.Stop();
         _inactivityElapsedTimer = null;
-        // Stop streaming VMs' internal throttle timers and unsubscribe so the
-        // VMs (and this control) become GC-eligible together.
-        if (_streamingThinkingVm != null)
-        {
-            _streamingThinkingVm.Flush();
-            _streamingThinkingVm.PropertyChanged -= OnStreamingTextChanged;
-        }
+        // Stop the activity header animation and flush any in-flight streaming
+        // thinking so nothing keeps ticking after the transcript is cleared.
+        StopActivityAnimation();
+        _activityVm?.Freeze();
         Messages.Clear();
-        _streamingThinkingVm = null;
-        _executionVm = null;
+        _activityVm = null;
         _waitingVm = null;
         _inactivityVm = null;
         _processor?.Reset();
@@ -770,26 +784,14 @@ public partial class AiChatControl : UserControl
 
     // --- Content Block / Stream Events ---
 
-    /// <summary>
-    /// Sticky-bottom follow during streaming: when a live VM's text changes,
-    /// scroll to the new bottom <i>only</i> if the user was already at the
-    /// bottom. If they've scrolled up to read history, don't yank them back.
-    /// </summary>
-    private void OnStreamingTextChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName != nameof(StreamingTextMessage.Text)) return;
-        // Nudge to the bottom while following. ScrollToEnd only sets a pending
-        // offset (no forced layout); once the new text lays out and the extent
-        // grows, OnScrollChanged re-pins authoritatively. Cheap no-op when the
-        // user has scrolled up, and on background tabs whose extent isn't moving.
-        if (_stickToBottom)
-            GetScrollViewer()?.ScrollToEnd();
-    }
-
-    // Applies the TurnComplete op: the finalizes already ran as preceding ops, so
-    // this only surfaces errors and the cost/token summary and updates stats.
+    // Applies the TurnComplete op. Finalizes the activity bubble here (rather than
+    // on an earlier op) so its header can show the turn's duration. The whole result
+    // op-batch is applied in one synchronous pass, so collapsing the bubble and
+    // posting the answer (PostAnswerOp, just before this) render together — no flicker.
     private void ApplyTurnComplete(ClaudeResultMessage result)
     {
+        FinalizeActivity(result.DurationMs.HasValue ? result.DurationMs.Value / 1000.0 : null);
+
         if (result.IsError && result.Errors?.Count > 0)
             AddSystemMessage($"Error: {string.Join("; ", result.Errors)}", isWarning: true);
 
@@ -812,55 +814,76 @@ public partial class AiChatControl : UserControl
         SessionStatsChanged?.Invoke(Stats);
     }
 
-    // --- Finalize / Swap (live VM → immutable record) ---
+    // --- Activity bubble lifecycle ---
 
-    private void EnsureExecutionVm()
+    // Ensures the one activity bubble for this turn exists, dropping the "Thinking..."
+    // placeholder and starting the animated header.
+    private void EnsureActivityVm()
     {
-        if (_executionVm != null) return;
-        // Execution output ends the thinking phase — drop the placeholder and
-        // finalize any open thinking window so it renders above the execution
-        // bubble (and so the next thinking block starts a fresh window).
+        if (_activityVm != null) return;
         RemoveWaitingBubble();
-        FinalizeThinking();
-        _executionVm = new BuildingExecutionMessage(Guid.NewGuid());
-        Messages.Add(_executionVm);
+        _activityVm = new ActivityMessage(Guid.NewGuid());
+        StartActivityAnimation();
+        Messages.Add(_activityVm);
     }
 
-    private void FinalizeThinking()
+    // Finalizes the active bubble: flush in-flight thinking, stop the animation, and
+    // either drop it (no content) or collapse it with a "Worked for Ns" header.
+    // <paramref name="durationSeconds"/> is null when finalizing outside a normal
+    // turn end (stop / clear / defensive), in which case a neutral label is used.
+    private void FinalizeActivity(double? durationSeconds)
     {
-        if (_streamingThinkingVm == null) return;
-        _streamingThinkingVm.Flush();
-        _streamingThinkingVm.PropertyChanged -= OnStreamingTextChanged;
+        if (_activityVm == null) return;
+        StopActivityAnimation();
+        _activityVm.Freeze();
 
-        var idx = Messages.IndexOf(_streamingThinkingVm);
-        if (idx >= 0)
+        if (!_activityVm.HasEntries)
         {
-            // Defensive: a window that somehow ended up with no real content
-            // (e.g. only whitespace separators) is dropped rather than left
-            // behind as an empty thinking bubble.
-            if (string.IsNullOrWhiteSpace(_streamingThinkingVm.Text))
-                Messages.RemoveAt(idx);
-            else
-                Messages[idx] = new ThinkingMessage(
-                    _streamingThinkingVm.Id,
-                    _streamingThinkingVm.Text,
-                    isExpanded: false);
+            Messages.Remove(_activityVm);
         }
-        _streamingThinkingVm = null;
+        else
+        {
+            _activityVm.Header = durationSeconds.HasValue
+                ? $"Worked for {durationSeconds.Value:F1}s"
+                : "Activity";
+            _activityVm.IsExpanded = false;
+        }
+        _activityVm = null;
     }
 
-    private void FinalizeExecution()
+    // --- Activity header animation (whimsical verb + cycling dots) ---
+
+    private void StartActivityAnimation()
     {
-        if (_executionVm == null) return;
-        var idx = Messages.IndexOf(_executionVm);
-        if (idx >= 0)
+        _activityTick = 0;
+        _activityVerb = ActivityVerbs[s_rng.Next(ActivityVerbs.Length)];
+        UpdateActivityHeader();
+        _activityHeaderTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
-            Messages[idx] = new ExecutionMessage(
-                _executionVm.Id,
-                _executionVm.Tools.ToList(),
-                isExpanded: false);
-        }
-        _executionVm = null;
+            Interval = TimeSpan.FromMilliseconds(300)
+        };
+        _activityHeaderTimer.Tick += (_, _) =>
+        {
+            _activityTick++;
+            // Switch to a fresh verb every ~2.4s so it reads as ongoing work.
+            if (_activityTick % 8 == 0)
+                _activityVerb = ActivityVerbs[s_rng.Next(ActivityVerbs.Length)];
+            UpdateActivityHeader();
+        };
+        _activityHeaderTimer.Start();
+    }
+
+    private void StopActivityAnimation()
+    {
+        _activityHeaderTimer?.Stop();
+        _activityHeaderTimer = null;
+    }
+
+    private void UpdateActivityHeader()
+    {
+        if (_activityVm == null) return;
+        var dots = (_activityTick % 3) + 1;
+        _activityVm.Header = _activityVerb + new string('.', dots);
     }
 
     // --- Permission Handling ---
@@ -1110,31 +1133,11 @@ public partial class AiChatControl : UserControl
         }
     }
 
-    private void ThinkingHeader_Click(object sender, MouseButtonEventArgs e)
+    // ActivityMessage stays a single mutable VM (building → frozen), so toggling
+    // expand is just a property flip — no instance swap needed.
+    private void ActivityHeader_Click(object sender, MouseButtonEventArgs e)
     {
-        if (sender is FrameworkElement fe && fe.Tag is ThinkingMessage msg)
-        {
-            var idx = Messages.IndexOf(msg);
-            if (idx >= 0)
-                Messages[idx] = new ThinkingMessage(msg.Id, msg.Text, !msg.IsExpanded);
-        }
-        e.Handled = true;
-    }
-
-    private void ExecutionHeader_Click(object sender, MouseButtonEventArgs e)
-    {
-        if (sender is FrameworkElement fe && fe.Tag is ExecutionMessage msg)
-        {
-            var idx = Messages.IndexOf(msg);
-            if (idx >= 0)
-                Messages[idx] = new ExecutionMessage(msg.Id, msg.Tools, !msg.IsExpanded);
-        }
-        e.Handled = true;
-    }
-
-    private void BuildingExecutionHeader_Click(object sender, MouseButtonEventArgs e)
-    {
-        if (sender is FrameworkElement fe && fe.Tag is BuildingExecutionMessage msg)
+        if (sender is FrameworkElement fe && fe.Tag is ActivityMessage msg)
             msg.IsExpanded = !msg.IsExpanded;
         e.Handled = true;
     }
@@ -1230,6 +1233,12 @@ public partial class AiChatControl : UserControl
     private void OnScrollChanged(object sender, ScrollChangedEventArgs e)
     {
         var sv = (ScrollViewer)sender;
+        // ScrollChanged bubbles, so an activity bubble's inner scroller raises events
+        // that reach this outer handler too. Ignore those — the inner scroller manages
+        // its own sticky-bottom (see AutoScroll); reacting here would corrupt the
+        // outer follow state.
+        if (!ReferenceEquals(e.OriginalSource, sv)) return;
+
         if (e.ExtentHeightChange != 0)
         {
             // Content grew or shrank (a streaming delta, a new bubble). If we
@@ -1273,11 +1282,58 @@ public partial class AiChatControl : UserControl
 
     private void MessageList_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
     {
-        var sv = GetScrollViewer();
-        if (sv == null) return;
-        sv.ScrollToVerticalOffset(sv.VerticalOffset - e.Delta);
+        var outer = GetScrollViewer();
+        if (outer == null) return;
+
+        // If the pointer is over an activity bubble's inner scroller that can still
+        // scroll in the wheel direction, scroll it instead of the whole pane. (Preview
+        // tunnels top-down, so without this the outer handler would always win and the
+        // inner scroller would only be usable via its scrollbar.) When the inner scroller
+        // hits its edge, the wheel falls through to the outer pane.
+        var inner = FindInnerScrollViewer(e.OriginalSource as DependencyObject, outer);
+        if (inner != null && InnerCanScroll(inner, e.Delta))
+        {
+            inner.ScrollToVerticalOffset(inner.VerticalOffset - e.Delta);
+            e.Handled = true;
+            return;
+        }
+
+        outer.ScrollToVerticalOffset(outer.VerticalOffset - e.Delta);
         e.Handled = true;
     }
+
+    // Walks up from the wheel's target to find a ScrollViewer nested inside the outer
+    // pane (i.e. an activity bubble's inner scroller), or null if the target isn't
+    // inside one.
+    private static ScrollViewer? FindInnerScrollViewer(DependencyObject? origin, ScrollViewer outer)
+    {
+        var node = origin;
+        while (node != null && !ReferenceEquals(node, outer))
+        {
+            if (node is ScrollViewer sv)
+                return sv;
+            node = GetParentObject(node);
+        }
+        return null;
+    }
+
+    // Walks one step up the tree. The wheel target can be a text ContentElement
+    // (Run, Span, Paragraph) inside a bubble's FlowDocument — those aren't Visuals,
+    // so VisualTreeHelper.GetParent throws on them. Climb the logical tree for those
+    // until we re-enter the visual tree at the document's host control.
+    private static DependencyObject? GetParentObject(DependencyObject node)
+    {
+        if (node is FrameworkContentElement fce)
+            return fce.Parent;
+        if (node is ContentElement ce)
+            return LogicalTreeHelper.GetParent(ce);
+        return VisualTreeHelper.GetParent(node);
+    }
+
+    // True if the inner scroller has room to move in the wheel direction (delta > 0 is
+    // a scroll up). Reads live offsets, but only on wheel ticks — not the streaming path.
+    private static bool InnerCanScroll(ScrollViewer sv, int delta)
+        => delta > 0 ? sv.VerticalOffset > 0 : sv.VerticalOffset < sv.ScrollableHeight - 0.5;
 
     // --- Helpers ---
 
