@@ -46,6 +46,12 @@ public static partial class MarkdownHelper
     [GeneratedRegex(@"\G(?:\.[\\/])?(?:[A-Za-z]:[\\/])?(?:[\w.\-]+[\\/])+[\w\-.]+\.[A-Za-z][\w]*(?::\d+)?")]
     private static partial Regex PathCandidateRegex();
 
+    // Bare http/https URL. Stops at whitespace, quotes, brackets, and parens so the
+    // generated [url](url) markdown stays well-formed; trailing sentence punctuation
+    // is trimmed separately (see TrimUrlTrailing).
+    [GeneratedRegex(@"\Ghttps?://[^\s<>""'`()\[\]{}|\\^]+", RegexOptions.IgnoreCase)]
+    private static partial Regex UrlCandidateRegex();
+
     public const string FileLinkScheme = "agentdock-file";
     private const string FileLinkPrefix = "agentdock-file:///";
 
@@ -161,7 +167,7 @@ public static partial class MarkdownHelper
         using var _ = PerfDiagnostics.Time("MarkdownHelper.BuildDocument", thresholdMs: 80);
         try
         {
-            var linkified = string.IsNullOrEmpty(projectPath) ? markdown : LinkifyPaths(markdown, projectPath);
+            var linkified = LinkifyPaths(markdown, projectPath);
             var preProcessed = PreProcess(linkified);
 
             var tmp = new MarkdownScrollViewer { MarkdownStyle = markdownStyle };
@@ -169,12 +175,11 @@ public static partial class MarkdownHelper
             var doc = tmp.Document ?? new FlowDocument();
 
             ApplyCodeBlockTheme(doc);
-            if (onFileLinkClicked != null)
-                WireFileLinks(doc, onFileLinkClicked);
+            WireLinks(doc, onFileLinkClicked);
 
             // Replace FlowDocument tables with WPF Grids — see ConvertTablesToGrids.
-            // Runs AFTER WireFileLinks so any file-link Hyperlinks inside table cells
-            // keep their wired RequestNavigate handlers when moved into the Grid.
+            // Runs AFTER WireLinks so any Hyperlinks inside table cells keep their
+            // wired RequestNavigate handlers when moved into the Grid.
             ConvertTablesToGrids(doc);
 
             // Detach from the temp viewer so the document can be re-parented to a
@@ -187,6 +192,21 @@ public static partial class MarkdownHelper
         {
             PerfDiagnostics.MarkdownBuildDelta(-1);
         }
+    }
+
+    /// <summary>
+    /// Builds a minimal, render-safe <see cref="FlowDocument"/> containing <paramref name="text"/>
+    /// verbatim as a single plain-text paragraph. Used as a fallback when
+    /// <see cref="BuildDocument"/> throws, so a markdown-render bug degrades to readable
+    /// (if unformatted) text instead of re-throwing on every realize. Touches no PTS table
+    /// code and re-parents no inlines — the two paths that have caused render failures.
+    /// </summary>
+    public static FlowDocument BuildPlainTextFallback(string text, System.Windows.Style? markdownStyle)
+    {
+        var doc = new FlowDocument();
+        if (markdownStyle != null) doc.Style = markdownStyle;
+        doc.Blocks.Add(new Paragraph(new Run(text)));
+        return doc;
     }
 
     /// <summary>
@@ -302,7 +322,11 @@ public static partial class MarkdownHelper
     private static void PopulateCellTextBlock(TableCell cell, TextBlock tb)
     {
         var first = true;
-        foreach (var block in cell.Blocks)
+        // Snapshot first: moving a paragraph's inlines into the TextBlock mutates the
+        // FlowDocument's shared TextContainer (p.Inlines.Clear below), which bumps the
+        // generation that a live cell.Blocks enumerator validates against — otherwise the
+        // next iteration throws "Collection was modified". Same reason p.Inlines is ToList'd.
+        foreach (var block in cell.Blocks.ToList())
         {
             if (!first) tb.Inlines.Add(new LineBreak());
             first = false;
@@ -386,14 +410,16 @@ public static partial class MarkdownHelper
     }
 
     /// <summary>
-    /// Rewrites file-path references in <paramref name="markdown"/> as markdown links
-    /// using the <c>agentdock-file://</c> scheme. Only paths containing a directory
-    /// separator that resolve to an existing file (under <paramref name="projectRoot"/>
-    /// or absolute) are linked. Skips fenced code blocks and existing markdown links.
+    /// Rewrites references in <paramref name="markdown"/> as markdown links.
+    /// File-path references that resolve to an existing file (under
+    /// <paramref name="projectRoot"/> or absolute) become <c>agentdock-file://</c>
+    /// links; bare <c>http(s)</c> URLs become ordinary web links. Path linking is
+    /// skipped when <paramref name="projectRoot"/> is empty; URL linking always runs.
+    /// Skips fenced code blocks, inline code, and existing markdown links.
     /// </summary>
     public static string LinkifyPaths(string markdown, string projectRoot)
     {
-        if (string.IsNullOrEmpty(markdown) || string.IsNullOrEmpty(projectRoot))
+        if (string.IsNullOrEmpty(markdown))
             return markdown;
 
         var sb = new StringBuilder(markdown.Length + 64);
@@ -460,8 +486,27 @@ public static partial class MarkdownHelper
                 }
             }
 
+            // Bare http(s) URL at a boundary — wrap as [url](url) so MdXaml renders a
+            // real Hyperlink that WireLinks opens in the browser. [text](url) links are
+            // already skipped above, so this only catches raw URLs.
+            if ((i == 0 || IsPathBoundary(markdown[i - 1]))
+                && (markdown[i] == 'h' || markdown[i] == 'H'))
+            {
+                var urlMatch = UrlCandidateRegex().Match(markdown, i);
+                if (urlMatch.Success && urlMatch.Index == i)
+                {
+                    var url = TrimUrlTrailing(urlMatch.Value);
+                    if (url.Length > 0)
+                    {
+                        sb.Append('[').Append(EscapeLinkText(url)).Append("](").Append(url).Append(')');
+                        i += url.Length;
+                        continue;
+                    }
+                }
+            }
+
             // Try to match a path starting here. Previous char must be a non-path boundary.
-            if (i == 0 || IsPathBoundary(markdown[i - 1]))
+            if (!string.IsNullOrEmpty(projectRoot) && (i == 0 || IsPathBoundary(markdown[i - 1])))
             {
                 var match = PathCandidateRegex().Match(markdown, i);
                 if (match.Success && match.Index == i)
@@ -489,25 +534,71 @@ public static partial class MarkdownHelper
     }
 
     /// <summary>
-    /// Walks <paramref name="doc"/> for hyperlinks with the <c>agentdock-file://</c>
-    /// scheme and wires their navigation to <paramref name="onClick"/>, passing the
-    /// decoded absolute path.
+    /// Walks <paramref name="doc"/> and wires every hyperlink for clicking:
+    /// <c>agentdock-file://</c> links invoke <paramref name="onFileClick"/> with the
+    /// decoded absolute path (revealing the file in the preview); <c>http</c>/<c>https</c>/
+    /// <c>mailto</c> links open in the system browser. File links are wired only when
+    /// <paramref name="onFileClick"/> is supplied.
     /// </summary>
-    public static void WireFileLinks(FlowDocument? doc, Action<string> onClick)
+    public static void WireLinks(FlowDocument? doc, Action<string>? onFileClick)
     {
         if (doc == null) return;
         foreach (var link in EnumerateHyperlinks(doc))
         {
             if (link.NavigateUri == null) continue;
+
             var abs = FromFileLinkUri(link.NavigateUri.OriginalString);
-            if (abs == null) continue;
-            link.Cursor = Cursors.Hand;
-            link.RequestNavigate += (_, e) =>
+            if (abs != null)
             {
-                e.Handled = true;
-                onClick(abs);
-            };
+                if (onFileClick == null) continue;
+                link.Cursor = Cursors.Hand;
+                link.RequestNavigate += (_, e) =>
+                {
+                    e.Handled = true;
+                    onFileClick(abs);
+                };
+                continue;
+            }
+
+            var uri = link.NavigateUri;
+            if (uri.IsAbsoluteUri
+                && (uri.Scheme == Uri.UriSchemeHttp
+                    || uri.Scheme == Uri.UriSchemeHttps
+                    || uri.Scheme == Uri.UriSchemeMailto))
+            {
+                var target = uri.AbsoluteUri;
+                link.Cursor = Cursors.Hand;
+                link.RequestNavigate += (_, e) =>
+                {
+                    e.Handled = true;
+                    OpenInBrowser(target);
+                };
+            }
         }
+    }
+
+    private static void OpenInBrowser(string url)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Failed to open URL in browser: {url}", ex);
+        }
+    }
+
+    // Trims sentence punctuation that commonly trails a URL in prose (e.g. the period
+    // ending a sentence). Quotes, brackets, and parens are already excluded by the URL
+    // regex, so only these need stripping.
+    private static string TrimUrlTrailing(string url)
+    {
+        var end = url.Length;
+        while (end > 0 && ".,;:!?".IndexOf(url[end - 1]) >= 0)
+            end--;
+        return url.Substring(0, end);
     }
 
     private static bool IsFenceAt(string s, int i)
