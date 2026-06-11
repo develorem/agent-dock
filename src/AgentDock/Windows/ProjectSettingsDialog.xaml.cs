@@ -110,25 +110,7 @@ public partial class ProjectSettingsDialog : Window
 
     private void PopulateIconGrid(string? currentIcon)
     {
-        foreach (var icon in BuiltInIcons.All)
-        {
-            var glyph = new TextBlock
-            {
-                Text = icon.Glyph,
-                FontFamily = new FontFamily(icon.FontFamily),
-                FontSize = 20,
-                Foreground = (Brush)FindResource("HelpForeground"),
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-
-            var tile = CreateIconTile(glyph, icon.Name, icon.Label);
-
-            if (icon.Name.Equals(currentIcon, StringComparison.OrdinalIgnoreCase))
-                SelectIconTile(tile, icon.Name);
-
-            BuiltInPanel.Children.Add(tile);
-        }
+        RenderBuiltInIcons(null);
 
         // Discovered images
         var logos = MainWindow.FindAllProjectLogos(_projectFolder);
@@ -167,6 +149,54 @@ public partial class ProjectSettingsDialog : Window
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// (Re)builds the built-in icon tiles, optionally filtered by a search query.
+    /// Discovered images are left untouched. Preserves the current selection across re-filtering.
+    /// </summary>
+    private void RenderBuiltInIcons(string? query)
+    {
+        // The previously selected tile (if it's a built-in one) is about to be removed;
+        // drop the stale reference so a later selection doesn't try to un-highlight it.
+        if (_selectedIconTile != null && BuiltInPanel.Children.Contains(_selectedIconTile))
+            _selectedIconTile = null;
+
+        BuiltInPanel.Children.Clear();
+
+        var matches = BuiltInIcons.Search(query).ToList();
+
+        foreach (var icon in matches)
+        {
+            var glyph = new TextBlock
+            {
+                Text = icon.Glyph,
+                FontFamily = new FontFamily(icon.FontFamily),
+                FontSize = 20,
+                Foreground = (Brush)FindResource("HelpForeground"),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            var tile = CreateIconTile(glyph, icon.Name, icon.Label);
+
+            if (icon.Name.Equals(_selectedIcon, StringComparison.OrdinalIgnoreCase))
+                SelectIconTile(tile, icon.Name);
+
+            BuiltInPanel.Children.Add(tile);
+        }
+
+        if (NoIconsLabel != null)
+            NoIconsLabel.Visibility = matches.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void IconSearch_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        IconSearchWatermark.Visibility = string.IsNullOrEmpty(IconSearchBox.Text)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+        RenderBuiltInIcons(IconSearchBox.Text);
     }
 
     private Border CreateIconTile(UIElement content, string iconValue, string tooltip)
@@ -396,10 +426,20 @@ public partial class ProjectSettingsDialog : Window
 
     private void ChangeIcon_Click(object sender, RoutedEventArgs e)
     {
-        IconGridSection.Visibility = IconGridSection.Visibility == Visibility.Visible
-            ? Visibility.Collapsed
-            : Visibility.Visible;
+        var show = IconGridSection.Visibility != Visibility.Visible;
+        IconGridSection.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+
+        if (show)
+        {
+            IconSearchBox.SelectAll();
+            IconSearchBox.Focus();
+        }
     }
+
+    // Closes the icon picker without changing the current selection. Gives a reachable
+    // exit while the expanded grid pushes the dialog's OK/Cancel below the window.
+    private void CancelIconPicker_Click(object sender, RoutedEventArgs e)
+        => IconGridSection.Visibility = Visibility.Collapsed;
 
     private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         => DragMove();

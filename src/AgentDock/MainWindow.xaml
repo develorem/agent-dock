@@ -321,6 +321,7 @@
                 <DockPanel x:Name="ToolbarOuterPanel" LastChildFill="True">
                     <!-- Meta tab strip (groups). Hidden until 2+ groups exist. -->
                     <Border x:Name="MetaTabBorder" DockPanel.Dock="Top"
+                            Background="{DynamicResource GroupBarBackground}"
                             BorderBrush="{DynamicResource ToolbarBorderBrush}"
                             BorderThickness="0,0,0,1"
                             Visibility="Collapsed">

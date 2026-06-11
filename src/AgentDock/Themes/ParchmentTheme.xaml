@@ -14,6 +14,10 @@
     <SolidColorBrush x:Key="TabButtonActiveBorderBrush" Color="#B89030" />
     <SolidColorBrush x:Key="TabButtonInactiveBackground" Color="Transparent" />
 
+    <!-- Group (meta) tab bar — a separate strip above the project tabs -->
+    <SolidColorBrush x:Key="GroupBarBackground" Color="#E2D8C8" />
+    <SolidColorBrush x:Key="GroupTabActiveBackground" Color="#F7F1E6" />
+
     <!-- Taskbar icon accent bar -->
     <SolidColorBrush x:Key="TaskbarAccentColor" Color="#E8DCA0" />
 

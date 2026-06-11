@@ -55,6 +55,10 @@ public static partial class MarkdownHelper
     public const string FileLinkScheme = "agentdock-file";
     private const string FileLinkPrefix = "agentdock-file:///";
 
+    // Matches the code font used by chat/preview code spans (see MarkdownStyles.xaml),
+    // applied to file-reference Hyperlinks so linkified paths keep their monospace look.
+    private static readonly FontFamily CodeFontFamily = new("Cascadia Code, Consolas, Courier New");
+
     /// <summary>
     /// Pre-processes markdown to fix patterns that MdXaml cannot parse.
     /// MdXaml parses links before bold/italic, so <c>**[text](url)**</c> leaves
@@ -475,7 +479,12 @@ public static partial class MarkdownHelper
                     var inner = markdown.Substring(i + 1, endTick - i - 1);
                     if (TryResolvePath(inner.Trim(), projectRoot, out var abs))
                     {
-                        sb.Append('[').Append('`').Append(inner).Append('`').Append("](")
+                        // Emit a plain link, NOT [`inner`](url). MdXaml runs its code-span
+                        // parser before its anchor parser, so a code span inside a link
+                        // label is consumed first and the surrounding []() renders as
+                        // literal text. We drop the backticks here and restore the
+                        // monospace look on the resulting Hyperlink in WireLinks instead.
+                        sb.Append('[').Append(EscapeLinkText(inner)).Append("](")
                             .Append(ToFileLinkUri(abs)).Append(')');
                         i = endTick + 1;
                         continue;
@@ -551,6 +560,10 @@ public static partial class MarkdownHelper
             if (abs != null)
             {
                 if (onFileClick == null) continue;
+                // These labels were stripped of their backtick code span in LinkifyPaths
+                // (MdXaml can't render a code span inside a link), so restore the
+                // monospace look here — file references read as code.
+                link.FontFamily = CodeFontFamily;
                 link.Cursor = Cursors.Hand;
                 link.RequestNavigate += (_, e) =>
                 {
@@ -607,8 +620,23 @@ public static partial class MarkdownHelper
     private static bool IsPathBoundary(char c)
         => !(char.IsLetterOrDigit(c) || c == '_' || c == '/' || c == '\\');
 
+    // Backslash-escapes the markdown-active characters that would otherwise be
+    // re-parsed inside a link label: the structural \ and ], plus the emphasis
+    // delimiters _ * ~. Without this, a path like permission_groups italicizes
+    // ("permission" .. "groups" with the underscores eaten) and a *-containing
+    // segment turns bold. MdXaml's text handler honors backslash escapes for
+    // exactly this set (see DoTextDecorations), so the displayed text stays literal.
     private static string EscapeLinkText(string text)
-        => text.Replace("\\", "\\\\").Replace("]", "\\]");
+    {
+        var sb = new StringBuilder(text.Length + 8);
+        foreach (var c in text)
+        {
+            if (c is '\\' or ']' or '_' or '*' or '~')
+                sb.Append('\\');
+            sb.Append(c);
+        }
+        return sb.ToString();
+    }
 
     private static string ToFileLinkUri(string absolutePath)
         => FileLinkPrefix + Uri.EscapeDataString(absolutePath);

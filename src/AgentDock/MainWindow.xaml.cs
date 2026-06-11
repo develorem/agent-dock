@@ -1539,6 +1539,9 @@ public partial class MainWindow : Window
         foreach (var group in _groups.OrderBy(g => g.Order))
             MetaTabPanel.Children.Add(CreateMetaTabElement(group));
 
+        // Trailing "+" to create a new empty group (mirrors the project-tab add button).
+        MetaTabPanel.Children.Add(CreateMetaTabAddButton());
+
         // Apply the aggregate child indicator to each freshly-built group diamond.
         foreach (var group in _groups)
             RefreshGroupIndicator(group.Id);
@@ -1621,7 +1624,7 @@ public partial class MainWindow : Window
             Margin = new Thickness(0),
             Padding = new Thickness(12, 0, 12, 0),
             Background = isActive
-                ? ThemeManager.GetBrush("TabButtonActiveBackground")
+                ? ThemeManager.GetBrush("GroupTabActiveBackground")
                 : ThemeManager.GetBrush("TabButtonInactiveBackground"),
             BorderBrush = isActive
                 ? ThemeManager.GetBrush("TabButtonActiveBorderBrush")
@@ -1716,7 +1719,7 @@ public partial class MainWindow : Window
         button.DragLeave += (_, _) =>
         {
             if (group.Id == _activeGroupId)
-                button.Background = ThemeManager.GetBrush("TabButtonActiveBackground");
+                button.Background = ThemeManager.GetBrush("GroupTabActiveBackground");
             else
                 button.Background = ThemeManager.GetBrush("TabButtonInactiveBackground");
         };
@@ -1724,7 +1727,7 @@ public partial class MainWindow : Window
         {
             // Reset hover-tinted background regardless of outcome
             button.Background = group.Id == _activeGroupId
-                ? ThemeManager.GetBrush("TabButtonActiveBackground")
+                ? ThemeManager.GetBrush("GroupTabActiveBackground")
                 : ThemeManager.GetBrush("TabButtonInactiveBackground");
 
             if (e.Data.GetData("ProjectTab") is ProjectInfo dropped)
@@ -1733,6 +1736,63 @@ public partial class MainWindow : Window
                 e.Handled = true;
             }
             // GroupTab drops bubble to MetaTabPanel_Drop for reordering.
+        };
+
+        return button;
+    }
+
+    /// <summary>
+    /// Builds the trailing "+" button on the meta tab strip that creates a new empty
+    /// group. Visual language matches the project-tab add button (<see cref="CreateToolbarAddButton"/>).
+    /// </summary>
+    private Button CreateMetaTabAddButton()
+    {
+        // Custom template: border only, no default button chrome.
+        var template = new ControlTemplate(typeof(Button));
+        var borderFactory = new FrameworkElementFactory(typeof(Border), "Bd");
+        borderFactory.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(BackgroundProperty));
+        borderFactory.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(BorderBrushProperty));
+        borderFactory.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(BorderThicknessProperty));
+        borderFactory.SetValue(Border.CornerRadiusProperty, new CornerRadius(3));
+        borderFactory.SetValue(Border.PaddingProperty, new TemplateBindingExtension(PaddingProperty));
+        var contentPresenter = new FrameworkElementFactory(typeof(ContentPresenter));
+        contentPresenter.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+        contentPresenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+        borderFactory.AppendChild(contentPresenter);
+        template.VisualTree = borderFactory;
+
+        var button = new Button
+        {
+            Width = 32,
+            Height = 32,
+            Margin = new Thickness(6, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Background = Brushes.Transparent,
+            BorderBrush = ThemeManager.GetBrush("AddButtonBorderBrush"),
+            BorderThickness = new Thickness(1),
+            Cursor = Cursors.Hand,
+            ToolTip = "Add Group",
+            Template = template,
+            Content = new TextBlock
+            {
+                Text = "+",
+                FontSize = 18,
+                FontWeight = FontWeights.Light,
+                Foreground = ThemeManager.GetBrush("AddButtonForeground"),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            }
+        };
+
+        button.Click += (_, _) => AddNewEmptyGroup();
+
+        button.MouseEnter += (_, _) =>
+        {
+            button.BorderBrush = ThemeManager.GetBrush("TabButtonHoverBorderBrush");
+        };
+        button.MouseLeave += (_, _) =>
+        {
+            button.BorderBrush = ThemeManager.GetBrush("AddButtonBorderBrush");
         };
 
         return button;
@@ -1834,10 +1894,17 @@ public partial class MainWindow : Window
         RefreshMetaTabBar();
         RefreshProjectTabVisibility();
 
-        // If the active project isn't in the new group, switch to one that is
+        // If the active project isn't in the new group, switch to one that is.
+        // Prefer the project most in need of attention, matching the priority the
+        // group diamond already shows (Error > Question > NewResponse > Idle >
+        // Working > Inactive). OrderByDescending is stable, so ties fall back to
+        // the first project in the group.
         if (_activeProject == null || _activeProject.GroupId != groupId)
         {
-            var firstInGroup = _projects.FirstOrDefault(p => p.GroupId == groupId);
+            var firstInGroup = _projects
+                .Where(p => p.GroupId == groupId)
+                .OrderByDescending(GetProjectIndicator)
+                .FirstOrDefault();
             if (firstInGroup != null)
                 SwitchToProject(firstInGroup);
             else

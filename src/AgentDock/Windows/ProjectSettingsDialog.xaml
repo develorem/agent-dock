@@ -70,12 +70,43 @@
             <Border Grid.Row="0"
                     Background="{DynamicResource TitleBarBackground}"
                     CornerRadius="4,4,0,0"
-                    Padding="12,8"
                     MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
-                <TextBlock Text="Project Settings"
-                           FontSize="12"
-                           FontWeight="SemiBold"
-                           Foreground="{DynamicResource TitleBarForeground}" />
+                <Grid>
+                    <TextBlock Text="Project Settings"
+                               FontSize="12"
+                               FontWeight="SemiBold"
+                               VerticalAlignment="Center"
+                               Margin="12,8"
+                               Foreground="{DynamicResource TitleBarForeground}" />
+                    <!-- Always-visible close (acts as Cancel), reachable even with the icon grid open -->
+                    <Button HorizontalAlignment="Right"
+                            VerticalAlignment="Stretch"
+                            Width="42"
+                            Cursor="Hand"
+                            ToolTip="Close (Cancel)"
+                            Foreground="{DynamicResource TitleBarForeground}"
+                            Click="CancelButton_Click">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="Bd" Background="Transparent" CornerRadius="0,4,0,0">
+                                    <TextBlock x:Name="Glyph"
+                                               Text="&#xE8BB;"
+                                               FontFamily="Segoe MDL2 Assets"
+                                               FontSize="10"
+                                               HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"
+                                               Foreground="{TemplateBinding Foreground}" />
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="Bd" Property="Background" Value="#E81123" />
+                                        <Setter TargetName="Glyph" Property="Foreground" Value="White" />
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+                </Grid>
             </Border>
 
             <!-- Project Name -->
@@ -137,15 +168,57 @@
             <!-- Icon grid (collapsed by default) -->
             <StackPanel x:Name="IconGridSection" Grid.Row="3" Margin="16,8,16,4"
                         Visibility="Collapsed">
+                <Grid Margin="0,0,0,6">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="IconSearchBox"
+                             Grid.Column="0"
+                             FontSize="12"
+                             Height="26"
+                             VerticalContentAlignment="Center"
+                             Foreground="{DynamicResource HelpForeground}"
+                             Background="{DynamicResource HelpCardBackground}"
+                             BorderBrush="{DynamicResource HelpCardBorderBrush}"
+                             BorderThickness="1"
+                             Padding="6,0"
+                             TextChanged="IconSearch_TextChanged" />
+                    <TextBlock x:Name="IconSearchWatermark"
+                               Grid.Column="0"
+                               Text="Search icons…"
+                               FontSize="12"
+                               IsHitTestVisible="False"
+                               VerticalAlignment="Center"
+                               Margin="8,0,0,0"
+                               Opacity="0.5"
+                               Foreground="{DynamicResource HelpForeground}" />
+                    <Button x:Name="IconPickerCancelButton"
+                            Grid.Column="1"
+                            Content="Cancel"
+                            Style="{StaticResource DialogButton}"
+                            Height="26"
+                            MinWidth="64"
+                            Margin="6,0,0,0"
+                            ToolTip="Close icon picker"
+                            Click="CancelIconPicker_Click" />
+                </Grid>
                 <ScrollViewer MaxHeight="200"
                               VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled">
                     <StackPanel>
-                        <TextBlock Text="Built-in"
+                        <TextBlock x:Name="BuiltInHeader"
+                                   Text="Built-in"
                                    FontSize="11"
                                    Foreground="{DynamicResource HelpForeground}"
                                    Margin="0,0,0,4" />
                         <WrapPanel x:Name="BuiltInPanel" />
+                        <TextBlock x:Name="NoIconsLabel"
+                                   Text="No matching icons"
+                                   FontSize="11"
+                                   Visibility="Collapsed"
+                                   Foreground="{DynamicResource HelpForeground}"
+                                   Margin="2,4,0,4" />
                         <StackPanel x:Name="DiscoveredSection" Visibility="Collapsed" Margin="0,8,0,0">
                             <TextBlock Text="Discovered"
                                        FontSize="11"
