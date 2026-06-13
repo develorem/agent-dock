@@ -334,6 +334,19 @@
                             Style="{StaticResource ChatButtonStyle}"
                             Width="60" Height="28"
                             Margin="6,0,0,0" />
+                    <Button x:Name="ScheduleButton"
+                            Click="ScheduleButton_Click"
+                            DockPanel.Dock="Right"
+                            VerticalAlignment="Bottom"
+                            Style="{StaticResource ChatButtonStyle}"
+                            Width="32" Height="28"
+                            Margin="6,0,0,0"
+                            ToolTip="Schedule this message to send later">
+                        <TextBlock x:Name="ScheduleIcon"
+                                   Text="&#xE823;"
+                                   FontFamily="Segoe MDL2 Assets"
+                                   FontSize="14" />
+                    </Button>
                     <Popup x:Name="SlashCommandPopup"
                            PlacementTarget="{Binding ElementName=InputBox}"
                            Placement="Top"

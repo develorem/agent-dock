@@ -10,6 +10,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using AgentDock.Models;
 using AgentDock.Services;
+using AgentDock.Windows;
 using MdXaml;
 
 namespace AgentDock.Controls;
@@ -61,6 +62,17 @@ public partial class AiChatControl : UserControl
 
     // Pending AskUserQuestion — tracks question text for response.
     private string? _pendingQuestionText;
+
+    // --- Scheduled message ---
+    // When the user schedules a message, its text is parked here and a per-second
+    // timer counts down to _scheduleFireTimeUtc. While a message is scheduled the
+    // input is disabled (the message is "owned" by the schedule) but the clock
+    // button stays live so the user can view the countdown or cancel. At fire time
+    // the message is dispatched as soon as the session is idle.
+    private DispatcherTimer? _scheduleTimer;
+    private string? _scheduledMessageText;
+    private DateTime _scheduleFireTimeUtc;
+    private bool IsScheduled => _scheduledMessageText != null;
 
     // Last user message timestamp, for the inactivity warning's elapsed text.
     private DateTime _lastMessageSentTime;
@@ -161,6 +173,8 @@ public partial class AiChatControl : UserControl
 
     public void Shutdown()
     {
+        _scheduleTimer?.Stop();
+        _scheduleTimer = null;
         _session?.Dispose();
         _session = null;
         _processor = null;
@@ -438,10 +452,15 @@ public partial class AiChatControl : UserControl
         // draft follow-up notes; only the Send button is gated on Idle.
         // SendCurrentMessage re-checks the session state, so an Enter press can't
         // actually dispatch a message mid-turn.
-        SendButton.IsEnabled = canSend;
+        UpdateSendButtonEnabled();
 
-        if (canSend)
+        if (canSend && !IsScheduled)
             FocusInput();
+
+        // If a scheduled message is past its fire time and we've just become idle,
+        // send it now.
+        if (canSend)
+            MaybeDispatchSchedule();
 
         SessionStateChanged?.Invoke(state);
     }
@@ -489,6 +508,7 @@ public partial class AiChatControl : UserControl
         RemoveWaitingBubble();
         RemoveInactivityWarning();
         FinalizeActivity(null);
+        EndSchedule(restoreDraft: null);
 
         var session = _session;
         _session = null;
@@ -669,6 +689,121 @@ public partial class AiChatControl : UserControl
         AddUserMessage(text);
         ShowWaitingBubble();
         _session.SendMessage(text);
+    }
+
+    // --- Scheduled Messages ---
+
+    // Keeps the Send button disabled both mid-turn and whenever a message is
+    // scheduled (the input is "locked" by the pending send).
+    private void UpdateSendButtonEnabled()
+        => SendButton.IsEnabled = _session?.State == ClaudeSessionState.Idle && !IsScheduled;
+
+    // Clock button. With no message scheduled it opens the compose dialog for the
+    // current draft; while one is scheduled it opens the manage dialog (countdown +
+    // cancel), which stays clickable even though the input is disabled.
+    private void ScheduleButton_Click(object sender, RoutedEventArgs e)
+    {
+        var owner = Window.GetWindow(this)!;
+
+        if (IsScheduled)
+        {
+            if (ScheduleMessageDialog.ShowManage(owner, _scheduledMessageText!, _scheduleFireTimeUtc))
+                CancelSchedule();
+            return;
+        }
+
+        // Local commands are handled immediately, never sent to Claude, so there's
+        // nothing to schedule. Keep the clock for real prompts only.
+        var text = InputBox.Text.Trim();
+        if (string.IsNullOrEmpty(text))
+        {
+            FocusInput();
+            return;
+        }
+
+        var delay = ScheduleMessageDialog.ShowCompose(owner, text);
+        if (delay.HasValue)
+            BeginSchedule(text, delay.Value);
+    }
+
+    private void BeginSchedule(string text, TimeSpan delay)
+    {
+        _scheduledMessageText = text;
+        _scheduleFireTimeUtc = DateTime.UtcNow + delay;
+
+        // The message is now owned by the schedule — clear the draft and lock input.
+        InputBox.Text = "";
+        InputBorder.IsEnabled = false;
+        UpdateSendButtonEnabled();
+        UpdateScheduleButtonVisual();
+
+        _scheduleTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromSeconds(1)
+        };
+        _scheduleTimer.Tick += (_, _) => MaybeDispatchSchedule();
+        _scheduleTimer.Start();
+
+        AddSystemMessage($"Message scheduled for {_scheduleFireTimeUtc.ToLocalTime():t}.");
+    }
+
+    // Fires the scheduled message once its time has come and the session is idle.
+    // The per-second timer keeps retrying if the session is busy at fire time;
+    // OnStateChanged also calls this the moment we return to Idle.
+    private void MaybeDispatchSchedule()
+    {
+        if (!IsScheduled) return;
+        if (DateTime.UtcNow < _scheduleFireTimeUtc) return;
+        if (_session == null || _session.State != ClaudeSessionState.Idle) return;
+
+        var text = _scheduledMessageText!;
+        EndSchedule(restoreDraft: null);
+
+        // Route through the normal send path so a scheduled slash command (e.g.
+        // /compact) or prompt behaves exactly like one typed by hand.
+        InputBox.Text = text;
+        SendCurrentMessage();
+    }
+
+    // User cancelled a pending send — return the message to the draft box so it can
+    // be edited or sent normally.
+    private void CancelSchedule()
+    {
+        var text = _scheduledMessageText;
+        EndSchedule(restoreDraft: text);
+        AddSystemMessage("Scheduled message cancelled.");
+        FocusInput();
+    }
+
+    // Tears down the schedule (timer + state) and unlocks the input. When
+    // <paramref name="restoreDraft"/> is non-null its text is put back in the box.
+    private void EndSchedule(string? restoreDraft)
+    {
+        _scheduleTimer?.Stop();
+        _scheduleTimer = null;
+        _scheduledMessageText = null;
+
+        InputBorder.IsEnabled = true;
+        if (restoreDraft != null)
+            InputBox.Text = restoreDraft;
+        UpdateSendButtonEnabled();
+        UpdateScheduleButtonVisual();
+    }
+
+    // Tints the clock glyph while a message is scheduled so the locked state reads
+    // at a glance, and points the tooltip at the manage dialog.
+    private void UpdateScheduleButtonVisual()
+    {
+        if (IsScheduled)
+        {
+            ScheduleIcon.Foreground = ThemeManager.GetBrush("ChatStatusWarningForeground");
+            ScheduleButton.ToolTip = "Message scheduled — click to view the countdown or cancel";
+        }
+        else
+        {
+            ScheduleIcon.Foreground = ThemeManager.GetBrush("ChatButtonForeground");
+            ScheduleButton.ToolTip = "Schedule this message to send later";
+        }
     }
 
     /// <summary>
