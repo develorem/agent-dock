@@ -1,28 +1,24 @@
-using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using AgentDock.Models;
 using AgentDock.Services;
 
 namespace AgentDock.Windows;
 
-public partial class ProjectSettingsDialog : Window
+public partial class GroupSettingsDialog : Window
 {
     private string? _selectedIcon;
     private string? _selectedIconColor;
-    private string? _selectedDescription;
     private Border? _selectedIconTile;
     private Border? _selectedFgSwatch;
-    private readonly string _projectFolder;
 
     /// <summary>
-    /// The resulting settings if the user clicks OK, or null if cancelled.
+    /// The chosen group name, icon and icon colour, or null if the user cancelled.
     /// </summary>
-    public ProjectSettings? Result { get; private set; }
+    public GroupSettingsResult? Result { get; private set; }
 
     private static readonly string?[] ColorPresets =
     [
@@ -40,124 +36,40 @@ public partial class ProjectSettingsDialog : Window
         "#BDC3C7",   // light
     ];
 
-    private ProjectSettingsDialog(string projectFolder, ProjectSettings settings)
+    private GroupSettingsDialog(ProjectGroup group)
     {
-        _projectFolder = projectFolder;
-        _selectedIcon = settings.Icon ?? "folder";
-        _selectedIconColor = settings.IconColor;
-        _selectedDescription = settings.Description;
+        _selectedIcon = group.Icon ?? "folder";
+        _selectedIconColor = group.IconColor;
 
         InitializeComponent();
 
-        NameTextBox.Text = settings.Name ?? "";
-        var folderName = System.IO.Path.GetFileName(projectFolder) ?? projectFolder;
-        NameHintText.Text = $"Leave blank to use folder name: {folderName}";
+        NameTextBox.Text = group.Name;
 
-        DescriptionTextBox.Text = _selectedDescription ?? "";
-        SoundOnStartCheckBox.IsChecked = settings.SoundOnSessionStart;
-        SoundOnWaitingCheckBox.IsChecked = settings.SoundOnAgentWaiting;
-        SoundOnEndCheckBox.IsChecked = settings.SoundOnSessionEnd;
-        SoundOnStartCheckBox.Checked += SoundCheckBox_Changed;
-        SoundOnStartCheckBox.Unchecked += SoundCheckBox_Changed;
-        SoundOnWaitingCheckBox.Checked += SoundCheckBox_Changed;
-        SoundOnWaitingCheckBox.Unchecked += SoundCheckBox_Changed;
-        SoundOnEndCheckBox.Checked += SoundCheckBox_Changed;
-        SoundOnEndCheckBox.Unchecked += SoundCheckBox_Changed;
-        UpdateSoundsSummary();
-
-        PopulateIconGrid(settings.Icon);
+        PopulateIconGrid(group.Icon);
         PopulateSwatches();
         UpdatePreview();
     }
 
-    private void ConfigureSounds_Click(object sender, RoutedEventArgs e)
-    {
-        SoundsSection.Visibility = SoundsSection.Visibility == Visibility.Visible
-            ? Visibility.Collapsed
-            : Visibility.Visible;
-    }
-
-    private void SoundCheckBox_Changed(object sender, RoutedEventArgs e) => UpdateSoundsSummary();
-
-    private void UpdateSoundsSummary()
-    {
-        var on = new[]
-        {
-            SoundOnStartCheckBox.IsChecked == true,
-            SoundOnWaitingCheckBox.IsChecked == true,
-            SoundOnEndCheckBox.IsChecked == true,
-        }.Count(x => x);
-
-        SoundsSummaryLabel.Text = on switch
-        {
-            3 => "All enabled",
-            0 => "All disabled",
-            _ => $"{on} of 3 enabled",
-        };
-    }
-
     /// <summary>
-    /// Shows the Project Settings dialog. Returns the updated ProjectSettings if OK, or null if cancelled.
+    /// Shows the Group Settings dialog. Returns the chosen settings if OK, or null if cancelled.
     /// </summary>
-    public static ProjectSettings? Show(Window owner, string projectFolder)
+    public static GroupSettingsResult? Show(Window owner, ProjectGroup group)
     {
-        var settings = ProjectSettingsManager.Load(projectFolder);
-        var dialog = new ProjectSettingsDialog(projectFolder, settings) { Owner = owner };
+        var dialog = new GroupSettingsDialog(group) { Owner = owner };
         return dialog.ShowDialog() == true ? dialog.Result : null;
     }
 
-    // --- Icon Grid ---
+    // --- Icon Grid (built-in only — groups have no folder to discover images from) ---
 
-    private void PopulateIconGrid(string? currentIcon)
-    {
-        RenderBuiltInIcons(null);
-
-        // Discovered images
-        var logos = MainWindow.FindAllProjectLogos(_projectFolder);
-        if (logos.Count > 0)
-        {
-            DiscoveredSection.Visibility = Visibility.Visible;
-
-            foreach (var logoPath in logos)
-            {
-                try
-                {
-                    var bitmap = new BitmapImage(new Uri(logoPath));
-                    var img = new Image
-                    {
-                        Source = bitmap,
-                        Width = 24,
-                        Height = 24,
-                        Stretch = Stretch.Uniform
-                    };
-                    RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
-
-                    var iconValue = logoPath.StartsWith(_projectFolder, StringComparison.OrdinalIgnoreCase)
-                        ? System.IO.Path.GetRelativePath(_projectFolder, logoPath)
-                        : logoPath;
-
-                    var tile = CreateIconTile(img, iconValue, System.IO.Path.GetFileName(logoPath));
-
-                    if (string.Equals(iconValue, currentIcon, StringComparison.OrdinalIgnoreCase))
-                        SelectIconTile(tile, iconValue);
-
-                    DiscoveredPanel.Children.Add(tile);
-                }
-                catch
-                {
-                    // Skip images that fail to load
-                }
-            }
-        }
-    }
+    private void PopulateIconGrid(string? currentIcon) => RenderBuiltInIcons(null);
 
     /// <summary>
     /// (Re)builds the built-in icon tiles, optionally filtered by a search query.
-    /// Discovered images are left untouched. Preserves the current selection across re-filtering.
+    /// Preserves the current selection across re-filtering.
     /// </summary>
     private void RenderBuiltInIcons(string? query)
     {
-        // The previously selected tile (if it's a built-in one) is about to be removed;
+        // The previously selected tile is about to be removed from the panel;
         // drop the stale reference so a later selection doesn't try to un-highlight it.
         if (_selectedIconTile != null && BuiltInPanel.Children.Contains(_selectedIconTile))
             _selectedIconTile = null;
@@ -220,7 +132,6 @@ public partial class ProjectSettingsDialog : Window
         {
             SelectIconTile(tile, iconValue);
             UpdatePreview();
-            // Collapse the grid after selection
             IconGridSection.Visibility = Visibility.Collapsed;
         };
 
@@ -277,7 +188,6 @@ public partial class ProjectSettingsDialog : Window
 
         if (color == null)
         {
-            // "Default" swatch — dotted border circle with no fill
             content = new Ellipse
             {
                 Width = size - 4,
@@ -356,70 +266,22 @@ public partial class ProjectSettingsDialog : Window
     private void UpdatePreview()
     {
         var icon = _selectedIcon ?? "folder";
+        var builtIn = BuiltInIcons.Find(icon) ?? BuiltInIcons.Default;
 
-        var builtIn = BuiltInIcons.Find(icon);
-        if (builtIn != null)
-        {
-            var foreground = _selectedIconColor != null
-                ? ParseHexBrush(_selectedIconColor) ?? (Brush)FindResource("HelpForeground")
-                : (Brush)FindResource("HelpForeground");
+        var foreground = _selectedIconColor != null
+            ? ParseHexBrush(_selectedIconColor) ?? (Brush)FindResource("HelpForeground")
+            : (Brush)FindResource("HelpForeground");
 
-            IconPreviewHost.Child = new TextBlock
-            {
-                Text = builtIn.Glyph,
-                FontFamily = new FontFamily(builtIn.FontFamily),
-                FontSize = 24,
-                Foreground = foreground,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            IconPreviewLabel.Text = builtIn.Label;
-        }
-        else
-        {
-            // File-based icon
-            var filePath = System.IO.Path.IsPathRooted(icon)
-                ? icon
-                : System.IO.Path.Combine(_projectFolder, icon);
-
-            if (File.Exists(filePath))
-            {
-                try
-                {
-                    var img = new Image
-                    {
-                        Source = new BitmapImage(new Uri(filePath)),
-                        Stretch = Stretch.Uniform
-                    };
-                    RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
-                    IconPreviewHost.Child = img;
-                    IconPreviewLabel.Text = System.IO.Path.GetFileName(filePath);
-                }
-                catch
-                {
-                    SetFallbackPreview();
-                }
-            }
-            else
-            {
-                SetFallbackPreview();
-            }
-        }
-    }
-
-    private void SetFallbackPreview()
-    {
-        var fallback = BuiltInIcons.Default;
         IconPreviewHost.Child = new TextBlock
         {
-            Text = fallback.Glyph,
-            FontFamily = new FontFamily(fallback.FontFamily),
+            Text = builtIn.Glyph,
+            FontFamily = new FontFamily(builtIn.FontFamily),
             FontSize = 24,
-            Foreground = (Brush)FindResource("HelpForeground"),
+            Foreground = foreground,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center
         };
-        IconPreviewLabel.Text = fallback.Label;
+        IconPreviewLabel.Text = builtIn.Label;
     }
 
     // --- Event Handlers ---
@@ -446,22 +308,12 @@ public partial class ProjectSettingsDialog : Window
 
     private void OkButton_Click(object sender, RoutedEventArgs e)
     {
-        var folderName = System.IO.Path.GetFileName(_projectFolder) ?? _projectFolder;
         var typedName = NameTextBox.Text?.Trim();
-        // Treat blank or a name matching the folder as "no override"
-        var name = string.IsNullOrWhiteSpace(typedName) || string.Equals(typedName, folderName, StringComparison.Ordinal)
-            ? null
-            : typedName;
-
-        Result = new ProjectSettings
+        Result = new GroupSettingsResult
         {
-            Name = name,
+            Name = string.IsNullOrWhiteSpace(typedName) ? null : typedName,
             Icon = _selectedIcon,
             IconColor = _selectedIconColor,
-            Description = string.IsNullOrWhiteSpace(DescriptionTextBox.Text) ? null : DescriptionTextBox.Text.Trim(),
-            SoundOnSessionStart = SoundOnStartCheckBox.IsChecked == true,
-            SoundOnAgentWaiting = SoundOnWaitingCheckBox.IsChecked == true,
-            SoundOnSessionEnd = SoundOnEndCheckBox.IsChecked == true,
         };
         DialogResult = true;
     }
@@ -483,4 +335,15 @@ public partial class ProjectSettingsDialog : Window
             return null;
         }
     }
+}
+
+/// <summary>
+/// Result of the <see cref="GroupSettingsDialog"/>. <see cref="Name"/> is null when the
+/// user cleared the field (the caller keeps the existing name in that case).
+/// </summary>
+public class GroupSettingsResult
+{
+    public string? Name { get; init; }
+    public string? Icon { get; init; }
+    public string? IconColor { get; init; }
 }

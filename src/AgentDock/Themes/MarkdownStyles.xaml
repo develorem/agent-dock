@@ -89,6 +89,11 @@
             <Style TargetType="Hyperlink">
                 <Setter Property="TextDecorations" Value="None" />
                 <Setter Property="Foreground" Value="{DynamicResource MarkdownLinkForeground}" />
+                <Style.Triggers>
+                    <Trigger Property="IsMouseOver" Value="True">
+                        <Setter Property="TextDecorations" Value="Underline" />
+                    </Trigger>
+                </Style.Triggers>
             </Style>
 
             <!-- Images -->

@@ -136,6 +136,11 @@ public class GitService
 
     private string? RunGit(string arguments)
     {
+        // Instrumentation: these calls are synchronous (Process + WaitForExit) and
+        // today run on the UI thread via GitStatusControl.RefreshStatus, so a slow
+        // git is a direct UI stall. PerfDiagnostics logs the duration + thread.
+        var start = Stopwatch.GetTimestamp();
+        PerfDiagnostics.GitOpStart();
         try
         {
             var psi = new ProcessStartInfo
@@ -162,10 +167,17 @@ public class GitService
         {
             return null;
         }
+        finally
+        {
+            PerfDiagnostics.GitOpEnd(arguments, Stopwatch.GetElapsedTime(start).TotalMilliseconds,
+                System.Threading.Thread.CurrentThread.ManagedThreadId);
+        }
     }
 
     private (bool Success, string Message) RunGitCommand(string arguments)
     {
+        var start = Stopwatch.GetTimestamp();
+        PerfDiagnostics.GitOpStart();
         try
         {
             var psi = new ProcessStartInfo
@@ -193,6 +205,11 @@ public class GitService
         catch (Exception ex)
         {
             return (false, ex.Message);
+        }
+        finally
+        {
+            PerfDiagnostics.GitOpEnd(arguments, Stopwatch.GetElapsedTime(start).TotalMilliseconds,
+                System.Threading.Thread.CurrentThread.ManagedThreadId);
         }
     }
 }

@@ -59,12 +59,29 @@ public static class Log
     {
         if (_logFilePath == null) return;
 
-        var line = $"[{DateTime.Now:HH:mm:ss.fff}] [{level}] {message}\n";
+        // Include the managed thread id so post-mortem analysis can distinguish
+        // UI-thread breadcrumbs from background-thread activity — important
+        // when a native FailFast leaves no managed stack and we only have the
+        // log to localize the last live action.
+        var tid = System.Threading.Thread.CurrentThread.ManagedThreadId;
+        var line = $"[{DateTime.Now:HH:mm:ss.fff}] [T{tid:D2}] [{level}] {message}\n";
+        var bytes = System.Text.Encoding.UTF8.GetBytes(line);
         lock (Lock)
         {
             try
             {
-                File.AppendAllText(_logFilePath, line);
+                // FileOptions.WriteThrough bypasses the OS write cache so the
+                // line is flushed to disk synchronously. Without it, a hard
+                // process termination (FailFast, StackOverflow, host kill) can
+                // lose the last entries even though AppendAllText returned.
+                using var fs = new FileStream(
+                    _logFilePath,
+                    FileMode.Append,
+                    FileAccess.Write,
+                    FileShare.Read,
+                    bufferSize: 4096,
+                    FileOptions.WriteThrough);
+                fs.Write(bytes, 0, bytes.Length);
             }
             catch
             {

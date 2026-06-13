@@ -54,6 +54,7 @@ public class ClaudeSession : IDisposable
     public ClaudeSession(string workingDirectory)
     {
         _workingDirectory = workingDirectory;
+        PerfDiagnostics.SessionCreated();
     }
 
     public static bool IsClaudeAvailable()
@@ -396,6 +397,7 @@ public class ClaudeSession : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        PerfDiagnostics.SessionDisposed();
         StopInactivityTimer();
         _readCts?.Cancel();
         KillCurrentProcess();

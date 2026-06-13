@@ -10,4 +10,17 @@ public class ProjectGroup
     public required string Id { get; init; }
     public string Name { get; set; } = "";
     public int Order { get; set; }
+
+    /// <summary>
+    /// The group icon. A built-in icon name (e.g. "folder", "code"). Null means the
+    /// default folder icon. Unlike projects, groups have no folder so only built-in
+    /// icons are supported (no auto-discovered image files).
+    /// </summary>
+    public string? Icon { get; set; }
+
+    /// <summary>
+    /// Hex colour (#RRGGBB) for the glyph foreground on the group's built-in icon.
+    /// Null means use the theme default.
+    /// </summary>
+    public string? IconColor { get; set; }
 }

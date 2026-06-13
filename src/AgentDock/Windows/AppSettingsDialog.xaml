@@ -95,7 +95,6 @@
 
         <Style x:Key="FieldHint" TargetType="{x:Type TextBlock}">
             <Setter Property="FontSize" Value="11" />
-            <Setter Property="Opacity" Value="0.7" />
             <Setter Property="TextWrapping" Value="Wrap" />
             <Setter Property="Foreground" Value="{DynamicResource HelpForeground}" />
             <Setter Property="Margin" Value="0,0,0,16" />

@@ -37,6 +37,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<ProjectInfo, UIElement> _projectContents = [];
     private readonly Dictionary<ProjectInfo, AiChatControl> _projectChatControls = [];
     private readonly Dictionary<ProjectInfo, GitStatusControl> _projectGitControls = [];
+    private readonly Dictionary<ProjectInfo, FilePreviewControl> _projectPreviewControls = [];
     private readonly Dictionary<ProjectInfo, Grid> _projectTabIcons = [];
     private readonly Dictionary<ProjectInfo, DispatcherTimer> _tabIconTimers = [];
     private readonly Dictionary<ProjectInfo, ClaudeSessionState> _previousTabStates = [];
@@ -48,6 +49,18 @@ public partial class MainWindow : Window
     // Tab grouping state (meta tabs)
     private readonly List<ProjectGroup> _groups = [];
     private string? _activeGroupId;
+    // Group-level status diamond + pulse timer, keyed by group Id (rebuilt with the meta bar)
+    private readonly Dictionary<string, Grid> _groupTabIcons = [];
+    private readonly Dictionary<string, DispatcherTimer> _groupIconTimers = [];
+    // Projects with a completed-but-unseen turn (the flashing-green "new response" state).
+    // Drives both the per-tab attention pulse and the group-level indicator.
+    private readonly HashSet<ProjectInfo> _projectNewResponse = [];
+
+    // Group tab drag-and-drop reordering state (mirrors the project-tab drag state)
+    private Point _groupDragStartPoint;
+    private bool _groupDragging;
+    private Button? _groupDragSource;
+    private Border? _groupDragIndicator;
 
     // Workspace state
     private string? _currentWorkspacePath;
@@ -96,7 +109,11 @@ public partial class MainWindow : Window
 
         // MetaTabPanel is the drop target for moving a project tab into a different group.
         // Each meta tab element also accepts drop individually (set on creation).
+        // It also handles GroupTab drags for reordering the groups themselves.
         MetaTabPanel.AllowDrop = true;
+        MetaTabPanel.DragOver += MetaTabPanel_DragOver;
+        MetaTabPanel.Drop += MetaTabPanel_Drop;
+        MetaTabPanel.DragLeave += (_, _) => RemoveGroupDragIndicator();
 
         CommandBindings.Add(new CommandBinding(AddProjectCommand, (_, _) => AddProject()));
         CommandBindings.Add(new CommandBinding(SaveWorkspaceCommand, (_, _) => SaveWorkspace()));
@@ -176,27 +193,68 @@ public partial class MainWindow : Window
         SetWindowLong(hwnd, GWL_STYLE, style | WS_SYSMENU);
 
         var source = HwndSource.FromHwnd(hwnd);
-        source?.AddHook(WndProc);
+        if (source != null)
+        {
+            source.AddHook(WndProc);
+            Log.Info($"OnSourceInitialized: WndProc hook installed (hwnd=0x{hwnd:X})");
+        }
+        else
+        {
+            Log.Warn($"OnSourceInitialized: HwndSource.FromHwnd returned null (hwnd=0x{hwnd:X}) — WndProc hook NOT installed");
+        }
     }
+
+    private static int _wmGetMinMaxInfoCount;
+    private static int _wndProcExceptionCount;
 
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
-        // WM_GETMINMAXINFO — constrain maximized size to the work area
+        // WM_GETMINMAXINFO — constrain maximized size to the work area.
+        //
+        // Wrapped in try/catch so a managed marshaling failure (bad lParam,
+        // unexpected struct layout) is logged before bubbling. A native AV in
+        // the OS read/write won't be caught here — that path is what the WER
+        // LocalDump configuration is for — but anything inside the CLR will.
         if (msg == 0x0024)
         {
-            var mmi = Marshal.PtrToStructure<MINMAXINFO>(lParam);
-            var monitor = MonitorFromWindow(hwnd, 2); // MONITOR_DEFAULTTONEAREST
-            if (monitor != IntPtr.Zero)
+            try
             {
-                var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
-                GetMonitorInfo(monitor, ref mi);
-                mmi.ptMaxPosition.X = Math.Abs(mi.rcWork.Left - mi.rcMonitor.Left);
-                mmi.ptMaxPosition.Y = Math.Abs(mi.rcWork.Top - mi.rcMonitor.Top);
-                mmi.ptMaxSize.X = Math.Abs(mi.rcWork.Right - mi.rcWork.Left);
-                mmi.ptMaxSize.Y = Math.Abs(mi.rcWork.Bottom - mi.rcWork.Top);
+                var n = System.Threading.Interlocked.Increment(ref _wmGetMinMaxInfoCount);
+                if (n == 1)
+                    Log.Info($"WndProc: first WM_GETMINMAXINFO (hwnd=0x{hwnd:X}, lParam=0x{lParam:X})");
+
+                if (lParam == IntPtr.Zero)
+                {
+                    Log.Warn($"WndProc: WM_GETMINMAXINFO with null lParam (count={n}) — skipping");
+                    return IntPtr.Zero;
+                }
+
+                var mmi = Marshal.PtrToStructure<MINMAXINFO>(lParam);
+                var monitor = MonitorFromWindow(hwnd, 2); // MONITOR_DEFAULTTONEAREST
+                if (monitor != IntPtr.Zero)
+                {
+                    var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+                    GetMonitorInfo(monitor, ref mi);
+                    mmi.ptMaxPosition.X = Math.Abs(mi.rcWork.Left - mi.rcMonitor.Left);
+                    mmi.ptMaxPosition.Y = Math.Abs(mi.rcWork.Top - mi.rcMonitor.Top);
+                    mmi.ptMaxSize.X = Math.Abs(mi.rcWork.Right - mi.rcWork.Left);
+                    mmi.ptMaxSize.Y = Math.Abs(mi.rcWork.Bottom - mi.rcWork.Top);
+                }
+                else
+                {
+                    Log.Warn($"WndProc: MonitorFromWindow returned 0 for hwnd=0x{hwnd:X} (count={n}) — using OS defaults");
+                }
+                // fDeleteOld:false — MINMAXINFO is pure POD (POINTs and ints).
+                // No managed pointers in the destination buffer to release.
+                Marshal.StructureToPtr(mmi, lParam, false);
+                handled = true;
             }
-            Marshal.StructureToPtr(mmi, lParam, true);
-            handled = true;
+            catch (Exception ex)
+            {
+                var n = System.Threading.Interlocked.Increment(ref _wndProcExceptionCount);
+                Log.Error($"WndProc: managed exception handling WM_GETMINMAXINFO (count={n}, lParam=0x{lParam:X})", ex);
+                handled = false;
+            }
         }
         return IntPtr.Zero;
     }
@@ -937,6 +995,42 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Builds the flat tab <see cref="ControlTemplate"/> shared by project and group tabs.
+    /// The "Bd" border carries the TemplateBound background and bottom accent
+    /// (BorderBrush/Thickness); a 1px right separator (using the toolbar divider brush)
+    /// is overlaid so adjacent tabs are visually separated by a vertical line.
+    /// </summary>
+    private static ControlTemplate CreateTabControlTemplate()
+    {
+        var template = new ControlTemplate(typeof(Button));
+
+        var borderFactory = new FrameworkElementFactory(typeof(Border), "Bd");
+        borderFactory.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(BackgroundProperty));
+        borderFactory.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(BorderBrushProperty));
+        borderFactory.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(BorderThicknessProperty));
+
+        // Grid lets us overlay the vertical separator on top of the (padded) content.
+        var grid = new FrameworkElementFactory(typeof(Grid));
+
+        var contentPresenter = new FrameworkElementFactory(typeof(ContentPresenter));
+        contentPresenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+        // Apply the button's Padding as the content's Margin so the separator stays at the true right edge.
+        contentPresenter.SetValue(FrameworkElement.MarginProperty, new TemplateBindingExtension(PaddingProperty));
+        grid.AppendChild(contentPresenter);
+
+        var separatorBrush = ThemeManager.GetBrush("ToolbarBorderBrush");
+        var rightSeparator = new FrameworkElementFactory(typeof(Border));
+        rightSeparator.SetValue(FrameworkElement.WidthProperty, 1.0);
+        rightSeparator.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Right);
+        rightSeparator.SetValue(Border.BackgroundProperty, separatorBrush);
+        grid.AppendChild(rightSeparator);
+
+        borderFactory.AppendChild(grid);
+        template.VisualTree = borderFactory;
+        return template;
+    }
+
     private Button CreateProjectTabButton(ProjectInfo project)
     {
         var iconElement = ResolveProjectIcon(project.FolderPath);
@@ -977,17 +1071,8 @@ public partial class MainWindow : Window
         _projectTabIcons[project] = statusGrid;
 
         // VS Code-like tab: flat rectangle, transparent bottom-accent on inactive,
-        // themed bottom-accent on active. No corner radius, no top/left/right borders.
-        var tabTemplate = new ControlTemplate(typeof(Button));
-        var borderFactory = new FrameworkElementFactory(typeof(Border), "Bd");
-        borderFactory.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(BackgroundProperty));
-        borderFactory.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(BorderBrushProperty));
-        borderFactory.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(BorderThicknessProperty));
-        borderFactory.SetValue(Border.PaddingProperty, new TemplateBindingExtension(PaddingProperty));
-        var contentPresenter = new FrameworkElementFactory(typeof(ContentPresenter));
-        contentPresenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
-        borderFactory.AppendChild(contentPresenter);
-        tabTemplate.VisualTree = borderFactory;
+        // themed bottom-accent on active, with a 1px vertical separator on the right.
+        var tabTemplate = CreateTabControlTemplate();
 
         var button = new Button
         {
@@ -1062,17 +1147,22 @@ public partial class MainWindow : Window
             }
         };
 
-        // Right-click context menu
-        button.ContextMenu = new ContextMenu
-        {
-            Items =
-            {
-                CreateMenuItem("Add to new group", () => AddProjectToNewGroup(project)),
-                new Separator(),
-                CreateMenuItem("Close Project", () => CloseProject(project)),
-                CreateMenuItem("Open in Explorer", () => OpenInExplorer(project))
-            }
-        };
+        // Right-click context menu — mirrors the File Explorer toolbar actions plus
+        // group/close management.
+        var menu = new ContextMenu();
+        menu.Items.Add(CreateMenuItem("Project Settings…", () => OpenProjectSettings(project)));
+        menu.Items.Add(new Separator());
+        if (FileExplorerControl.AvailableTools.Contains("VS Code"))
+            menu.Items.Add(CreateMenuItem("Open in VS Code", () => LaunchEditor("code", project)));
+        if (FileExplorerControl.AvailableTools.Contains("Cursor"))
+            menu.Items.Add(CreateMenuItem("Open in Cursor", () => LaunchEditor("cursor", project)));
+        menu.Items.Add(CreateMenuItem("Open in Explorer", () => OpenInExplorer(project)));
+        menu.Items.Add(CreateMenuItem("Open in Console", () => OpenInConsole(project)));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(CreateMenuItem("Add to new group", () => AddProjectToNewGroup(project)));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(CreateMenuItem("Close Project", () => CloseProject(project)));
+        button.ContextMenu = menu;
 
         return button;
     }
@@ -1265,6 +1355,101 @@ public partial class MainWindow : Window
         }
     }
 
+    // --- Group (meta tab) reordering via drag-and-drop ---
+
+    private List<ProjectGroup> OrderedGroups() => _groups.OrderBy(g => g.Order).ToList();
+
+    /// <summary>
+    /// Finds the insertion index (into the visually-ordered group list) for the given
+    /// mouse position over the meta tab strip.
+    /// </summary>
+    private int GetGroupInsertionIndex(DragEventArgs e)
+    {
+        var ordered = OrderedGroups();
+        ProjectGroup? lastBefore = null;
+
+        foreach (var item in MetaTabPanel.Children)
+        {
+            if (item is not FrameworkElement child || child == _groupDragIndicator ||
+                child.Tag is not ProjectGroup g)
+                continue;
+
+            var pos = e.GetPosition(child);
+            if (pos.X < child.RenderSize.Width / 2)
+                return ordered.IndexOf(g);
+
+            lastBefore = g;
+        }
+
+        return lastBefore != null ? ordered.IndexOf(lastBefore) + 1 : ordered.Count;
+    }
+
+    private void MetaTabPanel_DragOver(object sender, DragEventArgs e)
+    {
+        // Only reorder gestures (GroupTab); project-into-group drops are handled per-button.
+        if (!e.Data.GetDataPresent("GroupTab"))
+            return;
+
+        e.Effects = DragDropEffects.Move;
+        e.Handled = true;
+        ShowGroupDragIndicator(GetGroupInsertionIndex(e));
+    }
+
+    private void MetaTabPanel_Drop(object sender, DragEventArgs e)
+    {
+        RemoveGroupDragIndicator();
+
+        if (e.Data.GetData("GroupTab") is not ProjectGroup source)
+            return;
+
+        var ordered = OrderedGroups();
+        var sourceIdx = ordered.IndexOf(source);
+        var targetIdx = GetGroupInsertionIndex(e);
+        if (sourceIdx < 0 || targetIdx < 0)
+            return;
+
+        if (targetIdx > sourceIdx)
+            targetIdx--;
+        if (targetIdx == sourceIdx)
+            return;
+
+        ordered.RemoveAt(sourceIdx);
+        ordered.Insert(targetIdx, source);
+
+        // Renumber Order to match the new visual sequence (persisted with the workspace).
+        for (int i = 0; i < ordered.Count; i++)
+            ordered[i].Order = i;
+
+        RefreshMetaTabBar();
+        SetWorkspaceDirty();
+        e.Handled = true;
+    }
+
+    private void ShowGroupDragIndicator(int groupIndex)
+    {
+        _groupDragIndicator ??= new Border
+        {
+            Background = ThemeManager.GetBrush("TabButtonActiveBorderBrush"),
+            IsHitTestVisible = false,
+            Width = 3,
+            Height = 28,
+            Margin = new Thickness(-1, 2, -1, 2)
+        };
+
+        MetaTabPanel.Children.Remove(_groupDragIndicator);
+        var uiIdx = Math.Min(groupIndex, MetaTabPanel.Children.Count);
+        MetaTabPanel.Children.Insert(uiIdx, _groupDragIndicator);
+    }
+
+    private void RemoveGroupDragIndicator()
+    {
+        if (_groupDragIndicator != null)
+        {
+            MetaTabPanel.Children.Remove(_groupDragIndicator);
+            _groupDragIndicator = null;
+        }
+    }
+
     private static MenuItem CreateMenuItem(string header, Action action)
     {
         var item = new MenuItem { Header = header };
@@ -1337,6 +1522,12 @@ public partial class MainWindow : Window
     {
         MetaTabPanel.Children.Clear();
 
+        // Stop and drop any group pulse timers; the bar (and its diamonds) is rebuilt below.
+        foreach (var timer in _groupIconTimers.Values)
+            timer.Stop();
+        _groupIconTimers.Clear();
+        _groupTabIcons.Clear();
+
         if (_groups.Count < 2)
         {
             MetaTabBorder.Visibility = Visibility.Collapsed;
@@ -1347,6 +1538,13 @@ public partial class MainWindow : Window
 
         foreach (var group in _groups.OrderBy(g => g.Order))
             MetaTabPanel.Children.Add(CreateMetaTabElement(group));
+
+        // Trailing "+" to create a new empty group (mirrors the project-tab add button).
+        MetaTabPanel.Children.Add(CreateMetaTabAddButton());
+
+        // Apply the aggregate child indicator to each freshly-built group diamond.
+        foreach (var group in _groups)
+            RefreshGroupIndicator(group.Id);
     }
 
     /// <summary>
@@ -1367,24 +1565,53 @@ public partial class MainWindow : Window
 
     private Button CreateMetaTabElement(ProjectGroup group)
     {
-        // Flat template (matches project tab visual language)
-        var template = new ControlTemplate(typeof(Button));
-        var borderFactory = new FrameworkElementFactory(typeof(Border), "Bd");
-        borderFactory.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(BackgroundProperty));
-        borderFactory.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(BorderBrushProperty));
-        borderFactory.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(BorderThicknessProperty));
-        borderFactory.SetValue(Border.PaddingProperty, new TemplateBindingExtension(PaddingProperty));
-        var contentPresenter = new FrameworkElementFactory(typeof(ContentPresenter));
-        contentPresenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
-        borderFactory.AppendChild(contentPresenter);
-        template.VisualTree = borderFactory;
+        // Flat template (matches project tab visual language, incl. right separator)
+        var template = CreateTabControlTemplate();
+
+        var iconElement = CreateGroupIconElement(group);
 
         var label = new TextBlock
         {
             Text = group.Name,
-            FontSize = 11,
+            FontSize = 12,
             VerticalAlignment = VerticalAlignment.Center,
             Foreground = ThemeManager.GetBrush("TabButtonForeground"),
+        };
+
+        // Group status diamond (aggregate of the group's child projects), built like
+        // the project-tab diamond so the two strips read identically.
+        var statusGrid = new Grid
+        {
+            Width = 20,
+            Height = 20,
+            Margin = new Thickness(5, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        var diamondIcon = new TextBlock
+        {
+            Text = "◇", // ◇ outline diamond — no active session in the group
+            FontFamily = new FontFamily("Segoe UI Symbol"),
+            FontSize = 14,
+            Foreground = ThemeManager.GetBrush("TabIconInactiveDiamondForeground"),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        var statusBadge = new TextBlock
+        {
+            Text = "",
+            FontSize = 9,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Visibility = Visibility.Collapsed
+        };
+        statusGrid.Children.Add(diamondIcon);
+        statusGrid.Children.Add(statusBadge);
+        _groupTabIcons[group.Id] = statusGrid;
+
+        var contentPanel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Children = { iconElement, label, statusGrid }
         };
 
         var isActive = group.Id == _activeGroupId;
@@ -1392,55 +1619,89 @@ public partial class MainWindow : Window
         var button = new Button
         {
             Tag = group,
-            MinWidth = 32,
-            Height = 22,
+            MinWidth = 44,
+            Height = 32,
             Margin = new Thickness(0),
-            Padding = new Thickness(10, 0, 10, 0),
+            Padding = new Thickness(12, 0, 12, 0),
             Background = isActive
-                ? ThemeManager.GetBrush("TabButtonActiveBackground")
+                ? ThemeManager.GetBrush("GroupTabActiveBackground")
                 : ThemeManager.GetBrush("TabButtonInactiveBackground"),
             BorderBrush = isActive
                 ? ThemeManager.GetBrush("TabButtonActiveBorderBrush")
                 : Brushes.Transparent,
             BorderThickness = new Thickness(0, 0, 0, 2),
             Cursor = Cursors.Hand,
+            HorizontalContentAlignment = HorizontalAlignment.Left,
             Template = template,
-            Content = label,
+            Content = contentPanel,
             AllowDrop = true,
-            ToolTip = "Click to switch group · click again to rename · right-click for options"
+            ToolTip = "Click to switch group · click again to rename · drag to reorder · right-click for options"
         };
+
+        bool IsRenaming() => contentPanel.Children.OfType<TextBox>().Any();
 
         button.Click += (_, _) =>
         {
-            // Ignore the click that bubbles from inside the rename TextBox
-            if (button.Content is TextBox)
+            // A drag just completed, or the rename box is showing — ignore the click.
+            if (_groupDragging || IsRenaming())
                 return;
             if (group.Id == _activeGroupId)
-                StartMetaTabRename(group, button, label);
+                StartMetaTabRename(group, contentPanel, label);
             else
                 SetActiveGroup(group.Id);
         };
 
         button.MouseEnter += (_, _) =>
         {
-            if (group.Id != _activeGroupId && button.Content is TextBlock)
+            if (group.Id != _activeGroupId && !IsRenaming())
                 button.Background = MakeTabHoverBrush();
         };
         button.MouseLeave += (_, _) =>
         {
-            if (group.Id != _activeGroupId && button.Content is TextBlock)
+            if (group.Id != _activeGroupId && !IsRenaming())
                 button.Background = ThemeManager.GetBrush("TabButtonInactiveBackground");
         };
 
-        // Right-click context menu (Delete group, only if empty)
+        // Drag initiation for reordering groups (DragOver/Drop handled at MetaTabPanel level)
+        button.PreviewMouseLeftButtonDown += (_, e) =>
+        {
+            _groupDragStartPoint = e.GetPosition(null);
+            _groupDragSource = button;
+            _groupDragging = false;
+        };
+        button.PreviewMouseMove += (_, e) =>
+        {
+            if (_groupDragSource != button || e.LeftButton != MouseButtonState.Pressed || IsRenaming())
+                return;
+
+            var pos = e.GetPosition(null);
+            var diff = pos - _groupDragStartPoint;
+            if (Math.Abs(diff.X) > SystemParameters.MinimumHorizontalDragDistance ||
+                Math.Abs(diff.Y) > SystemParameters.MinimumVerticalDragDistance)
+            {
+                _groupDragging = true;
+                DragDrop.DoDragDrop(button, new DataObject("GroupTab", group), DragDropEffects.Move);
+                _groupDragSource = null;
+                RemoveGroupDragIndicator();
+            }
+        };
+
+        // Right-click context menu
+        var settingsItem = CreateMenuItem("Group Settings…", () => OpenGroupSettings(group));
+        var renameItem = CreateMenuItem("Rename", () => StartMetaTabRename(group, contentPanel, label));
+        var newGroupItem = CreateMenuItem("New group", AddNewEmptyGroup);
         var deleteItem = CreateMenuItem("Delete group", () => DeleteGroup(group.Id));
-        button.ContextMenu = new ContextMenu { Items = { deleteItem } };
+        button.ContextMenu = new ContextMenu
+        {
+            Items = { settingsItem, renameItem, new Separator(), newGroupItem, new Separator(), deleteItem }
+        };
         button.ContextMenuOpening += (_, _) =>
         {
+            // Only empty groups can be deleted (matches the toolbar/drag behaviour)
             deleteItem.IsEnabled = !_projects.Any(p => p.GroupId == group.Id);
         };
 
-        // Drag-drop target: dropping a project tab here moves it to this group
+        // Drag-drop target: dropping a project tab here moves it to this group.
         button.DragOver += (_, e) =>
         {
             if (e.Data.GetDataPresent("ProjectTab"))
@@ -1449,15 +1710,16 @@ public partial class MainWindow : Window
                 button.Background = MakeTabHoverBrush();
                 e.Handled = true;
             }
-            else
+            else if (!e.Data.GetDataPresent("GroupTab"))
             {
+                // GroupTab drags are reorder gestures handled at the panel level — let them bubble.
                 e.Effects = DragDropEffects.None;
             }
         };
         button.DragLeave += (_, _) =>
         {
             if (group.Id == _activeGroupId)
-                button.Background = ThemeManager.GetBrush("TabButtonActiveBackground");
+                button.Background = ThemeManager.GetBrush("GroupTabActiveBackground");
             else
                 button.Background = ThemeManager.GetBrush("TabButtonInactiveBackground");
         };
@@ -1465,7 +1727,7 @@ public partial class MainWindow : Window
         {
             // Reset hover-tinted background regardless of outcome
             button.Background = group.Id == _activeGroupId
-                ? ThemeManager.GetBrush("TabButtonActiveBackground")
+                ? ThemeManager.GetBrush("GroupTabActiveBackground")
                 : ThemeManager.GetBrush("TabButtonInactiveBackground");
 
             if (e.Data.GetData("ProjectTab") is ProjectInfo dropped)
@@ -1473,17 +1735,101 @@ public partial class MainWindow : Window
                 MoveProjectToGroup(dropped, group.Id);
                 e.Handled = true;
             }
+            // GroupTab drops bubble to MetaTabPanel_Drop for reordering.
         };
 
         return button;
     }
 
-    private void StartMetaTabRename(ProjectGroup group, Button button, TextBlock label)
+    /// <summary>
+    /// Builds the trailing "+" button on the meta tab strip that creates a new empty
+    /// group. Visual language matches the project-tab add button (<see cref="CreateToolbarAddButton"/>).
+    /// </summary>
+    private Button CreateMetaTabAddButton()
     {
+        // Custom template: border only, no default button chrome.
+        var template = new ControlTemplate(typeof(Button));
+        var borderFactory = new FrameworkElementFactory(typeof(Border), "Bd");
+        borderFactory.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(BackgroundProperty));
+        borderFactory.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(BorderBrushProperty));
+        borderFactory.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(BorderThicknessProperty));
+        borderFactory.SetValue(Border.CornerRadiusProperty, new CornerRadius(3));
+        borderFactory.SetValue(Border.PaddingProperty, new TemplateBindingExtension(PaddingProperty));
+        var contentPresenter = new FrameworkElementFactory(typeof(ContentPresenter));
+        contentPresenter.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+        contentPresenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+        borderFactory.AppendChild(contentPresenter);
+        template.VisualTree = borderFactory;
+
+        var button = new Button
+        {
+            Width = 32,
+            Height = 32,
+            Margin = new Thickness(6, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Background = Brushes.Transparent,
+            BorderBrush = ThemeManager.GetBrush("AddButtonBorderBrush"),
+            BorderThickness = new Thickness(1),
+            Cursor = Cursors.Hand,
+            ToolTip = "Add Group",
+            Template = template,
+            Content = new TextBlock
+            {
+                Text = "+",
+                FontSize = 18,
+                FontWeight = FontWeights.Light,
+                Foreground = ThemeManager.GetBrush("AddButtonForeground"),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            }
+        };
+
+        button.Click += (_, _) => AddNewEmptyGroup();
+
+        button.MouseEnter += (_, _) =>
+        {
+            button.BorderBrush = ThemeManager.GetBrush("TabButtonHoverBorderBrush");
+        };
+        button.MouseLeave += (_, _) =>
+        {
+            button.BorderBrush = ThemeManager.GetBrush("AddButtonBorderBrush");
+        };
+
+        return button;
+    }
+
+    /// <summary>
+    /// Creates the icon element for a group. Groups have no folder, so only built-in
+    /// icons are supported (defaulting to the folder glyph).
+    /// </summary>
+    private static UIElement CreateGroupIconElement(ProjectGroup group)
+    {
+        var builtIn = BuiltInIcons.Find(group.Icon ?? "folder") ?? BuiltInIcons.Default;
+        var foreground = group.IconColor != null
+            ? ParseHexBrush(group.IconColor) ?? ThemeManager.GetBrush("TabIconNoSessionForeground")
+            : ThemeManager.GetBrush("TabIconNoSessionForeground");
+
+        return new TextBlock
+        {
+            Text = builtIn.Glyph,
+            FontFamily = new FontFamily(builtIn.FontFamily),
+            FontSize = 14,
+            Foreground = foreground,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 5, 0)
+        };
+    }
+
+    private void StartMetaTabRename(ProjectGroup group, Panel contentPanel, TextBlock label)
+    {
+        var labelIndex = contentPanel.Children.IndexOf(label);
+        if (labelIndex < 0)
+            return; // already renaming or label not present
+
         var textbox = new TextBox
         {
             Text = group.Name,
-            FontSize = 11,
+            FontSize = 12,
             MinWidth = Math.Max(60, label.ActualWidth + 16),
             VerticalAlignment = VerticalAlignment.Center,
             VerticalContentAlignment = VerticalAlignment.Center,
@@ -1510,7 +1856,13 @@ public partial class MainWindow : Window
                 }
             }
             label.Text = group.Name;
-            button.Content = label;
+            // Swap the textbox back out for the label, in place.
+            var idx = contentPanel.Children.IndexOf(textbox);
+            if (idx >= 0)
+            {
+                contentPanel.Children.RemoveAt(idx);
+                contentPanel.Children.Insert(idx, label);
+            }
         }
 
         textbox.LostFocus += (_, _) => Commit(true);
@@ -1520,7 +1872,9 @@ public partial class MainWindow : Window
             else if (e.Key == Key.Escape) { Commit(false); e.Handled = true; }
         };
 
-        button.Content = textbox;
+        // Swap the label out for the textbox, in place (keeps icon + status diamond).
+        contentPanel.Children.RemoveAt(labelIndex);
+        contentPanel.Children.Insert(labelIndex, textbox);
 
         // Defer focus until after the visual tree has placed the textbox
         Dispatcher.BeginInvoke(() =>
@@ -1540,10 +1894,17 @@ public partial class MainWindow : Window
         RefreshMetaTabBar();
         RefreshProjectTabVisibility();
 
-        // If the active project isn't in the new group, switch to one that is
+        // If the active project isn't in the new group, switch to one that is.
+        // Prefer the project most in need of attention, matching the priority the
+        // group diamond already shows (Error > Question > NewResponse > Idle >
+        // Working > Inactive). OrderByDescending is stable, so ties fall back to
+        // the first project in the group.
         if (_activeProject == null || _activeProject.GroupId != groupId)
         {
-            var firstInGroup = _projects.FirstOrDefault(p => p.GroupId == groupId);
+            var firstInGroup = _projects
+                .Where(p => p.GroupId == groupId)
+                .OrderByDescending(GetProjectIndicator)
+                .FirstOrDefault();
             if (firstInGroup != null)
                 SwitchToProject(firstInGroup);
             else
@@ -1566,8 +1927,13 @@ public partial class MainWindow : Window
         if (_groups.All(g => g.Id != groupId))
             return;
 
+        var oldGroupId = project.GroupId;
         project.GroupId = groupId;
         RefreshProjectTabVisibility();
+
+        // Both the source and destination group diamonds may change.
+        RefreshGroupIndicator(oldGroupId);
+        RefreshGroupIndicator(groupId);
 
         // If we just moved the active project out of the active group, show the next visible one.
         // When the source group is now empty, follow the project to its new group so the user
@@ -1627,6 +1993,42 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Opens the Group Settings dialog and applies the chosen name / icon / colour.
+    /// </summary>
+    private void OpenGroupSettings(ProjectGroup group)
+    {
+        var result = GroupSettingsDialog.Show(this, group);
+        if (result == null)
+            return;
+
+        if (!string.IsNullOrWhiteSpace(result.Name))
+            group.Name = result.Name.Trim();
+        group.Icon = result.Icon;
+        group.IconColor = result.IconColor;
+
+        RefreshMetaTabBar();
+        SetWorkspaceDirty();
+    }
+
+    /// <summary>
+    /// Creates a new empty group from the group context menu and switches to it.
+    /// (Only reachable when grouping is already active, so no "Ungrouped" bucket is needed.)
+    /// </summary>
+    private void AddNewEmptyGroup()
+    {
+        var newGroup = new ProjectGroup
+        {
+            Id = Guid.NewGuid().ToString(),
+            Name = NextGroupName(),
+            Order = _groups.Count == 0 ? 0 : _groups.Max(g => g.Order) + 1
+        };
+        _groups.Add(newGroup);
+        RefreshMetaTabBar();
+        SetActiveGroup(newGroup.Id);
+        SetWorkspaceDirty();
+    }
+
+    /// <summary>
     /// Returns the orientation for the meta tab strip and adjusts the meta border thickness
     /// for the supplied toolbar position.
     /// </summary>
@@ -1667,6 +2069,7 @@ public partial class MainWindow : Window
         gitStatusControl.LoadRepository(project.FolderPath);
 
         var filePreviewControl = new FilePreviewControl();
+        _projectPreviewControls[project] = filePreviewControl;
 
         var descriptionControl = new ProjectDescriptionControl();
         descriptionControl.LoadProject(project.FolderPath);
@@ -1674,65 +2077,11 @@ public partial class MainWindow : Window
         var todoListControl = new TodoListControl();
         todoListControl.LoadProject(project.FolderPath);
 
-        // Shared handler for refreshing UI after project settings change
-        void OnProjectSettingsChanged()
-        {
-            var settings = ProjectSettingsManager.Load(project.FolderPath);
-
-            // Update in-memory display name and refresh every UI surface that shows it
-            project.CustomName = settings.Name;
-
-            if (_projectTabButtons.TryGetValue(project, out var tabBtn) &&
-                tabBtn.Content is StackPanel sp && sp.Children.Count > 0)
-            {
-                sp.Children.RemoveAt(0);
-                sp.Children.Insert(0, CreateIconElement(
-                    settings.Icon ?? "folder", project.FolderPath,
-                    settings.IconColor));
-
-                // TextBlock is at index 1 (between icon at 0 and status grid at 2)
-                if (sp.Children.Count > 1 && sp.Children[1] is TextBlock tabText)
-                    tabText.Text = project.DisplayName;
-            }
-
-            // Update file explorer panel title in the docking layout
-            if (_projectDockingManagers.TryGetValue(project, out var dm))
-            {
-                var fileExplorerPanel = dm.Layout.Descendents().OfType<LayoutAnchorable>()
-                    .FirstOrDefault(a => a.ContentId == FileExplorerId);
-                if (fileExplorerPanel != null)
-                    fileExplorerPanel.Title = $"{project.DisplayName} — File Explorer";
-            }
-
-            // If this is the active project, refresh the window title bar
-            if (project == _activeProject)
-                UpdateTitleBar();
-
-            descriptionControl.SetDescription(settings.Description);
-        }
-
         // Open settings dialog from description panel's settings icon
-        descriptionControl.OpenSettingsRequested += () =>
-        {
-            var result = ProjectSettingsDialog.Show(this, project.FolderPath);
-            if (result != null)
-            {
-                ProjectSettingsManager.Update(project.FolderPath, s =>
-                {
-                    s.Name = result.Name;
-                    s.Icon = result.Icon;
-                    s.IconColor = result.IconColor;
-                    s.Description = result.Description;
-                    s.SoundOnSessionStart = result.SoundOnSessionStart;
-                    s.SoundOnAgentWaiting = result.SoundOnAgentWaiting;
-                    s.SoundOnSessionEnd = result.SoundOnSessionEnd;
-                });
-                OnProjectSettingsChanged();
-            }
-        };
+        descriptionControl.OpenSettingsRequested += () => OpenProjectSettings(project);
 
         // Wire settings change from file explorer settings dialog
-        fileExplorerControl.ProjectSettingsChanged += OnProjectSettingsChanged;
+        fileExplorerControl.ProjectSettingsChanged += () => ApplyProjectSettingsChanged(project);
 
         // Wire file explorer clicks to preview panel
         fileExplorerControl.FileSelected += filePath =>
@@ -1900,14 +2249,25 @@ public partial class MainWindow : Window
         _projectDockingManagers[project] = dockingManager;
 
         // Track layout changes (panel rearrangement) for dirty state.
-        // Subscribe to Layout.Updated, and re-subscribe if AvalonDock replaces the Layout.
-        void SubscribeLayoutUpdated(LayoutRoot layout)
-            => layout.Updated += (_, _) => SetWorkspaceDirty();
+        // AvalonDock can swap the LayoutRoot (LayoutChanged), so we move the single
+        // Updated handler to the new root each time. The previous version added a
+        // NEW handler on every LayoutChanged without removing the old one, so
+        // handlers multiplied for the life of the app and every layout tick fired
+        // all of them. Track the currently-subscribed root and detach before
+        // re-attaching so there is ever only one subscription.
+        LayoutRoot? subscribedLayout = null;
+        EventHandler updatedHandler = (_, _) => SetWorkspaceDirty();
+        void SubscribeLayoutUpdated(LayoutRoot? layout)
+        {
+            if (ReferenceEquals(subscribedLayout, layout)) return;
+            if (subscribedLayout != null) subscribedLayout.Updated -= updatedHandler;
+            subscribedLayout = layout;
+            if (layout != null) layout.Updated += updatedHandler;
+        }
         SubscribeLayoutUpdated(dockingManager.Layout);
         dockingManager.LayoutChanged += (_, _) =>
         {
-            if (dockingManager.Layout != null)
-                SubscribeLayoutUpdated(dockingManager.Layout);
+            SubscribeLayoutUpdated(dockingManager.Layout);
             SetWorkspaceDirty();
         };
 
@@ -2066,14 +2426,19 @@ public partial class MainWindow : Window
 
     private void SwitchToProject(ProjectInfo project)
     {
-        Log.Info($"SwitchToProject: '{project.FolderName}'");
+        using var _perf = PerfDiagnostics.Time("SwitchToProject");
+        Log.Info($"SwitchToProject: '{project.FolderName}' — entry (prev='{_activeProject?.FolderName ?? "(none)"}', projects={_projects.Count}, groups={_groups.Count})");
         if (_activeProject == project)
+        {
+            Log.Info("SwitchToProject: already active — no-op");
             return;
+        }
 
         // If groups are in use and this project lives in a different group,
         // switch the active group so its tab is actually visible.
         if (_groups.Count >= 2 && project.GroupId != null && project.GroupId != _activeGroupId)
         {
+            Log.Info($"SwitchToProject: switching active group '{_activeGroupId}' -> '{project.GroupId}'");
             _activeGroupId = project.GroupId;
             RefreshMetaTabBar();
             RefreshProjectTabVisibility();
@@ -2083,10 +2448,19 @@ public partial class MainWindow : Window
         if (_activeProject != null && _projectTabButtons.TryGetValue(_activeProject, out var prevButton))
             SetTabButtonActive(prevButton, false);
 
+        // Suspend the outgoing tab's git work — only the active tab watches files
+        // and refreshes status (the diamond keeps updating via session state).
+        if (_activeProject != null && _projectGitControls.TryGetValue(_activeProject, out var prevGit))
+            prevGit.Deactivate();
+
         _activeProject = project;
 
         if (_projectTabButtons.TryGetValue(project, out var newButton))
             SetTabButtonActive(newButton, true);
+
+        // Activate the incoming tab's git work: one refresh + start watching.
+        if (_projectGitControls.TryGetValue(project, out var newGit))
+            newGit.Activate();
 
         // User is now viewing this tab — clear any attention flash on its diamond.
         StopAttentionPulseIfAny(project);
@@ -2094,9 +2468,15 @@ public partial class MainWindow : Window
         // Show the project's content
         if (_projectContents.TryGetValue(project, out var content))
         {
+            Log.Info($"SwitchToProject: swapping ProjectContentHost.Content -> '{project.FolderName}'");
             ProjectContentHost.Content = content;
             ProjectContentHost.Visibility = Visibility.Visible;
             EmptyStatePanel.Visibility = Visibility.Collapsed;
+            Log.Info("SwitchToProject: content swap returned");
+        }
+        else
+        {
+            Log.Warn($"SwitchToProject: no content registered for '{project.FolderName}' — skipping content swap");
         }
 
         // Update title bar
@@ -2105,6 +2485,8 @@ public partial class MainWindow : Window
         // Focus the AI chat input if the session is idle
         if (_projectChatControls.TryGetValue(project, out var chatControl))
             chatControl.FocusInput();
+
+        Log.Info($"SwitchToProject: '{project.FolderName}' — complete");
     }
 
     private void UpdateTitleBar()
@@ -2242,6 +2624,8 @@ public partial class MainWindow : Window
 
     private void CloseProject(ProjectInfo project)
     {
+        var closedGroupId = project.GroupId;
+
         // Stop icon animation timer
         if (_tabIconTimers.TryGetValue(project, out var timer))
         {
@@ -2249,11 +2633,19 @@ public partial class MainWindow : Window
             _tabIconTimers.Remove(project);
         }
 
-        // Stop file system watcher for git status
+        // Stop git watcher AND detach its theme handler (Cleanup), else the static
+        // ThemeManager.ThemeChanged event keeps the control + its visuals alive.
         if (_projectGitControls.TryGetValue(project, out var gitControl))
         {
-            gitControl.StopWatching();
+            gitControl.Cleanup();
             _projectGitControls.Remove(project);
+        }
+
+        // Detach the preview control's theme handler so it can be GC'd.
+        if (_projectPreviewControls.TryGetValue(project, out var previewControl))
+        {
+            previewControl.Cleanup();
+            _projectPreviewControls.Remove(project);
         }
 
         // Shutdown AI chat session
@@ -2271,15 +2663,20 @@ public partial class MainWindow : Window
         }
 
         _projectTabIcons.Remove(project);
+        _previousTabStates.Remove(project);
         _projectDockingManagers.Remove(project);
         _projectDescriptionControls.Remove(project);
         _projectTodoListControls.Remove(project);
+        _projectNewResponse.Remove(project);
 
         // Remove content
         _projectContents.Remove(project);
 
         // Remove from list
         _projects.Remove(project);
+
+        // The closed project's group diamond may need to drop priority.
+        RefreshGroupIndicator(closedGroupId);
 
         SetWorkspaceDirty();
 
@@ -2331,8 +2728,14 @@ public partial class MainWindow : Window
 
             if (_projectGitControls.TryGetValue(project, out var gitControl))
             {
-                gitControl.StopWatching();
+                gitControl.Cleanup();
                 _projectGitControls.Remove(project);
+            }
+
+            if (_projectPreviewControls.TryGetValue(project, out var previewControl))
+            {
+                previewControl.Cleanup();
+                _projectPreviewControls.Remove(project);
             }
 
             if (_projectChatControls.TryGetValue(project, out var chatControl))
@@ -2348,12 +2751,15 @@ public partial class MainWindow : Window
             }
 
             _projectTabIcons.Remove(project);
+            _previousTabStates.Remove(project);
             _projectDockingManagers.Remove(project);
             _projectDescriptionControls.Remove(project);
             _projectTodoListControls.Remove(project);
             _projectContents.Remove(project);
         }
 
+        _projectPreviewControls.Clear();
+        _previousTabStates.Clear();
         _projects.Clear();
         _activeProject = null;
         _groups.Clear();
@@ -2373,6 +2779,98 @@ public partial class MainWindow : Window
             FileName = project.FolderPath,
             UseShellExecute = true
         });
+    }
+
+    private static void OpenInConsole(ProjectInfo project)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                WorkingDirectory = project.FolderPath,
+                UseShellExecute = true
+            });
+        }
+        catch { /* failed to open */ }
+    }
+
+    /// <summary>Launches an external editor (e.g. "code", "cursor") on the project folder.</summary>
+    private static void LaunchEditor(string command, ProjectInfo project)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = command,
+                Arguments = $"\"{project.FolderPath}\"",
+                UseShellExecute = true
+            });
+        }
+        catch { /* tool not available */ }
+    }
+
+    /// <summary>
+    /// Shows the Project Settings dialog for the given project and applies the result.
+    /// Shared by the description-panel icon, the File Explorer button, and the tab menu.
+    /// </summary>
+    private void OpenProjectSettings(ProjectInfo project)
+    {
+        var result = ProjectSettingsDialog.Show(this, project.FolderPath);
+        if (result == null)
+            return;
+
+        ProjectSettingsManager.Update(project.FolderPath, s =>
+        {
+            s.Name = result.Name;
+            s.Icon = result.Icon;
+            s.IconColor = result.IconColor;
+            s.Description = result.Description;
+            s.SoundOnSessionStart = result.SoundOnSessionStart;
+            s.SoundOnAgentWaiting = result.SoundOnAgentWaiting;
+            s.SoundOnSessionEnd = result.SoundOnSessionEnd;
+        });
+        ApplyProjectSettingsChanged(project);
+    }
+
+    /// <summary>
+    /// Refreshes every UI surface that reflects a project's settings (tab icon + name,
+    /// file-explorer panel title, window title, description panel) after a settings change.
+    /// </summary>
+    private void ApplyProjectSettingsChanged(ProjectInfo project)
+    {
+        var settings = ProjectSettingsManager.Load(project.FolderPath);
+
+        // Update in-memory display name and refresh every UI surface that shows it
+        project.CustomName = settings.Name;
+
+        if (_projectTabButtons.TryGetValue(project, out var tabBtn) &&
+            tabBtn.Content is StackPanel sp && sp.Children.Count > 0)
+        {
+            sp.Children.RemoveAt(0);
+            sp.Children.Insert(0, CreateIconElement(
+                settings.Icon ?? "folder", project.FolderPath, settings.IconColor));
+
+            // TextBlock is at index 1 (between icon at 0 and status grid at 2)
+            if (sp.Children.Count > 1 && sp.Children[1] is TextBlock tabText)
+                tabText.Text = project.DisplayName;
+        }
+
+        // Update file explorer panel title in the docking layout
+        if (_projectDockingManagers.TryGetValue(project, out var dm))
+        {
+            var fileExplorerPanel = dm.Layout.Descendents().OfType<LayoutAnchorable>()
+                .FirstOrDefault(a => a.ContentId == FileExplorerId);
+            if (fileExplorerPanel != null)
+                fileExplorerPanel.Title = $"{project.DisplayName} — File Explorer";
+        }
+
+        // If this is the active project, refresh the window title bar
+        if (project == _activeProject)
+            UpdateTitleBar();
+
+        if (_projectDescriptionControls.TryGetValue(project, out var desc))
+            desc.SetDescription(settings.Description);
     }
 
     // --- Tab Icon Updates ---
@@ -2414,8 +2912,8 @@ public partial class MainWindow : Window
 
         // Reset
         statusBadge.Visibility = Visibility.Collapsed;
-        statusBadge.Opacity = 1.0;
-        diamondIcon.Opacity = 1.0;
+        diamondIcon.Visibility = Visibility.Visible;
+        _projectNewResponse.Remove(project); // recomputed below for the Idle/just-finished case
 
         switch (state)
         {
@@ -2439,6 +2937,7 @@ public partial class MainWindow : Window
                 if (project != _activeProject &&
                     prevState is ClaudeSessionState.Working or ClaudeSessionState.WaitingForPermission)
                 {
+                    _projectNewResponse.Add(project);
                     StartAttentionPulse(project, diamondIcon);
                 }
                 break;
@@ -2463,6 +2962,9 @@ public partial class MainWindow : Window
                 statusBadge.Visibility = Visibility.Visible;
                 break;
         }
+
+        // Roll the child's new state up into its group's aggregate diamond.
+        RefreshGroupIndicator(project.GroupId);
     }
 
     private void StartDiamondPulse(ProjectInfo project, TextBlock diamondIcon)
@@ -2472,7 +2974,8 @@ public partial class MainWindow : Window
         timer.Tick += (_, _) =>
         {
             bright = !bright;
-            diamondIcon.Opacity = bright ? 1.0 : 0.3;
+            // Blink via Visibility (Hidden keeps layout) instead of Opacity.
+            diamondIcon.Visibility = bright ? Visibility.Visible : Visibility.Hidden;
         };
         timer.Start();
         _tabIconTimers[project] = timer;
@@ -2490,7 +2993,7 @@ public partial class MainWindow : Window
         timer.Tick += (_, _) =>
         {
             bright = !bright;
-            diamondIcon.Opacity = bright ? 1.0 : 0.55;
+            diamondIcon.Visibility = bright ? Visibility.Visible : Visibility.Hidden;
         };
         timer.Start();
         _tabIconTimers[project] = timer;
@@ -2516,14 +3019,139 @@ public partial class MainWindow : Window
             grid.Children.Count > 0 &&
             grid.Children[0] is TextBlock diamond)
         {
-            diamond.Opacity = 1.0;
+            diamond.Visibility = Visibility.Visible;
         }
+
+        // The completion has now been seen — drop the group's flashing-green state.
+        _projectNewResponse.Remove(project);
+        RefreshGroupIndicator(project.GroupId);
+    }
+
+    // --- Group-level status indicator (aggregate of child projects) ---
+
+    /// <summary>
+    /// A tab's visible status, ordered by priority. At the group level the highest
+    /// priority among the group's projects wins.
+    /// </summary>
+    private enum TabIndicator
+    {
+        Inactive = 0,    // hollow purple ◇ — no or ended session
+        Working = 1,     // flashing blue ◆
+        Idle = 2,        // solid green ◆ — ready, completion already seen
+        NewResponse = 3, // flashing green ◆ — completed turn the user hasn't viewed
+        Question = 4,    // solid orange ◆ — waiting for a permission answer
+        Error = 5,       // red ◆ + "!" — session error
+    }
+
+    private TabIndicator GetProjectIndicator(ProjectInfo project)
+    {
+        if (!_projectChatControls.TryGetValue(project, out var chat))
+            return TabIndicator.Inactive;
+
+        return chat.CurrentState switch
+        {
+            ClaudeSessionState.Error => TabIndicator.Error,
+            ClaudeSessionState.WaitingForPermission => TabIndicator.Question,
+            ClaudeSessionState.Idle =>
+                _projectNewResponse.Contains(project) ? TabIndicator.NewResponse : TabIndicator.Idle,
+            ClaudeSessionState.Working => TabIndicator.Working,
+            ClaudeSessionState.Initializing => TabIndicator.Working,
+            _ => TabIndicator.Inactive, // NotStarted, Exited
+        };
+    }
+
+    /// <summary>
+    /// Recomputes a group's diamond from the highest-priority indicator among its
+    /// projects. No-op when the meta bar is hidden or the group has no diamond yet.
+    /// </summary>
+    private void RefreshGroupIndicator(string? groupId)
+    {
+        if (groupId == null || !_groupTabIcons.TryGetValue(groupId, out var statusGrid))
+            return;
+
+        var children = _projects.Where(p => p.GroupId == groupId).ToList();
+        var indicator = children.Count == 0
+            ? TabIndicator.Inactive
+            : children.Select(GetProjectIndicator).Max();
+
+        ApplyGroupIndicator(groupId, statusGrid, indicator);
+    }
+
+    private void ApplyGroupIndicator(string groupId, Grid statusGrid, TabIndicator indicator)
+    {
+        var diamond = (TextBlock)statusGrid.Children[0];
+        var badge = (TextBlock)statusGrid.Children[1];
+
+        if (_groupIconTimers.TryGetValue(groupId, out var existing))
+        {
+            existing.Stop();
+            _groupIconTimers.Remove(groupId);
+        }
+
+        badge.Visibility = Visibility.Collapsed;
+        diamond.Visibility = Visibility.Visible;
+
+        switch (indicator)
+        {
+            case TabIndicator.Inactive:
+                diamond.Text = "◇";
+                diamond.Foreground = ThemeManager.GetBrush("TabIconInactiveDiamondForeground");
+                break;
+
+            case TabIndicator.Working:
+                diamond.Text = "◆";
+                diamond.Foreground = ThemeManager.GetBrush("TabIconWorkingForeground");
+                StartGroupPulse(groupId, diamond, 500); // flashing blue
+                break;
+
+            case TabIndicator.Idle:
+                diamond.Text = "◆";
+                diamond.Foreground = ThemeManager.GetBrush("TabIconIdleForeground");
+                break;
+
+            case TabIndicator.NewResponse:
+                diamond.Text = "◆";
+                diamond.Foreground = ThemeManager.GetBrush("TabIconIdleForeground");
+                StartGroupPulse(groupId, diamond, 700); // flashing green
+                break;
+
+            case TabIndicator.Question:
+                diamond.Text = "◆";
+                diamond.Foreground = ThemeManager.GetBrush("TabIconWaitingForeground");
+                break;
+
+            case TabIndicator.Error:
+                diamond.Text = "◆";
+                diamond.Foreground = ThemeManager.GetBrush("TabIconErrorForeground");
+                badge.Text = "!";
+                badge.FontWeight = FontWeights.Bold;
+                badge.Foreground = ThemeManager.GetBrush("TabIconErrorForeground");
+                badge.Visibility = Visibility.Visible;
+                break;
+        }
+    }
+
+    private void StartGroupPulse(string groupId, TextBlock diamond, int intervalMs)
+    {
+        var bright = true;
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(intervalMs) };
+        timer.Tick += (_, _) =>
+        {
+            bright = !bright;
+            diamond.Visibility = bright ? Visibility.Visible : Visibility.Hidden;
+        };
+        timer.Start();
+        _groupIconTimers[groupId] = timer;
     }
 
     // --- Workspace Save/Load ---
 
     private void SetWorkspaceDirty()
     {
+        // Counts every call, including the early-return no-ops below. A climbing
+        // per-interval count in the PERF health log means Layout.Updated handlers
+        // are accumulating (the per-project subscription leak in CreateDockingLayout).
+        PerfDiagnostics.NoteWorkspaceDirty();
         if (_suppressDirty || _workspaceDirty)
             return;
         _workspaceDirty = true;
@@ -2560,7 +3188,9 @@ public partial class MainWindow : Window
             {
                 Id = g.Id,
                 Name = g.Name,
-                Order = g.Order
+                Order = g.Order,
+                Icon = g.Icon,
+                IconColor = g.IconColor
             }).ToList()
         };
 
@@ -2665,7 +3295,14 @@ public partial class MainWindow : Window
         if (workspace.Groups != null && workspace.Groups.Count > 0)
         {
             foreach (var g in workspace.Groups)
-                _groups.Add(new ProjectGroup { Id = g.Id, Name = g.Name, Order = g.Order });
+                _groups.Add(new ProjectGroup
+                {
+                    Id = g.Id,
+                    Name = g.Name,
+                    Order = g.Order,
+                    Icon = g.Icon,
+                    IconColor = g.IconColor
+                });
         }
 
         // Restore projects (group assignment is applied below from the workspace file)
@@ -2859,7 +3496,7 @@ public partial class MainWindow : Window
         {
             case "Top":
                 dock = Dock.Top;
-                borderThickness = new Thickness(0, 0, 0, 1);
+                borderThickness = new Thickness(0, 1, 0, 1);
                 orientation = Orientation.Horizontal;
                 break;
             case "Bottom":
@@ -2930,10 +3567,14 @@ public partial class MainWindow : Window
             timer.Stop();
         _tabIconTimers.Clear();
 
-        // Stop all file system watchers
+        // Stop all file system watchers + detach theme handlers
         foreach (var gitControl in _projectGitControls.Values)
-            gitControl.StopWatching();
+            gitControl.Cleanup();
         _projectGitControls.Clear();
+
+        foreach (var previewControl in _projectPreviewControls.Values)
+            previewControl.Cleanup();
+        _projectPreviewControls.Clear();
 
         // Kill all Claude sessions gracefully
         foreach (var chatControl in _projectChatControls.Values)
@@ -2947,6 +3588,7 @@ public partial class MainWindow : Window
 
     private void OnThemeChanged(ThemeDescriptor theme)
     {
+        using var _perf = PerfDiagnostics.Time("OnThemeChanged");
         // Update AvalonDock theme on all DockingManagers
         var dockTheme = theme.BaseVariant == ThemeBaseVariant.Dark
             ? (Theme)new Vs2013DarkTheme()
@@ -3135,7 +3777,6 @@ public partial class MainWindow : Window
                 Text = "Loading…",
                 FontSize = 11,
                 Foreground = (Brush)FindResource("TitleBarForeground"),
-                Opacity = 0.7,
             });
             UsageFooterText.Text = "";
             return;
@@ -3161,7 +3802,6 @@ public partial class MainWindow : Window
                 FontSize = 11,
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = (Brush)FindResource("TitleBarForeground"),
-                Opacity = 0.7,
                 Margin = new Thickness(0, 0, 0, summary != null ? 10 : 0),
             });
         }
@@ -3195,7 +3835,6 @@ public partial class MainWindow : Window
                 FontSize = 11,
                 Margin = new Thickness(0, 8, 0, 0),
                 Foreground = (Brush)FindResource("TitleBarForeground"),
-                Opacity = 0.7,
             });
         }
 
@@ -3241,7 +3880,6 @@ public partial class MainWindow : Window
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Center,
             Foreground = (Brush)FindResource("TitleBarForeground"),
-            Opacity = 0.6,
         };
         Grid.SetColumn(resetBlock, 1);
         header.Children.Add(resetBlock);
@@ -3266,7 +3904,6 @@ public partial class MainWindow : Window
             FontSize = 10,
             Margin = new Thickness(0, 2, 0, 0),
             Foreground = (Brush)FindResource("TitleBarForeground"),
-            Opacity = 0.7,
         };
         container.Children.Add(pctBlock);
 

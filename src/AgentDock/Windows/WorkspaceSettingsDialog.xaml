@@ -169,7 +169,6 @@
 
                             <TextBlock Text="Workspace settings apply to the currently open workspace. Save the workspace (File → Save Workspace) to keep them across launches."
                                        FontSize="11"
-                                       Opacity="0.7"
                                        TextWrapping="Wrap"
                                        Foreground="{DynamicResource HelpForeground}"
                                        Margin="0,8,0,0" />

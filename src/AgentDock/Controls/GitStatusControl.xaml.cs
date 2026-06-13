@@ -1,9 +1,11 @@
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using AgentDock.Models;
 using AgentDock.Services;
 
 namespace AgentDock.Controls;
@@ -26,15 +28,37 @@ public partial class GitStatusControl : UserControl
     private DispatcherTimer? _debounceTimer;
     private List<string> _allBranches = [];
     private bool _isGitRepository;
+    private string _projectPath = "";
+    // Only the active (visible) tab does git work. Background tabs are suspended
+    // — no watcher, no status refreshes — so N open projects don't serialize N
+    // synchronous `git status` calls onto the one UI thread. The toolbar diamond
+    // still updates because it's driven by the session state, not by git.
+    private bool _active;
+    // Stored so it can be detached in Cleanup — a lambda subscription to the
+    // static ThemeManager.ThemeChanged would root this control (and its cached
+    // visuals) for the whole app lifetime, even after the project is closed.
+    private readonly Action<ThemeDescriptor> _themeChangedHandler;
+
+    // The bound file list. Set once as ItemsSource; refreshes apply a minimal
+    // in-place delta (SyncFileList) rather than reassigning, so unchanged rows
+    // don't re-render and the user's selection survives a refresh.
+    private readonly ObservableCollection<GitStatusItem> _items = [];
+    // Re-entrancy guard for the async refresh: if a refresh is requested while
+    // one is running, we set a pending flag and run exactly one more pass after.
+    private bool _refreshing;
+    private bool _refreshQueued;
 
     public GitStatusControl()
     {
         InitializeComponent();
-        ThemeManager.ThemeChanged += _ => RefreshStatus();
+        FileList.ItemsSource = _items;
+        _themeChangedHandler = _ => RefreshStatus();
+        ThemeManager.ThemeChanged += _themeChangedHandler;
     }
 
     public void LoadRepository(string projectPath)
     {
+        _projectPath = projectPath;
         _gitService = new GitService(projectPath);
         _isGitRepository = _gitService.IsGitRepository();
 
@@ -47,8 +71,38 @@ public partial class GitStatusControl : UserControl
             return;
         }
 
+        // Status refresh + file watching are deferred to Activate(), called when
+        // this project's tab becomes visible (see MainWindow.SwitchToProject).
+        if (_active)
+        {
+            RefreshStatus();
+            StartWatching(_projectPath);
+        }
+    }
+
+    /// <summary>
+    /// Called when this project's tab becomes the active/visible one. Does an
+    /// immediate status refresh and starts the file watcher. Idempotent.
+    /// </summary>
+    public void Activate()
+    {
+        if (_active) return;
+        _active = true;
+        if (!_isGitRepository) return;
         RefreshStatus();
-        StartWatching(projectPath);
+        if (_watcher == null && _debounceTimer == null)
+            StartWatching(_projectPath);
+    }
+
+    /// <summary>
+    /// Called when this project's tab is switched away from. Stops the watcher
+    /// and debounce timer so a background tab consumes no git/UI resources.
+    /// </summary>
+    public void Deactivate()
+    {
+        if (!_active) return;
+        _active = false;
+        StopWatching();
     }
 
     private void StartWatching(string projectPath)
@@ -136,6 +190,18 @@ public partial class GitStatusControl : UserControl
         DisposeWatcher();
     }
 
+    /// <summary>
+    /// Full teardown on project close. Detaches the theme handler (otherwise the
+    /// static ThemeManager.ThemeChanged event roots this control forever) and
+    /// stops all watching. Call from the project-removal path.
+    /// </summary>
+    public void Cleanup()
+    {
+        ThemeManager.ThemeChanged -= _themeChangedHandler;
+        _active = false;
+        StopWatching();
+    }
+
     private void DisposeWatcher()
     {
         if (_watcher != null)
@@ -143,20 +209,6 @@ public partial class GitStatusControl : UserControl
             _watcher.EnableRaisingEvents = false;
             _watcher.Dispose();
             _watcher = null;
-        }
-    }
-
-    private void RefreshBranch()
-    {
-        var branch = _gitService?.GetCurrentBranch();
-        if (!string.IsNullOrEmpty(branch))
-        {
-            BranchName.Text = branch;
-            BranchPanel.Visibility = Visibility.Visible;
-        }
-        else
-        {
-            BranchPanel.Visibility = Visibility.Collapsed;
         }
     }
 
@@ -298,17 +350,86 @@ public partial class GitStatusControl : UserControl
         }
     }
 
-    public void RefreshStatus()
+    /// <summary>
+    /// Refreshes branch + file status. The git work runs OFF the UI thread (it
+    /// shells out to git, which used to block the UI thread directly); the UI is
+    /// then updated as a minimal delta. Background tabs are skipped entirely.
+    /// async void: this is an event-style entry point (timer tick, theme change,
+    /// session-idle), not awaited by callers.
+    /// </summary>
+    public async void RefreshStatus()
     {
-        if (_gitService == null || !_isGitRepository)
+        // Background (non-active) tabs do no git work — see Activate/Deactivate.
+        if (!_active || _gitService == null || !_isGitRepository)
             return;
 
-        RefreshBranch();
-
-        var entries = _gitService.GetStatus();
-
-        if (entries.Count == 0)
+        // Coalesce overlapping requests: if a refresh is already running, mark a
+        // pending pass and let the running loop pick it up.
+        if (_refreshing)
         {
+            _refreshQueued = true;
+            return;
+        }
+
+        _refreshing = true;
+        try
+        {
+            do
+            {
+                _refreshQueued = false;
+                await RefreshCoreAsync();
+            }
+            while (_refreshQueued && _active && _gitService != null && _isGitRepository);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"GitStatusControl.RefreshStatus failed: {ex.Message}");
+        }
+        finally
+        {
+            _refreshing = false;
+        }
+    }
+
+    private async Task RefreshCoreAsync()
+    {
+        var gitService = _gitService;
+        if (gitService == null) return;
+
+        // EVERYTHING that isn't a UI mutation happens on the background thread:
+        // the blocking git calls AND the post-processing (sort + the membership
+        // set used to diff). Only the minimal merge into the bound collection
+        // (SyncFileList) runs on the UI thread after we resume.
+        var (branch, target, targetSet) = await Task.Run(() =>
+        {
+            var b = gitService.GetCurrentBranch();
+            var entries = gitService.GetStatus();
+            // Sort: staged first, then unstaged, alphabetical within each group.
+            var sorted = entries
+                .OrderBy(e => e.IsStaged ? 0 : 1)
+                .ThenBy(e => e.FilePath, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            return (b, sorted, new HashSet<GitFileEntry>(sorted));
+        });
+
+        // The tab may have been deactivated/closed while git ran.
+        if (!_active) return;
+
+        // Branch header
+        if (!string.IsNullOrEmpty(branch))
+        {
+            if (BranchName.Text != branch) BranchName.Text = branch;
+            BranchPanel.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            BranchPanel.Visibility = Visibility.Collapsed;
+        }
+
+        // File list
+        if (target.Count == 0)
+        {
+            if (_items.Count > 0) _items.Clear();
             StatusPanel.Visibility = Visibility.Collapsed;
             NoChangesMessage.Visibility = Visibility.Visible;
             NotGitMessage.Visibility = Visibility.Collapsed;
@@ -319,64 +440,73 @@ public partial class GitStatusControl : UserControl
         NotGitMessage.Visibility = Visibility.Collapsed;
         StatusPanel.Visibility = Visibility.Visible;
 
-        // Sort: staged first, then unstaged, alphabetical within each group
-        var viewItems = entries
-            .OrderBy(e => e.IsStaged ? 0 : 1)
-            .ThenBy(e => e.FilePath, StringComparer.OrdinalIgnoreCase)
-            .Select(e => new GitStatusItem(e))
-            .ToList();
-
-        // Skip rebuild if the list hasn't actually changed — avoids killing
-        // the current selection and hover state on every debounce tick
-        if (FileList.ItemsSource is List<GitStatusItem> current && EntriesMatch(current, viewItems))
-        {
-            return;
-        }
-
-        // Preserve the selected file across the rebuild
-        var selectedPath = (FileList.SelectedItem as GitStatusItem)?.Entry;
-
-        FileList.ItemsSource = viewItems;
-
-        if (selectedPath != null)
-        {
-            var match = viewItems.FirstOrDefault(v =>
-                v.Entry.FilePath == selectedPath.FilePath &&
-                v.Entry.IsStaged == selectedPath.IsStaged);
-            if (match != null)
-                FileList.SelectedItem = match;
-        }
-
-        FileSystemChanged?.Invoke();
+        var changed = SyncFileList(target, targetSet);
+        if (changed)
+            FileSystemChanged?.Invoke();
     }
 
     /// <summary>
-    /// Returns true when both lists contain the same entries in the same order.
+    /// Reconciles <see cref="_items"/> to <paramref name="target"/> (already
+    /// sorted) with the minimum number of ObservableCollection edits. Rows whose
+    /// <see cref="GitFileEntry"/> is unchanged keep their existing item instance,
+    /// so they don't re-render and the selection survives. Returns true if it made
+    /// any change (so callers can avoid firing downstream events on a no-op).
     /// </summary>
-    private static bool EntriesMatch(List<GitStatusItem> a, List<GitStatusItem> b)
+    private bool SyncFileList(List<GitFileEntry> target, HashSet<GitFileEntry> targetSet)
     {
-        if (a.Count != b.Count)
-            return false;
+        var changed = false;
 
-        for (int i = 0; i < a.Count; i++)
+        // 1. Drop rows no longer present (GitFileEntry is a record → value equality).
+        //    targetSet was built on the background thread.
+        for (int i = _items.Count - 1; i >= 0; i--)
         {
-            if (a[i].Entry != b[i].Entry)   // GitFileEntry is a record — value equality
-                return false;
+            if (!targetSet.Contains(_items[i].Entry))
+            {
+                _items.RemoveAt(i);
+                changed = true;
+            }
         }
 
-        return true;
+        // 2. Make _items match target order, reusing existing instances.
+        for (int j = 0; j < target.Count; j++)
+        {
+            if (j < _items.Count && _items[j].Entry == target[j])
+                continue;
+
+            int existing = -1;
+            for (int m = j + 1; m < _items.Count; m++)
+            {
+                if (_items[m].Entry == target[j]) { existing = m; break; }
+            }
+
+            if (existing >= 0)
+                _items.Move(existing, j);          // reorder existing row
+            else
+                _items.Insert(j, new GitStatusItem(target[j]));   // brand-new row
+            changed = true;
+        }
+
+        // 3. Trim any trailing leftovers (defensive — should be none after 1+2).
+        while (_items.Count > target.Count)
+        {
+            _items.RemoveAt(_items.Count - 1);
+            changed = true;
+        }
+
+        return changed;
     }
 
-    private void FileList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private async void FileList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (FileList.SelectedItem is not GitStatusItem item || _gitService == null)
             return;
 
-        var diff = _gitService.GetDiff(item.Entry.FilePath, item.Entry.IsStaged);
+        var gitService = _gitService;
+        var entry = item.Entry;
+        // Diffs can be large; fetch off the UI thread.
+        var diff = await Task.Run(() => gitService.GetDiff(entry.FilePath, entry.IsStaged));
         if (diff != null)
-        {
-            DiffRequested?.Invoke(item.Entry.FilePath, diff);
-        }
+            DiffRequested?.Invoke(entry.FilePath, diff);
     }
 }
 

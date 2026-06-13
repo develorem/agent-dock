@@ -1,8 +1,8 @@
-<Window x:Class="AgentDock.Windows.ProjectSettingsDialog"
+<Window x:Class="AgentDock.Windows.GroupSettingsDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Project Settings"
-        Width="420" Height="720"
+        Title="Group Settings"
+        Width="420" Height="420"
         WindowStartupLocation="CenterOwner"
         ResizeMode="NoResize"
         WindowStyle="None"
@@ -56,13 +56,10 @@
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" /> <!-- Title bar -->
-                <RowDefinition Height="Auto" /> <!-- Project Name -->
+                <RowDefinition Height="Auto" /> <!-- Group Name -->
                 <RowDefinition Height="Auto" /> <!-- Icon preview row -->
                 <RowDefinition Height="Auto" /> <!-- Icon grid (collapsible) -->
                 <RowDefinition Height="Auto" /> <!-- Icon Colour -->
-                <RowDefinition Height="Auto" /> <!-- Sounds header -->
-                <RowDefinition Height="Auto" /> <!-- Sounds section (collapsible) -->
-                <RowDefinition Height="Auto" /> <!-- Description -->
                 <RowDefinition Height="Auto" /> <!-- Buttons -->
             </Grid.RowDefinitions>
 
@@ -72,7 +69,7 @@
                     CornerRadius="4,4,0,0"
                     MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
                 <Grid>
-                    <TextBlock Text="Project Settings"
+                    <TextBlock Text="Group Settings"
                                FontSize="12"
                                FontWeight="SemiBold"
                                VerticalAlignment="Center"
@@ -109,9 +106,9 @@
                 </Grid>
             </Border>
 
-            <!-- Project Name -->
+            <!-- Group Name -->
             <StackPanel Grid.Row="1" Margin="16,14,16,4">
-                <TextBlock Text="Project Name"
+                <TextBlock Text="Group Name"
                            FontSize="12"
                            FontWeight="SemiBold"
                            Foreground="{DynamicResource HelpForeground}"
@@ -126,10 +123,6 @@
                          BorderBrush="{DynamicResource HelpCardBorderBrush}"
                          BorderThickness="1"
                          Padding="6,0" />
-                <TextBlock x:Name="NameHintText"
-                           FontSize="10"
-                           Margin="0,4,0,0"
-                           Foreground="{DynamicResource HelpForeground}" />
             </StackPanel>
 
             <!-- Icon preview row -->
@@ -207,11 +200,6 @@
                               VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled">
                     <StackPanel>
-                        <TextBlock x:Name="BuiltInHeader"
-                                   Text="Built-in"
-                                   FontSize="11"
-                                   Foreground="{DynamicResource HelpForeground}"
-                                   Margin="0,0,0,4" />
                         <WrapPanel x:Name="BuiltInPanel" />
                         <TextBlock x:Name="NoIconsLabel"
                                    Text="No matching icons"
@@ -219,13 +207,6 @@
                                    Visibility="Collapsed"
                                    Foreground="{DynamicResource HelpForeground}"
                                    Margin="2,4,0,4" />
-                        <StackPanel x:Name="DiscoveredSection" Visibility="Collapsed" Margin="0,8,0,0">
-                            <TextBlock Text="Discovered"
-                                       FontSize="11"
-                                       Foreground="{DynamicResource HelpForeground}"
-                                       Margin="0,0,0,4" />
-                            <WrapPanel x:Name="DiscoveredPanel" />
-                        </StackPanel>
                     </StackPanel>
                 </ScrollViewer>
             </StackPanel>
@@ -240,73 +221,11 @@
                 <WrapPanel x:Name="ForegroundSwatchPanel" />
             </StackPanel>
 
-            <!-- Sounds header -->
-            <StackPanel Grid.Row="5" Margin="16,12,16,4">
-                <TextBlock Text="Sounds"
-                           FontSize="12"
-                           FontWeight="SemiBold"
-                           Foreground="{DynamicResource HelpForeground}"
-                           Margin="0,0,0,8" />
-                <DockPanel>
-                    <Button DockPanel.Dock="Right"
-                            Content="Configure..."
-                            Style="{StaticResource DialogButton}"
-                            Click="ConfigureSounds_Click"
-                            VerticalAlignment="Center" />
-                    <TextBlock x:Name="SoundsSummaryLabel"
-                               Text="All enabled"
-                               FontSize="13"
-                               VerticalAlignment="Center"
-                               Foreground="{DynamicResource HelpForeground}" />
-                </DockPanel>
-            </StackPanel>
-
-            <!-- Sounds section (collapsed by default) -->
-            <StackPanel x:Name="SoundsSection" Grid.Row="6" Margin="16,8,16,4"
-                        Visibility="Collapsed">
-                <CheckBox x:Name="SoundOnStartCheckBox"
-                          Content="Session start"
-                          FontSize="12"
-                          Foreground="{DynamicResource HelpForeground}"
-                          Margin="0,4,0,4" />
-                <CheckBox x:Name="SoundOnWaitingCheckBox"
-                          Content="Agent waiting for input"
-                          FontSize="12"
-                          Foreground="{DynamicResource HelpForeground}"
-                          Margin="0,4,0,4" />
-                <CheckBox x:Name="SoundOnEndCheckBox"
-                          Content="Session end"
-                          FontSize="12"
-                          Foreground="{DynamicResource HelpForeground}"
-                          Margin="0,4,0,4" />
-            </StackPanel>
-
-            <!-- Project Description -->
-            <StackPanel Grid.Row="7" Margin="16,12,16,4">
-                <TextBlock Text="Project Description"
-                           FontSize="12"
-                           FontWeight="SemiBold"
-                           Foreground="{DynamicResource HelpForeground}"
-                           Margin="0,0,0,8" />
-                <TextBox x:Name="DescriptionTextBox"
-                         FontSize="12"
-                         TextWrapping="Wrap"
-                         AcceptsReturn="True"
-                         MaxLength="500"
-                         Height="60"
-                         VerticalScrollBarVisibility="Auto"
-                         Foreground="{DynamicResource HelpForeground}"
-                         Background="{DynamicResource HelpCardBackground}"
-                         BorderBrush="{DynamicResource HelpCardBorderBrush}"
-                         BorderThickness="1"
-                         Padding="6,4" />
-            </StackPanel>
-
             <!-- OK / Cancel buttons -->
-            <StackPanel Grid.Row="8"
+            <StackPanel Grid.Row="5"
                         Orientation="Horizontal"
                         HorizontalAlignment="Right"
-                        Margin="16,14,16,16">
+                        Margin="16,18,16,16">
                 <Button Content="OK"
                         Style="{StaticResource DialogButton}"
                         IsDefault="True"

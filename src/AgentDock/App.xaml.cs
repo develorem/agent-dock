@@ -60,6 +60,12 @@ public partial class App : Application
         Log.Init(StartupLogsFolder, sessionContext);
         Log.Info("Application starting");
 
+        // Performance instrumentation: log the rendering/machine environment once
+        // (catches software-rendering fallback) and start the UI-thread stall +
+        // health monitors. See PerfDiagnostics.
+        PerfDiagnostics.LogEnvironment();
+        PerfDiagnostics.Start();
+
         if (StartupWorkspacePath != null)
             Log.Info($"Startup workspace: {StartupWorkspacePath}");
         foreach (var folder in StartupProjectFolders)
@@ -70,11 +76,25 @@ public partial class App : Application
         // Catch unhandled exceptions on the UI thread
         DispatcherUnhandledException += OnDispatcherUnhandledException;
 
+        // Fires before DispatcherUnhandledException — gives us a logging
+        // toehold even if the main handler is bypassed or throws itself.
+        Dispatcher.UnhandledExceptionFilter += OnDispatcherUnhandledExceptionFilter;
+
         // Catch unhandled exceptions on background threads
         AppDomain.CurrentDomain.UnhandledException += OnUnhandledException;
 
         // Catch unobserved task exceptions
         TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+
+        // Log every throw — even ones that get caught downstream. This is the
+        // only handler that sees an exception before runtime escalation paths
+        // (FailFast, StackOverflow) can terminate the process without firing
+        // the unhandled handlers above.
+        AppDomain.CurrentDomain.FirstChanceException += OnFirstChanceException;
+
+        // Log normal process exit so we can distinguish clean shutdown from
+        // crashes in the log file.
+        AppDomain.CurrentDomain.ProcessExit += OnProcessExit;
     }
 
     private enum ParseResult { Continue, Exit, Error }
@@ -276,5 +296,51 @@ public partial class App : Application
     {
         Log.Error("UNOBSERVED TASK EXCEPTION", e.Exception);
         e.SetObserved();
+    }
+
+    private static void OnDispatcherUnhandledExceptionFilter(object sender, DispatcherUnhandledExceptionFilterEventArgs e)
+    {
+        // Logs before DispatcherUnhandledException runs, so we still capture
+        // the throw if the main handler is somehow bypassed.
+        Log.Error("DISPATCHER EXCEPTION (pre-filter)", e.Exception);
+    }
+
+    private static void OnFirstChanceException(object? sender, System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs e)
+    {
+        // Avoid recursive logging if Log.Write itself throws.
+        if (_inFirstChanceHandler) return;
+
+        var ex = e.Exception;
+
+        // OperationCanceledException / TaskCanceledException are routine flow
+        // control (cancellation tokens, dispatcher shutdown) — skip to avoid
+        // drowning the log.
+        if (ex is OperationCanceledException) return;
+
+        _inFirstChanceHandler = true;
+        try
+        {
+            // First-chance fires for caught exceptions too — log at WARN with
+            // type + message + first stack frame only, to keep noise down.
+            // The full stack will be in the unhandled handler if it escapes.
+            var firstFrame = ex.StackTrace?.Split('\n', 2)[0]?.Trim() ?? "(no stack)";
+            Log.Warn($"FIRST-CHANCE {ex.GetType().Name}: {ex.Message} | {firstFrame}");
+        }
+        catch
+        {
+            // Logging must never break the process.
+        }
+        finally
+        {
+            _inFirstChanceHandler = false;
+        }
+    }
+
+    [ThreadStatic]
+    private static bool _inFirstChanceHandler;
+
+    private static void OnProcessExit(object? sender, EventArgs e)
+    {
+        Log.Info("Process exiting (clean shutdown)");
     }
 }

@@ -70,7 +70,6 @@
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding IsCompleted}" Value="True">
                                                 <Setter Property="TextDecorations" Value="Strikethrough" />
-                                                <Setter Property="Opacity" Value="0.5" />
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>

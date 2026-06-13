@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Unit tests for Agent Dock. Currently focused on the markdown string-transform
+    layer (MarkdownHelper.PreProcess / LinkifyPaths / StripLeadingVersionHeading) —
+    the pure string->string stage where almost every rendering fix has landed.
+
+    Targets net10.0-windows + UseWPF because MarkdownHelper lives in the WPF app
+    assembly and references WPF types (FontFamily). These tests never touch the
+    visual tree, so they run on the default (MTA) test thread without a Dispatcher.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>AgentDock.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.13.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\AgentDock\AgentDock.csproj" />
+  </ItemGroup>
+
+</Project>
