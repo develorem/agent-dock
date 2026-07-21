@@ -102,6 +102,102 @@ public class GitService
         return result;
     }
 
+    /// <summary>
+    /// Returns a browsable web URL for the <c>origin</c> remote, or null if there is
+    /// no origin or it isn't a recognizable web host (e.g. a plain SSH git server).
+    /// </summary>
+    public string? GetRemoteWebUrl()
+    {
+        var url = RunGit("remote get-url origin")?.Trim();
+        return ToWebUrl(url);
+    }
+
+    /// <summary>
+    /// Converts a git remote URL into a browsable https web URL, or returns null when
+    /// the remote can't be mapped to a web page. Pure/testable — no process launch.
+    ///
+    /// Rules:
+    /// - http(s) remotes are already web URLs → returned cleaned (credentials and a
+    ///   trailing <c>.git</c> stripped). Covers self-hosted GitHub/GitLab over https.
+    /// - SSH remotes (scp-style <c>git@host:path</c> or <c>ssh://…</c>) are converted
+    ///   only for recognized web hosts, since an arbitrary SSH git server isn't a web
+    ///   server. Azure DevOps uses a distinct web-path shape and is special-cased.
+    /// </summary>
+    public static string? ToWebUrl(string? remoteUrl)
+    {
+        if (string.IsNullOrWhiteSpace(remoteUrl))
+            return null;
+
+        var url = remoteUrl.Trim();
+
+        // http(s): already a web URL. Strip embedded credentials + trailing ".git".
+        if (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || string.IsNullOrEmpty(uri.Host))
+                return null;
+
+            var httpPath = StripDotGit(uri.AbsolutePath).TrimEnd('/');
+            if (string.IsNullOrEmpty(httpPath))
+                return null;
+
+            return $"https://{uri.Host}{httpPath}";
+        }
+
+        // Otherwise SSH — extract (host, path).
+        string? host;
+        string? path;
+        if (url.StartsWith("ssh://", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+                return null;
+            host = uri.Host;
+            path = uri.AbsolutePath;
+        }
+        else
+        {
+            // scp-like: [user@]host:path
+            var afterUser = url.Contains('@') ? url[(url.IndexOf('@') + 1)..] : url;
+            var colon = afterUser.IndexOf(':');
+            if (colon <= 0)
+                return null;
+            host = afterUser[..colon];
+            path = afterUser[(colon + 1)..];
+        }
+
+        if (string.IsNullOrEmpty(host) || string.IsNullOrEmpty(path))
+            return null;
+
+        path = StripDotGit(path.Trim('/'));
+        if (string.IsNullOrEmpty(path))
+            return null;
+
+        // Azure DevOps SSH: v3/{org}/{project}/{repo} -> dev.azure.com/{org}/{project}/_git/{repo}
+        if (host.Equals("ssh.dev.azure.com", StringComparison.OrdinalIgnoreCase) ||
+            host.Equals("vs-ssh.visualstudio.com", StringComparison.OrdinalIgnoreCase))
+        {
+            var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 4 && parts[0].Equals("v3", StringComparison.OrdinalIgnoreCase))
+                return $"https://dev.azure.com/{parts[1]}/{parts[2]}/_git/{parts[3]}";
+            return null;
+        }
+
+        return IsKnownWebHost(host) ? $"https://{host}/{path}" : null;
+    }
+
+    private static string StripDotGit(string s)
+        => s.EndsWith(".git", StringComparison.OrdinalIgnoreCase) ? s[..^4] : s;
+
+    private static bool IsKnownWebHost(string host)
+    {
+        host = host.ToLowerInvariant();
+        string[] known = ["github.com", "gitlab.com", "bitbucket.org", "dev.azure.com", "codeberg.org"];
+        return known.Contains(host)
+            || host.Contains("github")
+            || host.Contains("gitlab")
+            || host.Contains("bitbucket");
+    }
+
     public List<string> GetLocalBranches()
     {
         var output = RunGit("branch --format=%(refname:short)");
