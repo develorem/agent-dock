@@ -34,6 +34,7 @@
     <SolidColorBrush x:Key="TabIconIdleForeground" Color="#56D4A0" />
     <SolidColorBrush x:Key="TabIconWorkingForeground" Color="#58A6FF" />
     <SolidColorBrush x:Key="TabIconWaitingForeground" Color="#E3B341" />
+    <SolidColorBrush x:Key="TabIconScheduledForeground" Color="#22C7D6" />
     <SolidColorBrush x:Key="TabIconErrorForeground" Color="#F85149" />
 
     <!-- File preview -->
