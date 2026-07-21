@@ -130,13 +130,16 @@
                         CornerRadius="3">
                     <ScrollViewer MaxHeight="120" VerticalScrollBarVisibility="Auto">
                         <TextBox x:Name="MessagePreview"
-                                 IsReadOnly="True"
                                  BorderThickness="0"
                                  Background="Transparent"
                                  Foreground="{DynamicResource HelpForeground}"
+                                 CaretBrush="{DynamicResource HelpForeground}"
                                  FontFamily="Cascadia Code, Consolas, Courier New"
                                  FontSize="12"
                                  TextWrapping="Wrap"
+                                 AcceptsReturn="True"
+                                 MinHeight="48"
+                                 VerticalContentAlignment="Top"
                                  Padding="8,6" />
                     </ScrollViewer>
                 </Border>

@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -48,6 +49,12 @@ public partial class GitStatusControl : UserControl
     private bool _refreshing;
     private bool _refreshQueued;
 
+    // Browsable web URL for origin, resolved once per repository (the remote origin
+    // doesn't change during a session) and cached so the debounced refresh doesn't
+    // shell out to git for it on every file change. Null = no browsable remote.
+    private string? _remoteWebUrl;
+    private bool _remoteResolved;
+
     public GitStatusControl()
     {
         InitializeComponent();
@@ -61,6 +68,9 @@ public partial class GitStatusControl : UserControl
         _projectPath = projectPath;
         _gitService = new GitService(projectPath);
         _isGitRepository = _gitService.IsGitRepository();
+        _remoteWebUrl = null;
+        _remoteResolved = false;
+        OpenRemoteButton.Visibility = Visibility.Collapsed;
 
         if (!_isGitRepository)
         {
@@ -217,6 +227,22 @@ public partial class GitStatusControl : UserControl
         var branch = BranchName.Text;
         if (!string.IsNullOrEmpty(branch))
             Clipboard.SetText(branch);
+    }
+
+    private void OpenRemote_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrEmpty(_remoteWebUrl))
+            return;
+
+        try
+        {
+            // UseShellExecute lets the OS route the URL to the default browser.
+            Process.Start(new ProcessStartInfo(_remoteWebUrl) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"GitStatusControl: failed to open remote URL '{_remoteWebUrl}' — {ex.Message}");
+        }
     }
 
     private void BranchMore_Click(object sender, RoutedEventArgs e)
@@ -400,7 +426,10 @@ public partial class GitStatusControl : UserControl
         // the blocking git calls AND the post-processing (sort + the membership
         // set used to diff). Only the minimal merge into the bound collection
         // (SyncFileList) runs on the UI thread after we resume.
-        var (branch, target, targetSet) = await Task.Run(() =>
+        // The remote origin is resolved at most once (see _remoteResolved). Capture
+        // the current cache state before the hop so the closure reads no live fields.
+        var resolveRemote = !_remoteResolved;
+        var (branch, target, targetSet, remoteWebUrl) = await Task.Run(() =>
         {
             var b = gitService.GetCurrentBranch();
             var entries = gitService.GetStatus();
@@ -409,11 +438,22 @@ public partial class GitStatusControl : UserControl
                 .OrderBy(e => e.IsStaged ? 0 : 1)
                 .ThenBy(e => e.FilePath, StringComparer.OrdinalIgnoreCase)
                 .ToList();
-            return (b, sorted, new HashSet<GitFileEntry>(sorted));
+            var remote = resolveRemote ? gitService.GetRemoteWebUrl() : null;
+            return (b, sorted, new HashSet<GitFileEntry>(sorted), remote);
         });
 
         // The tab may have been deactivated/closed while git ran.
         if (!_active) return;
+
+        // Show the "open in browser" button once we've resolved a browsable remote.
+        if (resolveRemote)
+        {
+            _remoteWebUrl = remoteWebUrl;
+            _remoteResolved = true;
+            OpenRemoteButton.Visibility = string.IsNullOrEmpty(_remoteWebUrl)
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+        }
 
         // Branch header
         if (!string.IsNullOrEmpty(branch))

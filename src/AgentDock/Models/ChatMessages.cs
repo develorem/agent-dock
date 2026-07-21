@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Windows.Documents;
+using System.Windows.Media;
 using System.Windows.Threading;
 
 namespace AgentDock.Models;
@@ -23,9 +24,16 @@ public abstract class ChatMessageVm(Guid id)
 
 // --- Immutable finalized messages ---
 
-public sealed class UserMessage(Guid id, string text) : ChatMessageVm(id)
+public sealed class UserMessage(Guid id, string text, IReadOnlyList<ImageSource>? images = null) : ChatMessageVm(id)
 {
     public string Text { get; } = text;
+
+    /// <summary>Thumbnails of any images attached to this message, shown above the
+    /// text in the bubble. Null/empty for text-only messages.</summary>
+    public IReadOnlyList<ImageSource>? Images { get; } = images;
+
+    public bool HasImages => Images is { Count: > 0 };
+    public bool HasText => !string.IsNullOrEmpty(Text);
 }
 
 /// <summary>
@@ -38,7 +46,7 @@ public sealed class UserMessage(Guid id, string text) : ChatMessageVm(id)
 /// cached) only when the bubble is actually realized in a visible tab, so
 /// background tabs and off-screen messages never pay the MdXaml + AvalonEdit build
 /// cost. The same closure is passed to the toggled instance so flipping the view
-/// doesn't re-parse. Null for single-line messages (rendered as plain text).
+/// doesn't re-parse. Null for messages with no markdown (rendered as plain text).
 /// </summary>
 public sealed class AssistantMessage(
     Guid id,
@@ -49,9 +57,10 @@ public sealed class AssistantMessage(
 {
     public string Text { get; } = text;
     public bool IsMarkdownView { get; } = isMarkdownView;
-    /// <summary>True for multi-line assistant text — the only case where the
-    /// source/rendered toggle button is meaningful (single-line messages have
-    /// nothing for the renderer to add).</summary>
+    /// <summary>True when the text carries markdown the renderer changes (multi-line
+    /// content, or inline emphasis / code / links / URLs) — the only case where the
+    /// source/rendered toggle button is meaningful. A plain single-line sentence has
+    /// nothing for the renderer to add, so it shows no toggle.</summary>
     public bool HasMarkdownToggle { get; } = hasMarkdownToggle;
 
     /// <summary>Memoizing factory for the rendered document; null if this message
@@ -65,6 +74,23 @@ public sealed class AssistantMessage(
 
 /// <summary>One green tool-execution line inside an <see cref="ActivityMessage"/>.</summary>
 public sealed record ToolEntry(string Name, string FormattedInput);
+
+/// <summary>A subagent / background-task spawn line inside an <see cref="ActivityMessage"/>.
+/// Rendered distinctly (diamond glyph, working accent colour) so a launched subagent
+/// stands apart from the main agent's own tool calls.</summary>
+public sealed record SubagentEntry(string Label, string Description);
+
+/// <summary>A subagent's final report inside an <see cref="ActivityMessage"/>, shown when
+/// the subagent completes. Carries the subagent type, the model it ran on (shown as a tag;
+/// null if unknown), and its final text — so the subagent's actual output is captured in
+/// the transcript rather than discarded.</summary>
+public sealed record SubagentReportEntry(string Label, string? Model, string Text)
+{
+    /// <summary>"◆ Explore report · claude-sonnet-5" style header.</summary>
+    public string Header => string.IsNullOrEmpty(Model)
+        ? $"◆ {Label} report"
+        : $"◆ {Label} report · {Model}";
+}
 
 public sealed class SystemMessage(Guid id, string text, bool isWarning) : ChatMessageVm(id)
 {
@@ -236,6 +262,20 @@ public sealed class ActivityMessage(Guid id) : ChatMessageVm(id), INotifyPropert
     {
         CloseThinking();
         Entries.Add(new ToolEntry(name, formattedInput));
+    }
+
+    /// <summary>Add a subagent / background-task spawn line; closes any open thinking block first.</summary>
+    public void AddSubagent(string label, string description)
+    {
+        CloseThinking();
+        Entries.Add(new SubagentEntry(label, description));
+    }
+
+    /// <summary>Add a completed subagent's final report; closes any open thinking block first.</summary>
+    public void AddSubagentReport(string label, string? model, string text)
+    {
+        CloseThinking();
+        Entries.Add(new SubagentReportEntry(label, model, text));
     }
 
     private void EnsureOpenThinking()

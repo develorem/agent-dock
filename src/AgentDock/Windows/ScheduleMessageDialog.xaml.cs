@@ -21,6 +21,9 @@ public partial class ScheduleMessageDialog : Window
     /// <summary>The chosen delay when the user clicks Schedule in compose mode.</summary>
     public TimeSpan Delay { get; private set; }
 
+    /// <summary>The (possibly edited) message when the user clicks Schedule in compose mode.</summary>
+    public string MessageText { get; private set; } = "";
+
     /// <summary>True when the user clicked "Cancel Schedule" in manage mode.</summary>
     public bool CancelRequested { get; private set; }
 
@@ -33,21 +36,32 @@ public partial class ScheduleMessageDialog : Window
     }
 
     /// <summary>
-    /// Shows the compose dialog. Returns the chosen delay, or null if cancelled.
+    /// Shows the compose dialog, seeded with the current draft (which may be empty —
+    /// the message is editable here, so scheduling can start from an empty input box).
+    /// Returns the composed message and chosen delay, or null if cancelled.
     /// </summary>
-    public static TimeSpan? ShowCompose(Window owner, string messageText)
+    public static (string message, TimeSpan delay)? ShowCompose(Window owner, string draft)
     {
         var dialog = new ScheduleMessageDialog { Owner = owner };
-        dialog.MessagePreview.Text = messageText;
+        dialog.MessagePreview.Text = draft;
         dialog.HoursBox.Text = "1";
         dialog.MinutesBox.Text = "0";
         dialog.UpdateComposeHint();
         dialog.Loaded += (_, _) =>
         {
-            dialog.HoursBox.Focus();
-            dialog.HoursBox.SelectAll();
+            // No draft yet → let the user type the message first; otherwise jump
+            // straight to the delay so they can just pick a time and go.
+            if (string.IsNullOrEmpty(draft))
+            {
+                dialog.MessagePreview.Focus();
+            }
+            else
+            {
+                dialog.HoursBox.Focus();
+                dialog.HoursBox.SelectAll();
+            }
         };
-        return dialog.ShowDialog() == true ? dialog.Delay : null;
+        return dialog.ShowDialog() == true ? (dialog.MessageText, dialog.Delay) : null;
     }
 
     /// <summary>
@@ -118,6 +132,13 @@ public partial class ScheduleMessageDialog : Window
 
     private void ScheduleButton_Click(object sender, RoutedEventArgs e)
     {
+        var message = MessagePreview.Text.Trim();
+        if (string.IsNullOrEmpty(message))
+        {
+            ComposeHint.Text = "Type a message to schedule.";
+            MessagePreview.Focus();
+            return;
+        }
         var (hours, minutes) = ParseDuration();
         var total = new TimeSpan(hours, minutes, 0);
         if (total <= TimeSpan.Zero)
@@ -126,6 +147,7 @@ public partial class ScheduleMessageDialog : Window
             HoursBox.Focus();
             return;
         }
+        MessageText = message;
         Delay = total;
         DialogResult = true;
     }

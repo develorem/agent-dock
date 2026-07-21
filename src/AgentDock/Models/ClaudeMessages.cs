@@ -32,8 +32,48 @@ public class ClaudeMessagePayload
     [JsonPropertyName("role")]
     public string Role { get; init; } = "user";
 
+    /// <summary>
+    /// Either a plain string (the common text-only case) or a list of content
+    /// blocks (<see cref="ClaudeTextBlock"/> / <see cref="ClaudeImageBlock"/>) when
+    /// the message carries images. Declared <c>object</c> so System.Text.Json
+    /// serializes the runtime type — a bare string stays a JSON string, a list
+    /// becomes the Anthropic content-block array.
+    /// </summary>
     [JsonPropertyName("content")]
-    public string Content { get; init; } = "";
+    public object Content { get; init; } = "";
+}
+
+/// <summary>A text content block within a multimodal user message.</summary>
+public class ClaudeTextBlock
+{
+    [JsonPropertyName("type")]
+    public string Type => "text";
+
+    [JsonPropertyName("text")]
+    public string Text { get; init; } = "";
+}
+
+/// <summary>An image content block within a multimodal user message.</summary>
+public class ClaudeImageBlock
+{
+    [JsonPropertyName("type")]
+    public string Type => "image";
+
+    [JsonPropertyName("source")]
+    public ClaudeImageSource Source { get; init; } = null!;
+}
+
+/// <summary>Base64 image source for a <see cref="ClaudeImageBlock"/>.</summary>
+public class ClaudeImageSource
+{
+    [JsonPropertyName("type")]
+    public string Type => "base64";
+
+    [JsonPropertyName("media_type")]
+    public string MediaType { get; init; } = "";
+
+    [JsonPropertyName("data")]
+    public string Data { get; init; } = "";
 }
 
 /// <summary>
@@ -136,6 +176,48 @@ public class ClaudeAssistantMessage
 {
     public string Uuid { get; init; } = "";
     public List<ClaudeContentBlock> Content { get; init; } = [];
+
+    /// <summary>The model that produced this message (from <c>message.model</c>),
+    /// e.g. "claude-sonnet-5", "claude-fable-5". Null if absent. Used to attribute a
+    /// subagent's report to the model it ran on (Fable for planning, Opus/Sonnet for
+    /// execution).</summary>
+    public string? Model { get; init; }
+
+    /// <summary>
+    /// Non-null when this message was produced <i>by</i> a subagent — it carries the
+    /// <c>tool_use_id</c> of the spawning <c>Agent</c>/<c>Task</c> tool call. Null for
+    /// main-session messages. Used to keep subagent-internal tool calls and text out
+    /// of the top-level transcript (their activity is summarized by the subagent entry
+    /// and the running-count indicator instead).
+    /// </summary>
+    public string? ParentToolUseId { get; init; }
+}
+
+/// <summary>
+/// A subagent / background-task lifecycle event, parsed from the CLI's
+/// <c>system</c> messages (subtypes <c>task_started</c>, <c>task_progress</c>,
+/// <c>task_updated</c>, <c>task_notification</c>). These let us show that a
+/// subagent (<c>task_type: local_agent</c>) or a background shell is still running
+/// after the main agent's text has returned.
+/// </summary>
+public class ClaudeTaskEvent
+{
+    /// <summary>The system subtype: task_started / task_progress / task_updated / task_notification.</summary>
+    public string Subtype { get; init; } = "";
+    public string TaskId { get; init; } = "";
+    public string? ToolUseId { get; init; }
+    public string? Description { get; init; }
+    /// <summary>e.g. "Explore", "general-purpose" — present for subagents.</summary>
+    public string? SubagentType { get; init; }
+    /// <summary>e.g. "local_agent" for subagents; absent/other for background shells.</summary>
+    public string? TaskType { get; init; }
+    /// <summary>Lifecycle status: running / completed / killed / stopped / failed / …
+    /// For task_updated it is read from the nested <c>patch.status</c>.</summary>
+    public string? Status { get; init; }
+
+    /// <summary>True once the task has reached a terminal state (no longer running).</summary>
+    public bool IsTerminal => Status is "completed" or "killed" or "stopped"
+        or "failed" or "error" or "cancelled" or "timed_out";
 }
 
 /// <summary>
