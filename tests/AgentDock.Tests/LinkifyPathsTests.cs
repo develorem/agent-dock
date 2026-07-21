@@ -45,6 +45,15 @@ public class LinkifyPathsTests : IDisposable
             "See [https://example.com](https://example.com) here",
             MarkdownHelper.LinkifyPaths("See https://example.com here", _root));
 
+    // A bold-wrapped bare URL: the match must STOP at the closing ** rather than
+    // swallowing the asterisks into the URL. Otherwise PreProcess can't pair the
+    // bold and the leading ** renders as literal stars.
+    [Fact]
+    public void Linkify_BoldWrappedUrl_StopsAtClosingDelimiters()
+        => Assert.Equal(
+            "**[https://resend.com](https://resend.com)** — sign up",
+            MarkdownHelper.LinkifyPaths("**https://resend.com** — sign up", _root));
+
     [Fact]
     public void Linkify_LeavesExistingMarkdownLinkAlone()
     {
@@ -107,5 +116,16 @@ public class LinkifyPathsTests : IDisposable
             MarkdownHelper.LinkifyPaths("**[docs](https://x.com)** and docs/permission_groups.cs", _root));
         Assert.Contains("[**docs**](https://x.com)", pipeline);                       // bold moved inside label
         Assert.Contains(@"[docs/permission\_groups.cs](agentdock-file:///", pipeline); // path linkified + escaped
+    }
+
+    // Regression: a bare URL wrapped in bold must end up as a bold hyperlink, not a
+    // stray ** + broken link. Linkify stops the URL at the ** (see UrlCandidateRegex),
+    // then PreProcess's BoldLinkRegex moves the bold inside the label.
+    [Fact]
+    public void Pipeline_BoldWrappedUrl_BecomesBoldLink()
+    {
+        var pipeline = MarkdownHelper.PreProcess(
+            MarkdownHelper.LinkifyPaths("**https://resend.com** — sign up there", _root));
+        Assert.Equal("[**https://resend.com**](https://resend.com) — sign up there", pipeline);
     }
 }

@@ -29,14 +29,27 @@ public static partial class MarkdownHelper
     [GeneratedRegex(@"\A#\s+v?\d+(\.\d+)+[^\r\n]*\r?\n(\r?\n)?")]
     private static partial Regex LeadingVersionHeadingRegex();
 
-    // **...** containing at least one inline atom (code span or link). MdXaml parses
-    // those atoms before bold, which leaves the ** delimiters orphaned around the
-    // atom and renders them as literal text. We split the bold around each atom.
-    [GeneratedRegex(@"\*\*([^*\n]*?(?:`[^`\n]+`|\[[^\]\n]+\]\([^)\n]+\))[^*\n]*?)\*\*")]
-    private static partial Regex BoldContainingInlineRegex();
-
     [GeneratedRegex(@"`[^`\n]+`|\[[^\]\n]+\]\([^)\n]+\)")]
     private static partial Regex InlineAtomRegex();
+
+    // Inline markdown constructs that make an otherwise single-line message worth
+    // rendering: bold/italic emphasis, an inline code span, a [text](url) link, or a
+    // bare URL. Used to decide whether a newline-free reply needs the markdown renderer
+    // (and the source/rendered toggle) rather than being shown verbatim. Patterns are
+    // deliberately loose — a false positive just routes a plain sentence through the
+    // renderer (which produces identical output) and adds a toggle; a false negative is
+    // the actual bug (literal ** shown, no formatting). Emphasis alternatives require
+    // non-space, non-delimiter content so bare arithmetic like "a * b" doesn't count.
+    [GeneratedRegex(
+        @"\*\*[^*\n\s][^*\n]*\*\*"                 // **bold**
+        + @"|(?<!\*)\*[^*\n\s][^*\n]*\*(?!\*)"     // *italic*
+        + @"|(?<![\w_])__[^_\n\s][^_\n]*__(?![\w_])" // __bold__
+        + @"|(?<![\w_])_[^_\n\s][^_\n]*_(?![\w_])" // _italic_
+        + @"|`[^`\n]+`"                            // `code`
+        + @"|\[[^\]\n]+\]\([^)\n]+\)"              // [text](url)
+        + @"|https?://",                           // bare URL
+        RegexOptions.IgnoreCase)]
+    private static partial Regex InlineMarkdownRegex();
 
     [GeneratedRegex(@"^(\s*)(.*?)(\s*)$", RegexOptions.Singleline)]
     private static partial Regex TrimWsRegex();
@@ -48,8 +61,11 @@ public static partial class MarkdownHelper
 
     // Bare http/https URL. Stops at whitespace, quotes, brackets, and parens so the
     // generated [url](url) markdown stays well-formed; trailing sentence punctuation
-    // is trimmed separately (see TrimUrlTrailing).
-    [GeneratedRegex(@"\Ghttps?://[^\s<>""'`()\[\]{}|\\^]+", RegexOptions.IgnoreCase)]
+    // is trimmed separately (see TrimUrlTrailing). Asterisks are excluded too: a URL
+    // wrapped in bold (**https://x.com**) would otherwise swallow the closing ** into
+    // the match, leaving a stray leading ** that renders as literal stars. Asterisks
+    // are legal-but-rare in URLs and conventionally percent-encoded, so this is safe.
+    [GeneratedRegex(@"\Ghttps?://[^\s<>""'`()\[\]{}|\\^*]+", RegexOptions.IgnoreCase)]
     private static partial Regex UrlCandidateRegex();
 
     public const string FileLinkScheme = "agentdock-file";
@@ -73,27 +89,80 @@ public static partial class MarkdownHelper
     }
 
     /// <summary>
+    /// Returns true when <paramref name="text"/> should be handed to the markdown
+    /// renderer rather than shown verbatim. Multi-line text always qualifies (it may
+    /// carry lists, headings, tables, or code fences); single-line text qualifies only
+    /// when it contains an inline construct the renderer would change — emphasis, a code
+    /// span, a link, or a bare URL. A single-line plain sentence stays plain (no toggle).
+    /// </summary>
+    public static bool LooksLikeMarkdown(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return false;
+        return text.Contains('\n') || InlineMarkdownRegex().IsMatch(text);
+    }
+
+    /// <summary>
     /// Rewrites <c>**text `code` text**</c> as <c>**text** `code` **text**</c> so that
-    /// MdXaml can pair the bold delimiters. Also handles partial-link cases like
-    /// <c>**See [foo](url) more**</c>. Trims whitespace at split boundaries to satisfy
-    /// CommonMark flanking rules.
+    /// MdXaml can pair the bold delimiters. MdXaml parses code spans / links before bold,
+    /// so a <c>**</c> pair straddling one of those atoms is left orphaned and renders as
+    /// literal asterisks; splitting the bold around each atom lets every fragment pair.
+    /// Also handles partial-link cases like <c>**See [foo](url) more**</c>. Trims
+    /// whitespace at split boundaries to satisfy CommonMark flanking rules.
+    ///
+    /// Delimiters are paired left-to-right and non-overlapping — a <c>**</c> is matched
+    /// to the very next <c>**</c> on the same line, then scanning resumes past it. A pair
+    /// with no atom inside is emitted unchanged (MdXaml already renders plain bold), which
+    /// is what keeps a line like <c>**a**: `x` and **b**: `y`</c> intact: the closing
+    /// <c>**</c> of <c>a</c> can never bind to the opening <c>**</c> of <c>b</c> and wrap
+    /// the code span between two separate bolds. An unpaired <c>**</c> (next <c>**</c> is
+    /// on a later line, or absent) is emitted literally and scanning continues past it.
     /// </summary>
     private static string FixBoldAcrossInlineAtoms(string markdown)
     {
-        return BoldContainingInlineRegex().Replace(markdown, m =>
+        var sb = new StringBuilder(markdown.Length);
+        var i = 0;
+        while (i < markdown.Length)
         {
-            var inner = m.Groups[1].Value;
-            var sb = new StringBuilder();
-            var lastEnd = 0;
-            foreach (Match atom in InlineAtomRegex().Matches(inner))
+            var open = markdown.IndexOf("**", i, StringComparison.Ordinal);
+            if (open < 0)
             {
-                EmitBoldTextSegment(inner.Substring(lastEnd, atom.Index - lastEnd), sb);
-                sb.Append(atom.Value);
-                lastEnd = atom.Index + atom.Length;
+                sb.Append(markdown, i, markdown.Length - i);
+                break;
             }
-            EmitBoldTextSegment(inner.Substring(lastEnd), sb);
-            return sb.ToString();
-        });
+
+            var close = markdown.IndexOf("**", open + 2, StringComparison.Ordinal);
+            var newline = markdown.IndexOf('\n', open + 2);
+            if (close < 0 || (newline >= 0 && newline < close))
+            {
+                // Unpaired on this line — emit the ** literally and keep scanning.
+                sb.Append(markdown, i, open + 2 - i);
+                i = open + 2;
+                continue;
+            }
+
+            sb.Append(markdown, i, open - i);
+            var inner = markdown.Substring(open + 2, close - (open + 2));
+            if (InlineAtomRegex().IsMatch(inner))
+                sb.Append(SplitBoldAroundAtoms(inner));
+            else
+                sb.Append("**").Append(inner).Append("**");
+            i = close + 2;
+        }
+        return sb.ToString();
+    }
+
+    private static string SplitBoldAroundAtoms(string inner)
+    {
+        var sb = new StringBuilder();
+        var lastEnd = 0;
+        foreach (Match atom in InlineAtomRegex().Matches(inner))
+        {
+            EmitBoldTextSegment(inner.Substring(lastEnd, atom.Index - lastEnd), sb);
+            sb.Append(atom.Value);
+            lastEnd = atom.Index + atom.Length;
+        }
+        EmitBoldTextSegment(inner.Substring(lastEnd), sb);
+        return sb.ToString();
     }
 
     private static void EmitBoldTextSegment(string segment, StringBuilder sb)
@@ -183,7 +252,7 @@ public static partial class MarkdownHelper
 
             // Replace FlowDocument tables with WPF Grids — see ConvertTablesToGrids.
             // Runs AFTER WireLinks so any Hyperlinks inside table cells keep their
-            // wired RequestNavigate handlers when moved into the Grid.
+            // wired click handlers when moved into the per-cell RichTextBox.
             ConvertTablesToGrids(doc);
 
             // Detach from the temp viewer so the document can be re-parented to a
@@ -275,6 +344,17 @@ public static partial class MarkdownHelper
         for (var r = 0; r < rows.Count; r++)
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
+        // Logical text grid, captured in parallel with the visual cells so the table
+        // can be copied to the clipboard (TSV + HTML) — a BlockUIContainer's Grid is a
+        // UI island in the FlowDocument and contributes no selectable/copyable text, so
+        // a right-click "Copy table" is the only way to get this data into Excel etc.
+        var textGrid = new string[rows.Count][];
+        for (var r = 0; r < rows.Count; r++)
+        {
+            textGrid[r] = new string[columnCount];
+            Array.Fill(textGrid[r], "");
+        }
+
         for (var r = 0; r < rows.Count; r++)
         {
             var (row, isHeader) = rows[r];
@@ -283,7 +363,10 @@ public static partial class MarkdownHelper
             foreach (var cell in row.Cells)
             {
                 if (col >= columnCount) break;
-                var border = BuildCellBorder(cell, isHeader, isEvenRow);
+                // Read the cell's plain text before BuildCellBorder, which moves (and
+                // clears) the cell's inlines into a TextBlock.
+                if (col < columnCount) textGrid[r][col] = GetCellPlainText(cell);
+                var border = BuildCellBorder(cell, isHeader, isEvenRow, textGrid, foreground);
                 Grid.SetRow(border, r);
                 Grid.SetColumn(border, col);
                 var span = Math.Max(1, cell.ColumnSpan);
@@ -293,20 +376,122 @@ public static partial class MarkdownHelper
             }
         }
 
+        grid.ContextMenu = BuildTableContextMenu(textGrid);
         return grid;
     }
 
-    private static Border BuildCellBorder(TableCell cell, bool isHeader, bool isEvenRow)
+    // Right-click menu for a rendered table: copies the whole table to the clipboard.
+    private static ContextMenu BuildTableContextMenu(string[][] textGrid)
     {
-        var text = new TextBlock { TextWrapping = TextWrapping.Wrap };
-        if (isHeader) text.FontWeight = FontWeights.Bold;
-        PopulateCellTextBlock(cell, text);
+        var menu = new ContextMenu();
+        var copyItem = new MenuItem { Header = "Copy table" };
+        copyItem.Click += (_, _) => CopyTableToClipboard(textGrid);
+        menu.Items.Add(copyItem);
+        return menu;
+    }
 
+    // Concatenates a cell's block plain text, joining multiple blocks with a space so
+    // the result stays on one logical line (newlines inside a cell would break the
+    // TSV row/column grid Excel reconstructs).
+    private static string GetCellPlainText(TableCell cell)
+    {
+        var sb = new StringBuilder();
+        foreach (var block in cell.Blocks)
+        {
+            if (sb.Length > 0) sb.Append(' ');
+            sb.Append(GetBlockPlainText(block));
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Places a rendered table on the clipboard as tab-separated text (so Excel /
+    /// Sheets split it into columns on paste) and as an HTML table (so rich targets
+    /// like Word keep the grid). Tabs / newlines inside a cell are collapsed to spaces
+    /// so the column alignment survives.
+    /// </summary>
+    private static void CopyTableToClipboard(string[][] textGrid)
+    {
+        var tsv = new StringBuilder();
+        foreach (var row in textGrid)
+        {
+            for (var c = 0; c < row.Length; c++)
+            {
+                if (c > 0) tsv.Append('\t');
+                tsv.Append(CleanTsvCell(row[c]));
+            }
+            tsv.Append("\r\n");
+        }
+
+        var data = new DataObject();
+        data.SetData(DataFormats.UnicodeText, tsv.ToString());
+        data.SetData(DataFormats.Text, tsv.ToString());
+        data.SetData(DataFormats.Html, BuildHtmlClipboard(textGrid));
+
+        try
+        {
+            Clipboard.SetDataObject(data, copy: true);
+        }
+        catch (Exception ex)
+        {
+            // The clipboard can be transiently locked by another process; a failed copy
+            // shouldn't take down the chat.
+            Log.Error("Failed to copy table to clipboard", ex);
+        }
+    }
+
+    // Collapses the characters that define TSV structure (tab / CR / LF) to spaces so a
+    // multi-line or tab-containing cell can't shift the grid Excel parses.
+    private static string CleanTsvCell(string cell)
+        => cell.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');
+
+    // Builds a CF_HTML clipboard payload (the byte-offset header WPF/Windows require)
+    // wrapping an HTML <table> of the cell text.
+    private static string BuildHtmlClipboard(string[][] textGrid)
+    {
+        var body = new StringBuilder();
+        body.Append("<table border=\"1\" cellspacing=\"0\" cellpadding=\"4\">");
+        foreach (var row in textGrid)
+        {
+            body.Append("<tr>");
+            foreach (var cell in row)
+                body.Append("<td>").Append(System.Net.WebUtility.HtmlEncode(cell)).Append("</td>");
+            body.Append("</tr>");
+        }
+        body.Append("</table>");
+        return WrapCfHtml(body.ToString());
+    }
+
+    // Wraps an HTML fragment in the CF_HTML format: a header declaring UTF-8 byte
+    // offsets of the document and fragment, followed by the markup. Offsets are
+    // computed in bytes (UTF-8) per the spec; the header uses fixed-width 8-digit
+    // fields so its own length is constant and doesn't perturb the offsets.
+    private static string WrapCfHtml(string fragment)
+    {
+        const string header =
+            "Version:0.9\r\nStartHTML:{0:00000000}\r\nEndHTML:{1:00000000}\r\n"
+            + "StartFragment:{2:00000000}\r\nEndFragment:{3:00000000}\r\n";
+        const string preFragment = "<html><body>\r\n<!--StartFragment-->";
+        const string postFragment = "<!--EndFragment-->\r\n</body></html>";
+
+        var utf8 = Encoding.UTF8;
+        var headerLen = utf8.GetByteCount(string.Format(header, 0, 0, 0, 0));
+        var startHtml = headerLen;
+        var startFragment = startHtml + utf8.GetByteCount(preFragment);
+        var endFragment = startFragment + utf8.GetByteCount(fragment);
+        var endHtml = endFragment + utf8.GetByteCount(postFragment);
+
+        return string.Format(header, startHtml, endHtml, startFragment, endFragment)
+            + preFragment + fragment + postFragment;
+    }
+
+    private static Border BuildCellBorder(TableCell cell, bool isHeader, bool isEvenRow, string[][] textGrid, Brush foreground)
+    {
         var border = new Border
         {
             BorderThickness = new Thickness(0.5),
             Padding = new Thickness(13, 6, 13, 6),
-            Child = text,
+            Child = BuildCellContent(cell, isHeader, textGrid, foreground),
         };
         border.SetResourceReference(Border.BorderBrushProperty, "MarkdownTableBorderBrush");
         if (isHeader)
@@ -318,21 +503,74 @@ public static partial class MarkdownHelper
     }
 
     /// <summary>
-    /// Moves the inline content of a table cell's paragraphs into <paramref name="tb"/>.
+    /// Builds the selectable content for one table cell. A read-only, chrome-less
+    /// <see cref="RichTextBox"/> is used rather than a <see cref="TextBlock"/> so cell
+    /// text can be highlighted and copied with the mouse — a TextBlock renders text but
+    /// exposes no selection, which is why table text was previously uncopyable. Read-only
+    /// keeps wired Hyperlinks single-click clickable while still allowing selection, and
+    /// re-parenting the cell's inlines (rather than flattening to plain text) preserves
+    /// bold/italic/code formatting. The whole grid is still a UI island in the outer
+    /// FlowDocument (the document-wide selection can't reach into it), so the cell's
+    /// context menu also offers "Copy table" for a whole-table copy.
+    /// </summary>
+    private static RichTextBox BuildCellContent(TableCell cell, bool isHeader, string[][] textGrid, Brush foreground)
+    {
+        var paragraph = new Paragraph { Margin = new Thickness(0) };
+        if (isHeader) paragraph.FontWeight = FontWeights.Bold;
+        PopulateCellParagraph(cell, paragraph);
+
+        return new RichTextBox
+        {
+            Document = new FlowDocument(paragraph) { PagePadding = new Thickness(0) },
+            IsReadOnly = true,
+            BorderThickness = new Thickness(0),
+            Background = Brushes.Transparent,
+            // Set the theme foreground explicitly rather than relying on the grid's
+            // inherited TextElement.Foreground: the default RichTextBox style carries a
+            // Foreground setter (system text brush, ~black), and a style-setter value
+            // outranks inheritance — so without this the cell text renders black-on-dark
+            // and is unreadable in every dark theme. A local value beats the style setter.
+            Foreground = foreground,
+            Padding = new Thickness(0),
+            FocusVisualStyle = null,
+            IsTabStop = false,
+            IsReadOnlyCaretVisible = false,
+            // Vertical hidden + horizontal disabled: the box grows to fit its content and
+            // wraps long text to the column width instead of scrolling within the cell.
+            VerticalScrollBarVisibility = ScrollBarVisibility.Hidden,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            ContextMenu = BuildCellContextMenu(textGrid),
+        };
+    }
+
+    // Right-click menu for a table cell: "Copy" (the current selection, via the standard
+    // editing command routed to the focused RichTextBox) and "Copy table" (the whole grid).
+    private static ContextMenu BuildCellContextMenu(string[][] textGrid)
+    {
+        var menu = new ContextMenu();
+        menu.Items.Add(new MenuItem { Header = "Copy", Command = ApplicationCommands.Copy });
+        var copyTable = new MenuItem { Header = "Copy table" };
+        copyTable.Click += (_, _) => CopyTableToClipboard(textGrid);
+        menu.Items.Add(copyTable);
+        return menu;
+    }
+
+    /// <summary>
+    /// Moves the inline content of a table cell's paragraphs into <paramref name="target"/>.
     /// Inlines are re-parented (cleared from their paragraph first) so existing formatting
     /// and wired hyperlink handlers survive the move. Non-paragraph blocks are flattened to
     /// plain text — GFM cells are inline-only, so that path is a defensive fallback.
     /// </summary>
-    private static void PopulateCellTextBlock(TableCell cell, TextBlock tb)
+    private static void PopulateCellParagraph(TableCell cell, Paragraph target)
     {
         var first = true;
-        // Snapshot first: moving a paragraph's inlines into the TextBlock mutates the
+        // Snapshot first: moving a paragraph's inlines into the target mutates the source
         // FlowDocument's shared TextContainer (p.Inlines.Clear below), which bumps the
         // generation that a live cell.Blocks enumerator validates against — otherwise the
         // next iteration throws "Collection was modified". Same reason p.Inlines is ToList'd.
         foreach (var block in cell.Blocks.ToList())
         {
-            if (!first) tb.Inlines.Add(new LineBreak());
+            if (!first) target.Inlines.Add(new LineBreak());
             first = false;
 
             if (block is Paragraph p)
@@ -343,17 +581,17 @@ public static partial class MarkdownHelper
                 {
                     if (inl is Hyperlink h)
                     {
-                        // FlowDocument-scoped implicit styles don't reach a Hyperlink once
-                        // it's hosted in a TextBlock, so apply the link look explicitly.
+                        // The cell's new FlowDocument carries none of the outer document's
+                        // implicit styles, so apply the link look explicitly.
                         h.TextDecorations = null;
                         h.SetResourceReference(Hyperlink.ForegroundProperty, "MarkdownLinkForeground");
                     }
-                    tb.Inlines.Add(inl);
+                    target.Inlines.Add(inl);
                 }
             }
             else
             {
-                tb.Inlines.Add(new Run(GetBlockPlainText(block)));
+                target.Inlines.Add(new Run(GetBlockPlainText(block)));
             }
         }
     }
@@ -554,9 +792,21 @@ public static partial class MarkdownHelper
         if (doc == null) return;
         foreach (var link in EnumerateHyperlinks(doc))
         {
-            if (link.NavigateUri == null) continue;
+            // MdXaml does NOT set NavigateUri on the hyperlinks it generates. It stores the
+            // target in CommandParameter and sets Command = NavigationCommands.GoToPage. We
+            // host the built document by assigning FlowDocumentScrollViewer.Document directly
+            // (not MarkdownScrollViewer.Markdown), so MdXaml never installs a CommandBinding
+            // for GoToPage — that command's CanExecute is therefore false, which DISABLES the
+            // Hyperlink. It renders as a link but swallows every click. Recover the URL, drop
+            // the dead command to re-enable the link, and drive navigation from Click (which,
+            // unlike RequestNavigate, doesn't depend on NavigateUri being set).
+            var url = link.CommandParameter as string ?? link.NavigateUri?.OriginalString;
+            if (string.IsNullOrEmpty(url)) continue;
 
-            var abs = FromFileLinkUri(link.NavigateUri.OriginalString);
+            link.Command = null;
+            link.CommandParameter = null;
+
+            var abs = FromFileLinkUri(url);
             if (abs != null)
             {
                 if (onFileClick == null) continue;
@@ -565,27 +815,18 @@ public static partial class MarkdownHelper
                 // monospace look here — file references read as code.
                 link.FontFamily = CodeFontFamily;
                 link.Cursor = Cursors.Hand;
-                link.RequestNavigate += (_, e) =>
-                {
-                    e.Handled = true;
-                    onFileClick(abs);
-                };
+                link.Click += (_, _) => onFileClick(abs);
                 continue;
             }
 
-            var uri = link.NavigateUri;
-            if (uri.IsAbsoluteUri
+            if (Uri.TryCreate(url, UriKind.Absolute, out var uri)
                 && (uri.Scheme == Uri.UriSchemeHttp
                     || uri.Scheme == Uri.UriSchemeHttps
                     || uri.Scheme == Uri.UriSchemeMailto))
             {
                 var target = uri.AbsoluteUri;
                 link.Cursor = Cursors.Hand;
-                link.RequestNavigate += (_, e) =>
-                {
-                    e.Handled = true;
-                    OpenInBrowser(target);
-                };
+                link.Click += (_, _) => OpenInBrowser(target);
             }
         }
     }
