@@ -1,0 +1,140 @@
+<Window x:Class="AgentDock.Windows.ImagePreviewDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Image"
+        SizeToContent="WidthAndHeight"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Icon="/Assets/agentdock.png"
+        Background="Transparent">
+
+    <Window.Resources>
+        <Style x:Key="DialogButton" TargetType="{x:Type Button}">
+            <Setter Property="MinWidth" Value="76" />
+            <Setter Property="Height" Value="28" />
+            <Setter Property="Padding" Value="12,0" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Foreground" Value="{DynamicResource HelpForeground}" />
+            <Setter Property="Background" Value="{DynamicResource HelpCardBackground}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource HelpCardBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type Button}">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="3"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource MenuHighlightBackground}" />
+                            </Trigger>
+                            <Trigger Property="IsDefault" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush"
+                                        Value="{DynamicResource TabButtonActiveBorderBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Border Background="{DynamicResource HelpBackground}"
+            BorderBrush="{DynamicResource ToolbarBorderBrush}"
+            BorderThickness="1"
+            CornerRadius="4">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" /> <!-- Title bar -->
+                <RowDefinition Height="Auto" /> <!-- Image -->
+                <RowDefinition Height="Auto" /> <!-- Buttons -->
+            </Grid.RowDefinitions>
+
+            <!-- Mini title bar -->
+            <Border Grid.Row="0"
+                    Background="{DynamicResource TitleBarBackground}"
+                    CornerRadius="4,4,0,0"
+                    MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                <Grid>
+                    <TextBlock x:Name="TitleText"
+                               Text="Image"
+                               FontSize="12"
+                               FontWeight="SemiBold"
+                               VerticalAlignment="Center"
+                               Margin="12,8"
+                               TextTrimming="CharacterEllipsis"
+                               MaxWidth="760"
+                               HorizontalAlignment="Left"
+                               Foreground="{DynamicResource TitleBarForeground}" />
+                    <Button HorizontalAlignment="Right"
+                            VerticalAlignment="Stretch"
+                            Width="42"
+                            Cursor="Hand"
+                            ToolTip="Close"
+                            Foreground="{DynamicResource TitleBarForeground}"
+                            Click="CloseButton_Click">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="Bd" Background="Transparent" CornerRadius="0,4,0,0">
+                                    <TextBlock x:Name="Glyph"
+                                               Text="&#xE8BB;"
+                                               FontFamily="Segoe MDL2 Assets"
+                                               FontSize="10"
+                                               HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"
+                                               Foreground="{TemplateBinding Foreground}" />
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="Bd" Property="Background" Value="#E81123" />
+                                        <Setter TargetName="Glyph" Property="Foreground" Value="White" />
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+                </Grid>
+            </Border>
+
+            <!-- Image -->
+            <Border Grid.Row="1" Margin="16,16,16,8"
+                    Background="{DynamicResource HelpCardBackground}"
+                    BorderBrush="{DynamicResource HelpCardBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="3">
+                <Image x:Name="PreviewImage"
+                       MaxWidth="900" MaxHeight="640"
+                       Stretch="Uniform"
+                       SnapsToDevicePixels="True"
+                       Margin="4" />
+            </Border>
+
+            <!-- Buttons -->
+            <StackPanel Grid.Row="2"
+                        Orientation="Horizontal"
+                        HorizontalAlignment="Right"
+                        Margin="16,8,16,16">
+                <Button Content="Remove"
+                        Style="{StaticResource DialogButton}"
+                        Foreground="{DynamicResource ChatDangerForeground}"
+                        Click="RemoveButton_Click"
+                        Margin="0,0,8,0" />
+                <Button Content="Close"
+                        Style="{StaticResource DialogButton}"
+                        IsDefault="True"
+                        IsCancel="True"
+                        Click="CloseButton_Click" />
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>

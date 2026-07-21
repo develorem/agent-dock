@@ -9,6 +9,7 @@
              mc:Ignorable="d"
              Background="{DynamicResource ChatBackground}">
     <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis" />
         <Style x:Key="ChatButtonStyle" TargetType="Button">
             <Setter Property="FontFamily" Value="Cascadia Code, Consolas, Courier New" />
             <Setter Property="FontSize" Value="11" />
@@ -18,6 +19,12 @@
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="Padding" Value="8,4" />
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0.35" />
+                    <Setter Property="Cursor" Value="Arrow" />
+                </Trigger>
+            </Style.Triggers>
         </Style>
         <Style x:Key="ChatMarkdownStyle" TargetType="FlowDocument"
                BasedOn="{StaticResource BaseMarkdownStyle}">
@@ -70,6 +77,47 @@
             </StackPanel>
         </DataTemplate>
 
+        <!-- A subagent / background-task spawn line inside the activity bubble. Rendered
+             with a diamond glyph and the working-accent colour so it stands apart from
+             the main agent's own (green) tool calls. -->
+        <DataTemplate DataType="{x:Type models:SubagentEntry}">
+            <StackPanel Margin="0,0,0,6">
+                <TextBlock FontFamily="Cascadia Code, Consolas, Courier New"
+                           FontSize="10"
+                           Foreground="{DynamicResource ChatStatusWorkingForeground}">
+                    <Run Text="◆ Subagent:" FontWeight="Bold" />
+                    <Run Text="{Binding Label, Mode=OneTime}" />
+                </TextBlock>
+                <TextBox Text="{Binding Description, Mode=OneTime}"
+                         Style="{StaticResource ChatSelectableText}"
+                         FontSize="10"
+                         Foreground="{DynamicResource ChatStatusWorkingForeground}"
+                         Margin="0,2,0,0" />
+            </StackPanel>
+        </DataTemplate>
+
+        <!-- A completed subagent's final report inside the activity bubble. Set apart with
+             a diamond header (subagent type + model tag) and an accent left-border so the
+             subagent's actual output reads distinctly from the main agent's content. -->
+        <DataTemplate DataType="{x:Type models:SubagentReportEntry}">
+            <Border BorderBrush="{DynamicResource ChatStatusWorkingForeground}"
+                    BorderThickness="2,0,0,0"
+                    Padding="8,2,0,0"
+                    Margin="0,2,0,8">
+                <StackPanel>
+                    <TextBlock Text="{Binding Header, Mode=OneTime}"
+                               FontFamily="Cascadia Code, Consolas, Courier New"
+                               FontSize="10"
+                               FontWeight="Bold"
+                               Foreground="{DynamicResource ChatStatusWorkingForeground}" />
+                    <TextBox Text="{Binding Text, Mode=OneTime}"
+                             Style="{StaticResource ChatSelectableText}"
+                             FontSize="11"
+                             Margin="0,3,0,0" />
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+
         <!-- A gray thinking/commentary block inside the activity bubble. Streams live. -->
         <DataTemplate DataType="{x:Type models:ActivityThinkingEntry}">
             <TextBox Text="{Binding Text, Mode=OneWay}"
@@ -102,6 +150,52 @@
                                          Padding="0"
                                          DataContextChanged="AssistantMarkdown_DataContextChanged"
                                          Loaded="AssistantMarkdown_Loaded" />
+        </DataTemplate>
+
+        <!-- A pending-image chip shown in the input area before send: thumbnail,
+             name, and a remove (✕) button. -->
+        <DataTemplate DataType="{x:Type models:PendingImageAttachment}">
+            <Border Background="{DynamicResource ChatInputBackground}"
+                    BorderBrush="{DynamicResource ChatInputBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Margin="0,0,4,4"
+                    Padding="3">
+                <StackPanel Orientation="Horizontal">
+                    <Button Click="PreviewAttachment_Click"
+                            Tag="{Binding}"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Padding="0"
+                            Cursor="Hand"
+                            ToolTip="Click to view larger">
+                        <Image Source="{Binding Thumbnail}"
+                               Width="32" Height="32"
+                               Stretch="UniformToFill"
+                               SnapsToDevicePixels="True" />
+                    </Button>
+                    <TextBlock Text="{Binding DisplayName}"
+                               FontFamily="Cascadia Code, Consolas, Courier New"
+                               FontSize="10"
+                               Foreground="{DynamicResource ChatMutedForeground}"
+                               VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"
+                               MaxWidth="120"
+                               Margin="6,0,4,0" />
+                    <Button Click="RemoveAttachment_Click"
+                            Tag="{Binding}"
+                            Content="&#x2715;"
+                            FontFamily="Cascadia Code, Consolas, Courier New"
+                            FontSize="10"
+                            Foreground="{DynamicResource ChatDangerForeground}"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Cursor="Hand"
+                            Padding="4,0"
+                            VerticalAlignment="Center"
+                            ToolTip="Remove this image" />
+                </StackPanel>
+            </Border>
         </DataTemplate>
     </UserControl.Resources>
     <Grid>
@@ -324,7 +418,75 @@
                     Background="{DynamicResource ChatStatusBarBackground}"
                     BorderBrush="{DynamicResource ChatInputBorderBrush}"
                     BorderThickness="0,1,0,0"
-                    Padding="8,6">
+                    Padding="8,6"
+                    AllowDrop="True"
+                    PreviewDragOver="InputPanel_PreviewDragOver"
+                    PreviewDrop="InputPanel_PreviewDrop">
+                <StackPanel>
+                <!-- Send queue (hidden when empty): messages waiting to run after the
+                     current turn, plus any time-scheduled messages. Strict FIFO. -->
+                <Border x:Name="QueueBar"
+                        Visibility="Collapsed"
+                        Margin="0,0,0,6"
+                        Background="{DynamicResource ChatThinkingBackground}"
+                        BorderBrush="{DynamicResource ChatThinkingBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="6,4">
+                    <StackPanel>
+                        <TextBlock Text="Queued to send"
+                                   FontFamily="Cascadia Code, Consolas, Courier New"
+                                   FontSize="10"
+                                   Foreground="{DynamicResource ChatMutedForeground}"
+                                   Margin="0,0,0,3" />
+                        <ItemsControl x:Name="QueueList"
+                                      ItemsSource="{Binding QueuedMessages, RelativeSource={RelativeSource AncestorType=UserControl}}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="{x:Type models:QueuedMessage}">
+                                    <DockPanel Margin="0,1">
+                                        <Button DockPanel.Dock="Right"
+                                                Click="RemoveQueued_Click"
+                                                Tag="{Binding Id}"
+                                                Content="&#x2715;"
+                                                FontFamily="Cascadia Code, Consolas, Courier New"
+                                                FontSize="10"
+                                                Foreground="{DynamicResource ChatDangerForeground}"
+                                                Background="Transparent"
+                                                BorderThickness="0"
+                                                Cursor="Hand"
+                                                Padding="4,0"
+                                                VerticalAlignment="Center"
+                                                ToolTip="Remove from the queue" />
+                                        <TextBlock DockPanel.Dock="Right"
+                                                   Text="{Binding StatusText}"
+                                                   FontFamily="Cascadia Code, Consolas, Courier New"
+                                                   FontSize="10"
+                                                   Foreground="{DynamicResource ChatSubtleForeground}"
+                                                   VerticalAlignment="Center"
+                                                   Margin="8,0,4,0" />
+                                        <TextBlock Text="{Binding Preview}"
+                                                   FontFamily="Cascadia Code, Consolas, Courier New"
+                                                   FontSize="11"
+                                                   Foreground="{DynamicResource ChatTextForeground}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   VerticalAlignment="Center" />
+                                    </DockPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+                <!-- Pending image attachments (hidden when none) -->
+                <ItemsControl x:Name="AttachmentsBar"
+                              Visibility="Collapsed"
+                              Margin="0,0,0,4"
+                              ItemsSource="{Binding PendingAttachments, RelativeSource={RelativeSource AncestorType=UserControl}}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
                 <DockPanel>
                     <Button x:Name="SendButton"
                             Content="Send"
@@ -333,7 +495,8 @@
                             VerticalAlignment="Bottom"
                             Style="{StaticResource ChatButtonStyle}"
                             Width="60" Height="28"
-                            Margin="6,0,0,0" />
+                            Margin="6,0,0,0"
+                            ToolTip="Send now, or — while Claude is working — queue to run after the current task (Enter)" />
                     <Button x:Name="ScheduleButton"
                             Click="ScheduleButton_Click"
                             DockPanel.Dock="Right"
@@ -346,6 +509,20 @@
                                    Text="&#xE823;"
                                    FontFamily="Segoe MDL2 Assets"
                                    FontSize="14" />
+                    </Button>
+                    <Button x:Name="CancelButton"
+                            Click="CancelButton_Click"
+                            DockPanel.Dock="Right"
+                            VerticalAlignment="Bottom"
+                            IsEnabled="False"
+                            Style="{StaticResource ChatButtonStyle}"
+                            Width="32" Height="28"
+                            Margin="6,0,0,0"
+                            ToolTip="Clear the message and remove any attachments">
+                        <TextBlock Text="&#xE74D;"
+                                   FontFamily="Segoe MDL2 Assets"
+                                   FontSize="14"
+                                   Foreground="{DynamicResource ChatDangerForeground}" />
                     </Button>
                     <Popup x:Name="SlashCommandPopup"
                            PlacementTarget="{Binding ElementName=InputBox}"
@@ -437,8 +614,8 @@
                                      AcceptsReturn="True"
                                      TextWrapping="Wrap"
                                      VerticalScrollBarVisibility="Auto"
-                                     MaxHeight="76"
-                                     MinHeight="20"
+                                     MaxHeight="120"
+                                     MinHeight="52"
                                      KeyDown="InputBox_KeyDown"
                                      PreviewKeyDown="InputBox_PreviewKeyDown"
                                      TextChanged="InputBox_TextChanged"
@@ -446,6 +623,7 @@
                         </DockPanel>
                     </Border>
                 </DockPanel>
+                </StackPanel>
             </Border>
 
             <!-- Message list — virtualized. Past messages are immutable record-ish
@@ -493,10 +671,32 @@
                                            FontSize="10"
                                            Foreground="{DynamicResource ChatUserLabelForeground}"
                                            Margin="0,0,0,2" />
+                                <ItemsControl ItemsSource="{Binding Images}"
+                                              Visibility="{Binding HasImages, Converter={StaticResource BoolToVis}}"
+                                              Margin="0,0,0,4">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border CornerRadius="4" Margin="0,0,4,4"
+                                                    BorderBrush="{DynamicResource ChatInputBorderBrush}"
+                                                    BorderThickness="1">
+                                                <Image Source="{Binding}"
+                                                       MaxWidth="180" MaxHeight="180"
+                                                       Stretch="Uniform"
+                                                       SnapsToDevicePixels="True" />
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
                                 <TextBox Text="{Binding Text, Mode=OneTime}"
                                          Style="{StaticResource ChatSelectableText}"
                                          FontSize="12"
-                                         Foreground="{DynamicResource ChatTextForeground}" />
+                                         Foreground="{DynamicResource ChatTextForeground}"
+                                         Visibility="{Binding HasText, Converter={StaticResource BoolToVis}}" />
                             </StackPanel>
                         </Border>
                     </DataTemplate>

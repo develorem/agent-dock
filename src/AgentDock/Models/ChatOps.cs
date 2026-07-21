@@ -37,6 +37,24 @@ public sealed record EnsureExecutionOp : ChatOp;
 /// <summary>Add a tool-call entry to the current execution bubble.</summary>
 public sealed record AddToolOp(string Name, string FormattedInput) : ChatOp;
 
+/// <summary>A subagent (or background task) was spawned — add a distinct entry to the
+/// activity bubble. <paramref name="Label"/> is the subagent type (e.g. "Explore"),
+/// "Background task", or "Workflow"; <paramref name="Description"/> is the short task
+/// description.</summary>
+public sealed record AddSubagentOp(string Label, string Description) : ChatOp;
+
+/// <summary>A subagent (task_type <c>local_agent</c>) finished and produced a final
+/// report. Rendered as a distinct entry so the subagent's actual output is captured in
+/// the transcript (previously discarded). <paramref name="Model"/> is the model the
+/// subagent ran on, shown as a tag; null if unknown.</summary>
+public sealed record AddSubagentReportOp(string Label, string? Model, string Text) : ChatOp;
+
+/// <summary>The counts of in-flight background work changed, split by kind so the
+/// working status line can say e.g. "2 subagents · 1 background task" rather than
+/// lumping background shells in with real subagents. Drives the live suffix on the
+/// working status line.</summary>
+public sealed record ActivityCountsOp(int Subagents, int BackgroundTasks, int Workflows) : ChatOp;
+
 /// <summary>Finalize the execution bubble into its immutable form.</summary>
 public sealed record FinalizeExecutionOp : ChatOp;
 

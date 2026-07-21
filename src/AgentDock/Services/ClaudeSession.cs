@@ -47,6 +47,9 @@ public class ClaudeSession : IDisposable
     public event Action<ClaudeContentBlockEvent>? ContentBlockStopped;
     public event Action<ClaudePermissionRequest>? PermissionRequested;
     public event Action<ClaudeResultMessage>? ResultReceived;
+    /// <summary>Raised on subagent / background-task lifecycle events (task_started,
+    /// task_progress, task_updated, task_notification).</summary>
+    public event Action<ClaudeTaskEvent>? TaskEvent;
     public event Action<string>? ErrorOutput;
     public event Action<int>? ProcessExited;
     public event Action? InactivityTimeout;
@@ -153,8 +156,11 @@ public class ClaudeSession : IDisposable
     /// <summary>
     /// Sends a user message by spawning a one-shot claude process.
     /// Uses --resume to continue the conversation if a session ID exists.
+    /// Pass <paramref name="images"/> to attach images as Anthropic <c>image</c>
+    /// content blocks; when empty the message is sent as a plain string
+    /// (unchanged from the text-only path).
     /// </summary>
-    public void SendMessage(string text)
+    public void SendMessage(string text, IReadOnlyList<ImageAttachment>? images = null)
     {
         if (State != ClaudeSessionState.Idle)
             throw new InvalidOperationException($"Cannot send message in state {State}");
@@ -253,11 +259,7 @@ public class ClaudeSession : IDisposable
         // Send the user message as JSON on stdin — this is what actually
         // triggers Claude to start processing (with stream-json input,
         // the CLI reads from stdin, not from -p).
-        var userMessage = new ClaudeUserMessage
-        {
-            Message = new ClaudeMessagePayload { Content = text }
-        };
-        WriteStdin(JsonSerializer.Serialize(userMessage, JsonOptions));
+        WriteStdin(SerializeUserMessage(text, images));
     }
 
     /// <summary>
@@ -413,6 +415,38 @@ public class ClaudeSession : IDisposable
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
     };
 
+    /// <summary>
+    /// Serializes a user message for stdin. Text-only messages serialize with a
+    /// plain string <c>content</c> (unchanged from before image support); messages
+    /// with images serialize <c>content</c> as an Anthropic content-block array.
+    /// Public so the protocol shape can be locked by tests.
+    /// </summary>
+    public static string SerializeUserMessage(string text, IReadOnlyList<ImageAttachment>? images)
+        => JsonSerializer.Serialize(
+            new ClaudeUserMessage { Message = new ClaudeMessagePayload { Content = BuildUserContent(text, images) } },
+            JsonOptions);
+
+    /// <summary>
+    /// Builds the <c>content</c> value: a plain string when there are no images,
+    /// otherwise a list of content blocks (images first, then the text block when
+    /// non-empty) matching the Anthropic Messages API shape.
+    /// </summary>
+    private static object BuildUserContent(string text, IReadOnlyList<ImageAttachment>? images)
+    {
+        if (images is not { Count: > 0 })
+            return text;
+
+        var blocks = new List<object>(images.Count + 1);
+        foreach (var img in images)
+            blocks.Add(new ClaudeImageBlock
+            {
+                Source = new ClaudeImageSource { MediaType = img.MediaType, Data = img.Base64Data }
+            });
+        if (!string.IsNullOrEmpty(text))
+            blocks.Add(new ClaudeTextBlock { Text = text });
+        return blocks;
+    }
+
     private void WriteStdin(string json)
     {
         if (_process == null || _process.HasExited)
@@ -544,6 +578,13 @@ public class ClaudeSession : IDisposable
     private void HandleSystemMessage(JsonElement root)
     {
         var subtype = root.TryGetProperty("subtype", out var st) ? st.GetString() : null;
+
+        if (subtype is "task_started" or "task_progress" or "task_updated" or "task_notification")
+        {
+            HandleTaskEvent(subtype, root);
+            return;
+        }
+
         if (subtype != "init")
             return;
 
@@ -559,11 +600,45 @@ public class ClaudeSession : IDisposable
             Model = newModel;
     }
 
+    /// <summary>
+    /// Parses a subagent / background-task lifecycle system message and raises
+    /// <see cref="TaskEvent"/>. The status for <c>task_updated</c> lives in a nested
+    /// <c>patch.status</c>; the others carry it (when present) at the top level.
+    /// </summary>
+    private void HandleTaskEvent(string subtype, JsonElement root)
+    {
+        var taskId = GetString(root, "task_id");
+        if (taskId == null)
+            return;
+
+        var status = GetString(root, "status");
+        if (status == null && root.TryGetProperty("patch", out var patch) && patch.ValueKind == JsonValueKind.Object)
+            status = GetString(patch, "status");
+
+        var evt = new ClaudeTaskEvent
+        {
+            Subtype = subtype,
+            TaskId = taskId,
+            ToolUseId = GetString(root, "tool_use_id"),
+            Description = GetString(root, "description"),
+            SubagentType = GetString(root, "subagent_type"),
+            TaskType = GetString(root, "task_type"),
+            Status = status
+        };
+
+        Log.Info($"ClaudeSession: task {subtype} id={taskId} status={status ?? "-"} type={evt.TaskType ?? "-"} agent={evt.SubagentType ?? "-"}");
+        TaskEvent?.Invoke(evt);
+    }
+
     private void HandleAssistantMessage(JsonElement root)
     {
         var msg = new ClaudeAssistantMessage
         {
-            Uuid = GetString(root, "uuid") ?? ""
+            Uuid = GetString(root, "uuid") ?? "",
+            ParentToolUseId = GetString(root, "parent_tool_use_id"),
+            Model = root.TryGetProperty("message", out var msgForModel)
+                ? GetString(msgForModel, "model")
+                : null
         };
 
         if (root.TryGetProperty("message", out var message) &&
@@ -664,6 +739,21 @@ public class ClaudeSession : IDisposable
             CacheReadInputTokens = cacheRead,
             CacheCreationInputTokens = cacheCreation
         };
+
+        // A result with num_turns == 0 is NOT this turn completing. When a session is
+        // resumed (--resume) with an orphaned background shell left over from a previous
+        // turn, the CLI emits an empty, zero-cost "flush" result (num_turns:0, result:"")
+        // BEFORE it processes the user's message — the real init + turn follow it on the
+        // same process. Treating that as completion drops the session to Idle the instant
+        // the user sends, firing the completion chime and a $0 cost line prematurely.
+        // Ignore it and stay Working; the real result (num_turns >= 1) that follows
+        // completes the turn. A genuine reply is always >= 1 turn; error results are let
+        // through so real failures still surface.
+        if (result.NumTurns == 0 && !result.IsError)
+        {
+            Log.Info("ClaudeSession: ignoring resume-flush result (num_turns=0) — real turn follows");
+            return;
+        }
 
         // Process finished this turn — stop the watchdog, close stdin so the process
         // exits cleanly, then transition back to idle. Next SendMessage will spawn a

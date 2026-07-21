@@ -29,6 +29,10 @@ public partial class AiChatControl : UserControl
     // VirtualizingStackPanel are realized only when scrolled into view.
     public ObservableCollection<ChatMessageVm> Messages { get; } = [];
 
+    // Images queued in the input area, shown as chips and attached to the next
+    // sent message. Bound by AttachmentsBar (RelativeSource to this UserControl).
+    public ObservableCollection<PendingImageAttachment> PendingAttachments { get; } = [];
+
     // Live-tail references — set when the corresponding VM is in the
     // collection, nulled on finalize / removal.
     //
@@ -60,19 +64,39 @@ public partial class AiChatControl : UserControl
     private int _spinnerIndex;
     private static readonly string[] SpinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+    // In-flight background work the session reports as running, split by kind. Shown as a
+    // suffix on the "Working..." status so the user can tell what kind of work is still in
+    // flight (e.g. a subagent churning) even after the main agent's text has returned.
+    private int _activeSubagents;
+    private int _activeBackgroundTasks;
+    private int _activeWorkflows;
+
     // Pending AskUserQuestion — tracks question text for response.
     private string? _pendingQuestionText;
 
-    // --- Scheduled message ---
-    // When the user schedules a message, its text is parked here and a per-second
-    // timer counts down to _scheduleFireTimeUtc. While a message is scheduled the
-    // input is disabled (the message is "owned" by the schedule) but the clock
-    // button stays live so the user can view the countdown or cancel. At fire time
-    // the message is dispatched as soon as the session is idle.
-    private DispatcherTimer? _scheduleTimer;
-    private string? _scheduledMessageText;
-    private DateTime _scheduleFireTimeUtc;
-    private bool IsScheduled => _scheduledMessageText != null;
+    // --- Send queue (the outbox) ---
+    // A message typed while the session is busy is appended here instead of being
+    // dropped, then dispatched in strict FIFO order as each turn returns. A message
+    // "scheduled" via the clock is the same thing with a NotBeforeUtc time gate. The
+    // pump (PumpQueue) runs whenever the session goes idle and on a per-second timer
+    // (only while the queue is non-empty) that also drives the live countdown labels.
+    // In-memory only — the queue is cleared on Stop and not persisted across restarts.
+    private readonly SendQueue _queue = new();
+    private DispatcherTimer? _queueTimer;
+
+    /// <summary>The queued messages, exposed for the queue panel's ItemsControl binding.</summary>
+    public ObservableCollection<QueuedMessage> QueuedMessages => _queue.Items;
+
+    /// <summary>
+    /// UTC time the next scheduled (time-gated) message will fire, or null when nothing
+    /// is scheduled. Surfaced so the tab strip can show a scheduled-message indicator +
+    /// tooltip. Plain queued messages drain the moment the session is idle, so a
+    /// scheduled item is the only kind that lingers at idle.
+    /// </summary>
+    public DateTime? ScheduledFireTimeUtc => _queue.NextScheduledFireUtc;
+
+    /// <summary>Raised when the send queue changes (message queued/scheduled, sent, or cancelled).</summary>
+    public event Action? ScheduleChanged;
 
     // Last user message timestamp, for the inactivity warning's elapsed text.
     private DateTime _lastMessageSentTime;
@@ -139,6 +163,11 @@ public partial class AiChatControl : UserControl
         InitializeComponent();
         MessageList.ItemsSource = Messages;
         Messages.CollectionChanged += OnMessagesChanged;
+        PendingAttachments.CollectionChanged += (_, _) => UpdateAttachmentsBar();
+        _queue.Changed += OnQueueChanged;
+        // Intercept Ctrl+V so a pasted screenshot / image file becomes an
+        // attachment instead of pasting its path (or nothing) as text.
+        DataObject.AddPastingHandler(InputBox, InputBox_Pasting);
         Log.Info("AiChatControl: InitializeComponent complete");
 
         // Older Win10 builds don't ship the WinRT dictation recognizer — hide the
@@ -173,8 +202,8 @@ public partial class AiChatControl : UserControl
 
     public void Shutdown()
     {
-        _scheduleTimer?.Stop();
-        _scheduleTimer = null;
+        StopQueueTimer();
+        _queue.Clear();
         _session?.Dispose();
         _session = null;
         _processor = null;
@@ -325,6 +354,14 @@ public partial class AiChatControl : UserControl
             case FinalizeThinkingOp: _activityVm?.CloseThinking(); break;
             case EnsureExecutionOp: EnsureActivityVm(); _activityVm!.CloseThinking(); break;
             case AddToolOp t: EnsureActivityVm(); _activityVm!.AddTool(t.Name, t.FormattedInput); break;
+            case AddSubagentOp s: EnsureActivityVm(); _activityVm!.AddSubagent(s.Label, s.Description); break;
+            case AddSubagentReportOp r: EnsureActivityVm(); _activityVm!.AddSubagentReport(r.Label, r.Model, r.Text); break;
+            case ActivityCountsOp ac:
+                _activeSubagents = ac.Subagents;
+                _activeBackgroundTasks = ac.BackgroundTasks;
+                _activeWorkflows = ac.Workflows;
+                RefreshWorkingStatus();
+                break;
             case FinalizeExecutionOp: break; // no-op — see TurnComplete
             case PostAnswerOp p: ApplyPostAnswer(p.Text); break;
             case TurnCompleteOp tc: ApplyTurnComplete(tc.Result); break;
@@ -357,9 +394,12 @@ public partial class AiChatControl : UserControl
     {
         RemoveWaitingBubble();
 
-        var hasNl = text.Contains('\n');
+        // Not just multi-line: a single-line reply can still carry inline markdown
+        // (**bold**, *italic*, `code`, links, bare URLs) that must be rendered — and
+        // that needs the source/rendered toggle — rather than shown with literal stars.
+        var isMarkdown = MarkdownHelper.LooksLikeMarkdown(text);
         Func<FlowDocument>? markdownBuilder = null;
-        if (hasNl)
+        if (isMarkdown)
         {
             var style = (System.Windows.Style)FindResource("ChatMarkdownStyle");
             var projectPath = _projectPath;
@@ -371,8 +411,8 @@ public partial class AiChatControl : UserControl
         Messages.Add(new AssistantMessage(
             id: Guid.NewGuid(),
             text: text,
-            isMarkdownView: hasNl,
-            hasMarkdownToggle: hasNl,
+            isMarkdownView: isMarkdown,
+            hasMarkdownToggle: isMarkdown,
             markdownBuilder: markdownBuilder));
     }
 
@@ -423,6 +463,16 @@ public partial class AiChatControl : UserControl
         }
         else
         {
+            // The turn is over (or paused for a permission prompt). Clear the running
+            // counts except while waiting on a permission, where the subagent that
+            // triggered the prompt is still alive and resumes when granted.
+            if (state != ClaudeSessionState.WaitingForPermission)
+            {
+                _activeSubagents = 0;
+                _activeBackgroundTasks = 0;
+                _activeWorkflows = 0;
+            }
+
             StatusText.Text = state switch
             {
                 ClaudeSessionState.Initializing => "Initializing...",
@@ -447,20 +497,18 @@ public partial class AiChatControl : UserControl
             && state != ClaudeSessionState.Exited;
         DangerIcon.Visibility = showDanger ? Visibility.Visible : Visibility.Collapsed;
 
-        var canSend = state == ClaudeSessionState.Idle;
         // Keep the input box and mic usable while a turn is running so the user can
-        // draft follow-up notes; only the Send button is gated on Idle.
-        // SendCurrentMessage re-checks the session state, so an Enter press can't
-        // actually dispatch a message mid-turn.
+        // draft follow-ups; the Send button stays enabled too, but now enqueues rather
+        // than dispatching when the session is busy (see SendCurrentMessage).
         UpdateSendButtonEnabled();
 
-        if (canSend && !IsScheduled)
+        if (state == ClaudeSessionState.Idle)
+        {
             FocusInput();
-
-        // If a scheduled message is past its fire time and we've just become idle,
-        // send it now.
-        if (canSend)
-            MaybeDispatchSchedule();
+            // The turn returned — dispatch the next queued/scheduled message if one is
+            // ready. The per-second queue timer is a backstop; this makes it immediate.
+            PumpQueue();
+        }
 
         SessionStateChanged?.Invoke(state);
     }
@@ -468,14 +516,44 @@ public partial class AiChatControl : UserControl
     private void StartWorkingAnimation()
     {
         _spinnerIndex = 0;
-        StatusText.Text = $"{SpinnerFrames[0]} Working...";
+        StatusText.Text = WorkingStatusText();
         _workingTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(80) };
         _workingTimer.Tick += (_, _) =>
         {
             _spinnerIndex = (_spinnerIndex + 1) % SpinnerFrames.Length;
-            StatusText.Text = $"{SpinnerFrames[_spinnerIndex]} Working...";
+            StatusText.Text = WorkingStatusText();
         };
         _workingTimer.Start();
+    }
+
+    // "⠹ Working..." plus a "· N subagents · M background tasks running" suffix when the
+    // session reports in-flight work, split by kind so real subagents aren't conflated with
+    // background shells. Built from the current spinner frame and the live counts so both
+    // the 80 ms animation tick and a count change render it.
+    private string WorkingStatusText()
+    {
+        var text = $"{SpinnerFrames[_spinnerIndex]} Working...";
+
+        var parts = new List<string>(3);
+        if (_activeSubagents > 0)
+            parts.Add($"{_activeSubagents} subagent{(_activeSubagents == 1 ? "" : "s")}");
+        if (_activeBackgroundTasks > 0)
+            parts.Add($"{_activeBackgroundTasks} background task{(_activeBackgroundTasks == 1 ? "" : "s")}");
+        if (_activeWorkflows > 0)
+            parts.Add($"{_activeWorkflows} workflow{(_activeWorkflows == 1 ? "" : "s")}");
+
+        if (parts.Count > 0)
+            text += $"  ·  {string.Join(" · ", parts)} running";
+
+        return text;
+    }
+
+    // Refresh the status line in place after the running count changes (the animation
+    // timer also picks it up on its next tick; this makes the update immediate).
+    private void RefreshWorkingStatus()
+    {
+        if (_session?.State == ClaudeSessionState.Working)
+            StatusText.Text = WorkingStatusText();
     }
 
     private void StopWorkingAnimation()
@@ -508,7 +586,7 @@ public partial class AiChatControl : UserControl
         RemoveWaitingBubble();
         RemoveInactivityWarning();
         FinalizeActivity(null);
-        EndSchedule(restoreDraft: null);
+        _queue.Clear();
 
         var session = _session;
         _session = null;
@@ -539,6 +617,7 @@ public partial class AiChatControl : UserControl
     private void InputBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         var text = InputBox.Text;
+        UpdateComposerButtons();
 
         if (!text.StartsWith('/') || text.Any(char.IsWhiteSpace))
         {
@@ -560,6 +639,22 @@ public partial class AiChatControl : UserControl
 
     private void InputBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {
+        // Intercept Ctrl+V for images before the TextBox's Paste command gets a
+        // chance. A plain TextBox disables its Paste command whenever the clipboard
+        // holds no text-compatible format, so an image-only clipboard (e.g. a
+        // Snipping Tool screenshot) would otherwise do nothing — and the
+        // DataObject.Pasting handler below never fires. Reading the clipboard here
+        // sidesteps that gate. Falls through to the normal text paste when there's
+        // no image.
+        if (e.Key == Key.V && Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            if (TryAttachClipboardImages())
+            {
+                e.Handled = true;
+                return;
+            }
+        }
+
         if (!SlashCommandPopup.IsOpen)
             return;
 
@@ -662,148 +757,179 @@ public partial class AiChatControl : UserControl
     private void SendCurrentMessage()
     {
         var text = InputBox.Text.Trim();
-        if (string.IsNullOrEmpty(text))
+        var hasImages = PendingAttachments.Count > 0;
+        if (string.IsNullOrEmpty(text) && !hasImages)
             return;
 
-        // Local commands are handled regardless of session state; consume the input.
-        if (text.StartsWith('/') && TryHandleLocalCommand(text))
+        // Local commands are handled regardless of session state and are never queued;
+        // consume the input. Images force a real send — a slash command can't carry them.
+        if (!hasImages && text.StartsWith('/') && TryHandleLocalCommand(text))
         {
             InputBox.Text = "";
             return;
         }
 
-        // Can't dispatch to Claude unless the session is idle. The input box stays
-        // enabled mid-turn so the user can draft notes — leave their text in place
-        // rather than clearing it on an Enter that can't send yet.
-        if (_session == null || _session.State != ClaudeSessionState.Idle)
+        // A live session is required to send or queue.
+        if (_session == null)
             return;
 
+        // Snapshot the queued images for both the payload and the bubble, then clear
+        // the input area — the message now belongs to the send path (immediate or queued).
+        var attachments = PendingAttachments.Select(a => a.ToAttachment()).ToList();
+        var thumbnails = hasImages
+            ? PendingAttachments.Select(a => a.Thumbnail).ToList()
+            : null;
+        PendingAttachments.Clear();
         InputBox.Text = "";
 
-        // Defensive turn-boundary finalize — should already have happened on
-        // the previous result, but covers edge cases (manual /compact mid-stream etc.).
+        // Dispatch immediately only when the session is idle AND nothing is already
+        // queued ahead of this — otherwise append so strict FIFO order is preserved
+        // (a new message can't jump the queue, and a busy session no longer drops it).
+        if (_session.State == ClaudeSessionState.Idle && _queue.IsEmpty)
+            Dispatch(text, attachments, thumbnails);
+        else
+            _queue.Enqueue(new QueuedMessage
+            {
+                Text = text,
+                Attachments = attachments,
+                Thumbnails = thumbnails,
+            });
+
+        FocusInput();
+    }
+
+    // The actual send: finalize the previous turn's activity bubble, echo the user
+    // message, show the waiting placeholder, and hand the text + images to the session.
+    // Shared by the immediate-send path and the queue pump so both behave identically.
+    private void Dispatch(string text, IReadOnlyList<ImageAttachment> attachments, IReadOnlyList<ImageSource>? thumbnails)
+    {
+        // Defensive turn-boundary finalize — should already have happened on the
+        // previous result, but covers edge cases (manual /compact mid-stream etc.).
         FinalizeActivity(null);
         _processor?.Reset();
 
         _lastMessageSentTime = DateTime.UtcNow;
-        AddUserMessage(text);
+        AddUserMessage(text, thumbnails);
         ShowWaitingBubble();
-        _session.SendMessage(text);
+        _session!.SendMessage(text, attachments);
     }
 
-    // --- Scheduled Messages ---
+    // --- Send Queue (the outbox) ---
 
-    // Keeps the Send button disabled both mid-turn and whenever a message is
-    // scheduled (the input is "locked" by the pending send).
+    // The Send button is enabled whenever the session can take work — idle (dispatch
+    // now) or working (append to the queue). It's disabled only when there's no live
+    // session or it has exited.
     private void UpdateSendButtonEnabled()
-        => SendButton.IsEnabled = _session?.State == ClaudeSessionState.Idle && !IsScheduled;
+        => SendButton.IsEnabled = _session?.State is ClaudeSessionState.Idle or ClaudeSessionState.Working;
 
-    // Clock button. With no message scheduled it opens the compose dialog for the
-    // current draft; while one is scheduled it opens the manage dialog (countdown +
-    // cancel), which stays clickable even though the input is disabled.
+    // Clock button: always opens the compose dialog to add a time-scheduled message to
+    // the queue. Cancelling / viewing pending items is done inline in the queue panel,
+    // so there's no separate manage dialog anymore.
     private void ScheduleButton_Click(object sender, RoutedEventArgs e)
     {
+        if (_session == null) return;
+
         var owner = Window.GetWindow(this)!;
+        // Seed the dialog with whatever's drafted — including nothing. The message is
+        // editable there, so scheduling can start from an empty input box.
+        var result = ScheduleMessageDialog.ShowCompose(owner, InputBox.Text.Trim());
+        if (!result.HasValue) return;
 
-        if (IsScheduled)
-        {
-            if (ScheduleMessageDialog.ShowManage(owner, _scheduledMessageText!, _scheduleFireTimeUtc))
-                CancelSchedule();
-            return;
-        }
-
-        // Local commands are handled immediately, never sent to Claude, so there's
-        // nothing to schedule. Keep the clock for real prompts only.
-        var text = InputBox.Text.Trim();
-        if (string.IsNullOrEmpty(text))
-        {
-            FocusInput();
-            return;
-        }
-
-        var delay = ScheduleMessageDialog.ShowCompose(owner, text);
-        if (delay.HasValue)
-            BeginSchedule(text, delay.Value);
-    }
-
-    private void BeginSchedule(string text, TimeSpan delay)
-    {
-        _scheduledMessageText = text;
-        _scheduleFireTimeUtc = DateTime.UtcNow + delay;
-
-        // The message is now owned by the schedule — clear the draft and lock input.
+        // The draft (and any attachments it was composed alongside) now belongs to the
+        // scheduled message — consume them so they aren't also sent from the input box.
+        var attachments = PendingAttachments.Select(a => a.ToAttachment()).ToList();
+        var thumbnails = PendingAttachments.Count > 0
+            ? PendingAttachments.Select(a => a.Thumbnail).ToList()
+            : null;
+        PendingAttachments.Clear();
         InputBox.Text = "";
-        InputBorder.IsEnabled = false;
-        UpdateSendButtonEnabled();
-        UpdateScheduleButtonVisual();
 
-        _scheduleTimer = new DispatcherTimer(DispatcherPriority.Background)
+        _queue.Enqueue(new QueuedMessage
         {
-            Interval = TimeSpan.FromSeconds(1)
-        };
-        _scheduleTimer.Tick += (_, _) => MaybeDispatchSchedule();
-        _scheduleTimer.Start();
-
-        AddSystemMessage($"Message scheduled for {_scheduleFireTimeUtc.ToLocalTime():t}.");
-    }
-
-    // Fires the scheduled message once its time has come and the session is idle.
-    // The per-second timer keeps retrying if the session is busy at fire time;
-    // OnStateChanged also calls this the moment we return to Idle.
-    private void MaybeDispatchSchedule()
-    {
-        if (!IsScheduled) return;
-        if (DateTime.UtcNow < _scheduleFireTimeUtc) return;
-        if (_session == null || _session.State != ClaudeSessionState.Idle) return;
-
-        var text = _scheduledMessageText!;
-        EndSchedule(restoreDraft: null);
-
-        // Route through the normal send path so a scheduled slash command (e.g.
-        // /compact) or prompt behaves exactly like one typed by hand.
-        InputBox.Text = text;
-        SendCurrentMessage();
-    }
-
-    // User cancelled a pending send — return the message to the draft box so it can
-    // be edited or sent normally.
-    private void CancelSchedule()
-    {
-        var text = _scheduledMessageText;
-        EndSchedule(restoreDraft: text);
-        AddSystemMessage("Scheduled message cancelled.");
+            Text = result.Value.message,
+            Attachments = attachments,
+            Thumbnails = thumbnails,
+            NotBeforeUtc = DateTime.UtcNow + result.Value.delay,
+        });
         FocusInput();
     }
 
-    // Tears down the schedule (timer + state) and unlocks the input. When
-    // <paramref name="restoreDraft"/> is non-null its text is put back in the box.
-    private void EndSchedule(string? restoreDraft)
+    // Remove (✕) button on a queue-panel row.
+    private void RemoveQueued_Click(object sender, RoutedEventArgs e)
     {
-        _scheduleTimer?.Stop();
-        _scheduleTimer = null;
-        _scheduledMessageText = null;
-
-        InputBorder.IsEnabled = true;
-        if (restoreDraft != null)
-            InputBox.Text = restoreDraft;
-        UpdateSendButtonEnabled();
-        UpdateScheduleButtonVisual();
+        if (sender is FrameworkElement { Tag: Guid id })
+            _queue.Remove(id);
     }
 
-    // Tints the clock glyph while a message is scheduled so the locked state reads
-    // at a glance, and points the tooltip at the manage dialog.
+    // Runs whenever the queue's contents change: toggle the panel, (re)start or stop
+    // the per-second timer, refresh the countdown labels + clock tint, and notify the
+    // tab strip.
+    private void OnQueueChanged()
+    {
+        QueueBar.Visibility = _queue.IsEmpty ? Visibility.Collapsed : Visibility.Visible;
+
+        if (_queue.IsEmpty)
+            StopQueueTimer();
+        else
+            EnsureQueueTimer();
+
+        RefreshQueueStatuses();
+        UpdateScheduleButtonVisual();
+        ScheduleChanged?.Invoke();
+    }
+
+    private void EnsureQueueTimer()
+    {
+        if (_queueTimer != null) return;
+        _queueTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromSeconds(1)
+        };
+        _queueTimer.Tick += (_, _) =>
+        {
+            RefreshQueueStatuses();
+            PumpQueue();
+        };
+        _queueTimer.Start();
+    }
+
+    private void StopQueueTimer()
+    {
+        _queueTimer?.Stop();
+        _queueTimer = null;
+    }
+
+    private void RefreshQueueStatuses()
+    {
+        var now = DateTime.UtcNow;
+        foreach (var message in _queue.Items)
+            message.RefreshStatus(now);
+    }
+
+    // Dispatches the head of the queue if it's ready and the session is idle. Called on
+    // return-to-idle (OnStateChanged) and on each queue-timer tick. Sends exactly one
+    // message — SendMessage flips the session to Working synchronously, so a re-entrant
+    // pump before the next idle can't double-send.
+    private void PumpQueue()
+    {
+        if (_session == null || _session.State != ClaudeSessionState.Idle) return;
+
+        var head = _queue.PeekReady(DateTime.UtcNow);
+        if (head == null) return;
+
+        _queue.DequeueHead();
+        Dispatch(head.Text, head.Attachments, head.Thumbnails);
+    }
+
+    // Tints the clock glyph while a scheduled (time-gated) message is pending so the
+    // waiting state reads at a glance.
     private void UpdateScheduleButtonVisual()
     {
-        if (IsScheduled)
-        {
-            ScheduleIcon.Foreground = ThemeManager.GetBrush("ChatStatusWarningForeground");
-            ScheduleButton.ToolTip = "Message scheduled — click to view the countdown or cancel";
-        }
-        else
-        {
-            ScheduleIcon.Foreground = ThemeManager.GetBrush("ChatButtonForeground");
-            ScheduleButton.ToolTip = "Schedule this message to send later";
-        }
+        var hasScheduled = _queue.NextScheduledFireUtc != null;
+        ScheduleIcon.Foreground = hasScheduled
+            ? ThemeManager.GetBrush("ChatStatusWarningForeground")
+            : ThemeManager.GetBrush("ChatButtonForeground");
+        ScheduleButton.ToolTip = "Schedule a message to send later";
     }
 
     /// <summary>
@@ -868,14 +994,143 @@ public partial class AiChatControl : UserControl
         }
     }
 
+    // --- Image Attachments ---
+
+    // The command-driven paste path (e.g. the right-click "Paste" menu item, or a
+    // Ctrl+V that carried text alongside an image). Ctrl+V for an image-only
+    // clipboard is handled earlier in InputBox_PreviewKeyDown — the Paste command
+    // never executes without a text format, so this handler wouldn't fire for it.
+    private void InputBox_Pasting(object sender, DataObjectPastingEventArgs e)
+    {
+        if (TryAttachClipboardImages())
+            e.CancelCommand();
+    }
+
+    // Reads the system clipboard for image file(s) or a raw/screenshot bitmap and,
+    // if found, queues them as attachments. Returns true when at least one image was
+    // attached, so the caller can suppress the default text paste.
+    private bool TryAttachClipboardImages()
+    {
+        try
+        {
+            // Image files copied from Explorer come through as a file-drop list.
+            if (Clipboard.ContainsFileDropList())
+            {
+                var images = Clipboard.GetFileDropList().Cast<string>()
+                    .Where(ImageAttachmentHelper.IsSupportedImageFile).ToList();
+                if (images.Count > 0)
+                {
+                    foreach (var path in images)
+                        AddAttachment(ImageAttachmentHelper.FromFile(path));
+                    return true;
+                }
+            }
+
+            // A screenshot / copied image arrives as raw bitmap data (DIB/CF_BITMAP)
+            // and/or a PNG stream — some sources provide only the latter, which
+            // ContainsImage() doesn't report, so check both.
+            if (Clipboard.ContainsImage() || Clipboard.ContainsData("PNG"))
+            {
+                var attachment = ImageAttachmentHelper.FromClipboard();
+                if (attachment != null)
+                {
+                    AddAttachment(attachment);
+                    return true;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"AiChatControl: clipboard image paste failed — {ex.Message}");
+        }
+        return false;
+    }
+
+    private void InputPanel_PreviewDragOver(object sender, DragEventArgs e)
+    {
+        e.Effects = HasDroppableImages(e) ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private void InputPanel_PreviewDrop(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(DataFormats.FileDrop)
+            || e.Data.GetData(DataFormats.FileDrop) is not string[] files)
+            return;
+
+        var images = files.Where(ImageAttachmentHelper.IsSupportedImageFile).ToList();
+        if (images.Count == 0)
+            return;
+
+        foreach (var path in images)
+            AddAttachment(ImageAttachmentHelper.FromFile(path));
+        e.Handled = true;
+        FocusInput();
+    }
+
+    private static bool HasDroppableImages(DragEventArgs e)
+        => e.Data.GetDataPresent(DataFormats.FileDrop)
+           && e.Data.GetData(DataFormats.FileDrop) is string[] files
+           && files.Any(ImageAttachmentHelper.IsSupportedImageFile);
+
+    private void AddAttachment(PendingImageAttachment? attachment)
+    {
+        if (attachment != null)
+            PendingAttachments.Add(attachment);
+    }
+
+    private void RemoveAttachment_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: PendingImageAttachment a })
+            PendingAttachments.Remove(a);
+    }
+
+    // Click a chip's thumbnail to open the larger lightbox, from which the image
+    // can be removed (Gmail-style).
+    private void PreviewAttachment_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: PendingImageAttachment a })
+            return;
+
+        var owner = Window.GetWindow(this)!;
+        var preview = ImageAttachmentHelper.CreatePreview(a);
+        if (ImagePreviewDialog.Show(owner, preview, a.DisplayName))
+            PendingAttachments.Remove(a);
+    }
+
+    // The Cancel (✕) button: discard the drafted text and any queued attachments.
+    private void CancelButton_Click(object sender, RoutedEventArgs e)
+    {
+        InputBox.Text = "";
+        PendingAttachments.Clear();
+        FocusInput();
+    }
+
+    // Shows the attachments bar only when something is queued, and keeps the
+    // Cancel button in sync.
+    private void UpdateAttachmentsBar()
+    {
+        AttachmentsBar.Visibility = PendingAttachments.Count > 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        UpdateComposerButtons();
+    }
+
+    // The Cancel button is always visible (to avoid the composer resizing as it
+    // appears/disappears) but is only enabled when there's something to discard
+    // (drafted text or queued images).
+    private void UpdateComposerButtons()
+        => CancelButton.IsEnabled =
+            !string.IsNullOrEmpty(InputBox.Text) || PendingAttachments.Count > 0;
+
     // --- Message Collection Helpers ---
 
-    private void AddUserMessage(string text)
+    private void AddUserMessage(string text, IReadOnlyList<ImageSource>? images = null)
     {
         // Sending always snaps to the newest message, even if the user had
         // scrolled up to read history.
         _stickToBottom = true;
-        Messages.Add(new UserMessage(Guid.NewGuid(), text));
+        Messages.Add(new UserMessage(Guid.NewGuid(), text, images));
     }
 
     private void AddSystemMessage(string text, bool isWarning = false)
@@ -911,6 +1166,7 @@ public partial class AiChatControl : UserControl
         StopActivityAnimation();
         _activityVm?.Freeze();
         Messages.Clear();
+        PendingAttachments.Clear();
         _activityVm = null;
         _waitingVm = null;
         _inactivityVm = null;

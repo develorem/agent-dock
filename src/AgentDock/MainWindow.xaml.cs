@@ -845,6 +845,9 @@ public partial class MainWindow : Window
         _projectDescriptionControls[project] = descControl;
         _projectTodoListControls[project] = todoControl;
         chatControl.SessionStateChanged += state => UpdateTabIcon(project, state);
+        // A scheduled message changes the tab's icon/tooltip even when the session
+        // state itself doesn't move (e.g. Idle → Idle-with-schedule), so refresh on it.
+        chatControl.ScheduleChanged += () => UpdateTabIcon(project, chatControl.CurrentState);
 
         // Switch to the new project
         SwitchToProject(project);
@@ -2915,11 +2918,23 @@ public partial class MainWindow : Window
         diamondIcon.Visibility = Visibility.Visible;
         _projectNewResponse.Remove(project); // recomputed below for the Idle/just-finished case
 
+        // A parked scheduled message replaces the quiet (idle / no-session) diamond with
+        // a clock glyph + tooltip. Active states (working/permission/error) and an unseen
+        // completion still take precedence \u2014 the schedule is the calmest signal.
+        var scheduledUtc = _projectChatControls.TryGetValue(project, out var schedChat)
+            ? schedChat.ScheduledFireTimeUtc
+            : null;
+
         switch (state)
         {
             case ClaudeSessionState.NotStarted:
             case ClaudeSessionState.Exited:
-                diamondIcon.Text = "\u25C7"; // ◇ outline diamond
+                if (scheduledUtc != null)
+                {
+                    ApplyScheduledVisual(diamondIcon);
+                    break;
+                }
+                diamondIcon.Text = "\u25C7"; //◇ outline diamond
                 diamondIcon.Foreground = ThemeManager.GetBrush("TabIconInactiveDiamondForeground");
                 break;
 
@@ -2939,6 +2954,10 @@ public partial class MainWindow : Window
                 {
                     _projectNewResponse.Add(project);
                     StartAttentionPulse(project, diamondIcon);
+                }
+                else if (scheduledUtc != null)
+                {
+                    ApplyScheduledVisual(diamondIcon);
                 }
                 break;
 
@@ -2963,8 +2982,34 @@ public partial class MainWindow : Window
                 break;
         }
 
+        UpdateTabScheduleTooltip(project, scheduledUtc);
+
         // Roll the child's new state up into its group's aggregate diamond.
         RefreshGroupIndicator(project.GroupId);
+    }
+
+    /// <summary>
+    /// Renders the "message scheduled" indicator: a clock glyph in the scheduled
+    /// accent colour, replacing the diamond. Used on both project and group tabs.
+    /// </summary>
+    private static void ApplyScheduledVisual(TextBlock icon)
+    {
+        icon.Text = "◷"; // ◷ circle-with-quadrant — reads as a clock/timer face
+        icon.Foreground = ThemeManager.GetBrush("TabIconScheduledForeground");
+    }
+
+    /// <summary>
+    /// Appends the scheduled fire time to the tab's tooltip while a message is parked,
+    /// reverting to just the folder path once it fires or is cancelled.
+    /// </summary>
+    private void UpdateTabScheduleTooltip(ProjectInfo project, DateTime? scheduledUtc)
+    {
+        if (!_projectTabButtons.TryGetValue(project, out var button))
+            return;
+
+        button.ToolTip = scheduledUtc is { } utc
+            ? $"{project.FolderPath}\nMessage scheduled for {utc.ToLocalTime():g}"
+            : project.FolderPath;
     }
 
     private void StartDiamondPulse(ProjectInfo project, TextBlock diamondIcon)
@@ -3020,6 +3065,10 @@ public partial class MainWindow : Window
             grid.Children[0] is TextBlock diamond)
         {
             diamond.Visibility = Visibility.Visible;
+            // A message may have been scheduled while this tab was flashing; with the
+            // completion now seen, the calm scheduled glyph takes over from the green.
+            if (chat.ScheduledFireTimeUtc != null)
+                ApplyScheduledVisual(diamond);
         }
 
         // The completion has now been seen — drop the group's flashing-green state.
@@ -3036,11 +3085,12 @@ public partial class MainWindow : Window
     private enum TabIndicator
     {
         Inactive = 0,    // hollow purple ◇ — no or ended session
-        Working = 1,     // flashing blue ◆
-        Idle = 2,        // solid green ◆ — ready, completion already seen
-        NewResponse = 3, // flashing green ◆ — completed turn the user hasn't viewed
-        Question = 4,    // solid orange ◆ — waiting for a permission answer
-        Error = 5,       // red ◆ + "!" — session error
+        Scheduled = 1,   // clock ◷ — a message is parked to send later (lowest signal)
+        Working = 2,     // flashing blue ◆
+        Idle = 3,        // solid green ◆ — ready, completion already seen
+        NewResponse = 4, // flashing green ◆ — completed turn the user hasn't viewed
+        Question = 5,    // solid orange ◆ — waiting for a permission answer
+        Error = 6,       // red ◆ + "!" — session error
     }
 
     private TabIndicator GetProjectIndicator(ProjectInfo project)
@@ -3048,15 +3098,18 @@ public partial class MainWindow : Window
         if (!_projectChatControls.TryGetValue(project, out var chat))
             return TabIndicator.Inactive;
 
+        var scheduled = chat.ScheduledFireTimeUtc != null;
         return chat.CurrentState switch
         {
             ClaudeSessionState.Error => TabIndicator.Error,
             ClaudeSessionState.WaitingForPermission => TabIndicator.Question,
             ClaudeSessionState.Idle =>
-                _projectNewResponse.Contains(project) ? TabIndicator.NewResponse : TabIndicator.Idle,
+                _projectNewResponse.Contains(project) ? TabIndicator.NewResponse
+                : scheduled ? TabIndicator.Scheduled
+                : TabIndicator.Idle,
             ClaudeSessionState.Working => TabIndicator.Working,
             ClaudeSessionState.Initializing => TabIndicator.Working,
-            _ => TabIndicator.Inactive, // NotStarted, Exited
+            _ => scheduled ? TabIndicator.Scheduled : TabIndicator.Inactive, // NotStarted, Exited
         };
     }
 
@@ -3096,6 +3149,10 @@ public partial class MainWindow : Window
             case TabIndicator.Inactive:
                 diamond.Text = "◇";
                 diamond.Foreground = ThemeManager.GetBrush("TabIconInactiveDiamondForeground");
+                break;
+
+            case TabIndicator.Scheduled:
+                ApplyScheduledVisual(diamond); // clock ◷ — no pulse, lowest-priority signal
                 break;
 
             case TabIndicator.Working:
