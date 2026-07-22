@@ -431,7 +431,12 @@
                                  BorderBrush="{DynamicResource ChatInputBorderBrush}"
                                  BorderThickness="1"
                                  Padding="4,3"
-                                 ToolTip="Type a custom response"
+                                 AcceptsReturn="True"
+                                 TextWrapping="Wrap"
+                                 MaxHeight="120"
+                                 VerticalScrollBarVisibility="Auto"
+                                 VerticalContentAlignment="Top"
+                                 ToolTip="Type a custom response (Enter to send, Shift+Enter for a new line)"
                                  KeyDown="QuestionCustomInput_KeyDown" />
                     </DockPanel>
                 </StackPanel>

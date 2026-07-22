@@ -1491,8 +1491,11 @@ public partial class AiChatControl : UserControl
 
     private void QuestionCustomInput_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Enter)
+        // Match the main composer: Enter sends, Shift+Enter inserts a newline so
+        // multi-line answers (e.g. pasted or dictated text) can be typed here.
+        if (e.Key == Key.Enter && !Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
         {
+            e.Handled = true;
             var text = QuestionCustomInput.Text.Trim();
             if (!string.IsNullOrEmpty(text))
                 SubmitQuestionAnswer(text);
