@@ -13,6 +13,7 @@ namespace AgentDock.Services;
 public class ClaudeSession : IDisposable
 {
     private readonly string _workingDirectory;
+    private readonly string? _accountConfigDir;
     private Process? _process;
     private CancellationTokenSource? _readCts;
     private Task? _readTask;
@@ -54,9 +55,18 @@ public class ClaudeSession : IDisposable
     public event Action<int>? ProcessExited;
     public event Action? InactivityTimeout;
 
-    public ClaudeSession(string workingDirectory)
+    /// <summary>
+    /// Creates a session for a project. When <paramref name="accountConfigDir"/> is
+    /// set, every spawned <c>claude</c> subprocess runs with <c>CLAUDE_CONFIG_DIR</c>
+    /// pointed at it, so this session acts as that Claude account (credentials,
+    /// history and session transcripts live there). Null / empty = the machine's
+    /// default login (<c>~/.claude</c>), i.e. today's behaviour. Chosen on the Start
+    /// panel and fixed for the life of the session — see AccountManager.
+    /// </summary>
+    public ClaudeSession(string workingDirectory, string? accountConfigDir = null)
     {
         _workingDirectory = workingDirectory;
+        _accountConfigDir = string.IsNullOrWhiteSpace(accountConfigDir) ? null : accountConfigDir;
         PerfDiagnostics.SessionCreated();
     }
 
@@ -199,6 +209,14 @@ public class ClaudeSession : IDisposable
         // Prevent nested-session detection if launched from within Claude Code
         psi.Environment.Remove("CLAUDECODE");
         psi.Environment.Remove("CLAUDE_CODE_ENTRYPOINT");
+
+        // Run this turn as the account chosen on the Start panel by relocating
+        // Claude's entire config dir. Unset = the machine's default ~/.claude login.
+        if (_accountConfigDir != null)
+        {
+            psi.Environment["CLAUDE_CONFIG_DIR"] = _accountConfigDir;
+            Log.Info($"ClaudeSession.SendMessage: CLAUDE_CONFIG_DIR={_accountConfigDir}");
+        }
 
         try
         {

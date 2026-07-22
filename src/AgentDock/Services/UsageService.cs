@@ -31,12 +31,18 @@ public static class UsageService
 
     public record FetchResult(FetchStatus Status, UsageSummary? Summary, string? ErrorMessage);
 
-    public static async Task<FetchResult> FetchAsync(CancellationToken ct = default)
+    /// <summary>
+    /// Fetches plan usage for one login. <paramref name="configDir"/> is that account's
+    /// <c>CLAUDE_CONFIG_DIR</c> (holding its <c>.credentials.json</c>); null reads the
+    /// machine default <c>~/.claude</c>. Each account's token is its own rate-limit
+    /// bucket, so fetching several accounts on the same tick is safe.
+    /// </summary>
+    public static async Task<FetchResult> FetchAsync(string? configDir = null, CancellationToken ct = default)
     {
         string? token;
         try
         {
-            token = ReadOAuthToken();
+            token = ReadOAuthToken(configDir);
         }
         catch (Exception ex)
         {
@@ -73,11 +79,12 @@ public static class UsageService
         }
     }
 
-    private static string? ReadOAuthToken()
+    private static string? ReadOAuthToken(string? configDir)
     {
-        var path = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".claude", ".credentials.json");
+        var dir = string.IsNullOrWhiteSpace(configDir)
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude")
+            : configDir;
+        var path = Path.Combine(dir, ".credentials.json");
 
         if (!File.Exists(path))
             throw new FileNotFoundException("Claude credentials file not found", path);

@@ -114,6 +114,13 @@
                                            Foreground="{DynamicResource MenuIconForeground}" />
                             </MenuItem.Icon>
                         </MenuItem>
+                        <Separator />
+                        <MenuItem Header="_Claude Accounts..." Click="Accounts_Click">
+                            <MenuItem.Icon>
+                                <TextBlock Text="&#xE77B;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                           Foreground="{DynamicResource MenuIconForeground}" />
+                            </MenuItem.Icon>
+                        </MenuItem>
                     </MenuItem>
                     <MenuItem Header="_Help">
                         <MenuItem Header="_Getting Started" Click="GettingStarted_Click">

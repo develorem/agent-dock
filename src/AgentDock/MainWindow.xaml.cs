@@ -426,6 +426,11 @@ public partial class MainWindow : Window
         }
     }
 
+    private void Accounts_Click(object sender, RoutedEventArgs e)
+    {
+        Windows.AccountsDialog.Show(this);
+    }
+
     // --- Help Menu ---
 
     private void GettingStarted_Click(object sender, RoutedEventArgs e)
@@ -2556,6 +2561,10 @@ public partial class MainWindow : Window
         var modelLabel = FormatModelName(ctrl.Model);
         var prefix = modelLabel ?? "AI Chat";
 
+        // Show which login this session runs as, when accounts are configured.
+        if (!string.IsNullOrEmpty(ctrl.AccountLabel))
+            prefix += $" · {ctrl.AccountLabel}";
+
         var stats = ctrl.Stats;
         if (stats.TotalCostUsd > 0 || stats.TotalTokens > 0)
             anchorable.Title = $"{prefix} — ${stats.TotalCostUsd:F4} · {SessionStats.FormatTokens(stats.TotalTokens)} tokens";
@@ -3698,13 +3707,24 @@ public partial class MainWindow : Window
     // --- Claude Code plan usage (/status Usage) ---
 
     private DispatcherTimer? _usageTimer;
-    private UsageService.FetchResult? _lastUsageResult;
     private DateTime? _lastUsageFetchTime;
 
-    // Last successful fetch kept separately so the popup can fall back to cached
-    // data when the most recent fetch failed (e.g. 429, offline).
-    private UsageSummary? _lastSuccessfulUsage;
-    private DateTime? _lastSuccessfulFetchTime;
+    /// <summary>
+    /// Plan-usage state for one login shown in the title-bar indicator. One entry is
+    /// the machine default (~/.claude); the rest are signed-in named accounts. The
+    /// last successful summary is cached separately so the popup can fall back to it
+    /// when a refresh fails (e.g. 429, offline).
+    /// </summary>
+    private sealed class UsageAccount
+    {
+        public string? Id;                          // null = machine default
+        public string Label = "";                   // "Default" or the account's name
+        public string? ConfigDir;                   // null = ~/.claude
+        public UsageService.FetchResult? LastResult;
+        public UsageSummary? LastSuccess;
+    }
+
+    private List<UsageAccount> _usageAccounts = new();
 
     /// <summary>
     /// True when a session has consumed API usage since the last fetch, meaning
@@ -3734,21 +3754,68 @@ public partial class MainWindow : Window
         Closed += (_, _) => _usageTimer?.Stop();
     }
 
+    /// <summary>
+    /// Rebuilds the list of logins to show usage for: the machine default plus every
+    /// signed-in named account. Cached results are carried over by id so a rebuild
+    /// (e.g. after adding an account) doesn't blank existing brackets. When no named
+    /// accounts exist, only the default is tracked and the display stays single-line.
+    /// </summary>
+    private void RebuildUsageAccounts()
+    {
+        UsageAccount Carry(string? id, string label, string? configDir)
+        {
+            var existing = _usageAccounts.FirstOrDefault(a => a.Id == id);
+            if (existing != null)
+            {
+                existing.Label = label;
+                existing.ConfigDir = configDir;
+                return existing;
+            }
+            return new UsageAccount { Id = id, Label = label, ConfigDir = configDir };
+        }
+
+        var named = AccountManager.Load();
+
+        var updated = new List<UsageAccount>();
+
+        // Machine default (~/.claude). Shown only while no named accounts are
+        // configured, so single-account users keep the original detailed line and
+        // its "sign in to Claude" states. The moment the user configures even one
+        // named account, the indicator switches to tracking only those accounts —
+        // the default is hidden to avoid a confusing extra bracket that duplicates
+        // (or competes with) the accounts the user explicitly set up.
+        if (named.Count == 0)
+            updated.Add(Carry(null, "Default", null));
+
+        foreach (var a in named)
+        {
+            if (!AccountManager.IsLoggedIn(a.Id))
+                continue;
+            updated.Add(Carry(a.Id, a.Name, AccountManager.ConfigDirFor(a.Id)));
+        }
+
+        _usageAccounts = updated;
+    }
+
     private async Task RefreshUsageAsync()
     {
         // Clear dirty on attempt (not success). If we got 429/error, don't retry
         // immediately — wait for the next real session message to mark it dirty again.
         _usageDirty = false;
 
-        var result = await UsageService.FetchAsync();
-        _lastUsageResult = result;
-        _lastUsageFetchTime = DateTime.Now;
+        RebuildUsageAccounts();
 
-        if (result.Status == UsageService.FetchStatus.Success && result.Summary != null)
+        // Each account uses a distinct OAuth token (its own rate-limit bucket), so
+        // fetching them together on one tick is safe.
+        await Task.WhenAll(_usageAccounts.Select(async acct =>
         {
-            _lastSuccessfulUsage = result.Summary;
-            _lastSuccessfulFetchTime = _lastUsageFetchTime;
-        }
+            var result = await UsageService.FetchAsync(acct.ConfigDir);
+            acct.LastResult = result;
+            if (result.Status == UsageService.FetchStatus.Success && result.Summary != null)
+                acct.LastSuccess = result.Summary;
+        }));
+
+        _lastUsageFetchTime = DateTime.Now;
 
         UpdateUsageTitleText();
         if (UsagePopup.IsOpen)
@@ -3757,21 +3824,51 @@ public partial class MainWindow : Window
 
     private void UpdateUsageTitleText()
     {
-        var result = _lastUsageResult;
-        if (result == null)
+        var accts = _usageAccounts;
+        if (accts.Count == 0)
         {
             UsageText.Text = "Session: —";
             return;
         }
 
-        UsageText.Text = result.Status switch
+        // Single-account users (default login only) keep the original detailed text.
+        if (accts.Count == 1 && accts[0].Id == null)
         {
-            UsageService.FetchStatus.AuthMissing => "Session: sign in to Claude",
-            UsageService.FetchStatus.AuthExpired => "Session: auth expired",
-            UsageService.FetchStatus.NetworkError => "Session: offline",
-            UsageService.FetchStatus.ServerError => "Session: error",
-            UsageService.FetchStatus.Success => FormatSessionHeader(result.Summary),
-            _ => "Session: —",
+            var result = accts[0].LastResult;
+            UsageText.Text = result == null ? "Session: —" : result.Status switch
+            {
+                UsageService.FetchStatus.AuthMissing => "Session: sign in to Claude",
+                UsageService.FetchStatus.AuthExpired => "Session: auth expired",
+                UsageService.FetchStatus.NetworkError => "Session: offline",
+                UsageService.FetchStatus.ServerError => "Session: error",
+                UsageService.FetchStatus.Success => FormatSessionHeader(result.Summary),
+                _ => "Session: —",
+            };
+            return;
+        }
+
+        // Multiple logins: one compact 5-hour bracket each, e.g. "[Default 57%] [Work 23%]".
+        UsageText.Text = string.Join(" ", accts.Select(a => $"[{a.Label} {FormatCompactPct(a)}]"));
+    }
+
+    /// <summary>Compact 5-hour figure for one login: its percentage, cached value on a
+    /// transient failure, or a short status word when there's nothing to show.</summary>
+    private static string FormatCompactPct(UsageAccount acct)
+    {
+        var summary = acct.LastResult?.Status == UsageService.FetchStatus.Success
+            ? acct.LastResult.Summary
+            : acct.LastSuccess;
+
+        var util = summary?.FiveHour?.Utilization;
+        if (util != null)
+            return $"{Math.Round(util.Value):0}%";
+
+        return acct.LastResult?.Status switch
+        {
+            UsageService.FetchStatus.AuthMissing => "sign in",
+            UsageService.FetchStatus.AuthExpired => "auth",
+            UsageService.FetchStatus.NetworkError => "offline",
+            _ => "—",
         };
     }
 
@@ -3826,8 +3923,7 @@ public partial class MainWindow : Window
     {
         UsageDetailPanel.Children.Clear();
 
-        var result = _lastUsageResult;
-        if (result == null)
+        if (_usageAccounts.Count == 0)
         {
             UsageDetailPanel.Children.Add(new TextBlock
             {
@@ -3839,17 +3935,65 @@ public partial class MainWindow : Window
             return;
         }
 
-        // If the latest fetch failed, fall back to the last successful summary
-        // (if any) so the user can still see cached data with an error banner above.
+        // Show per-login section headers only when more than one login is tracked.
+        var multi = _usageAccounts.Count > 1 || _usageAccounts[0].Id != null;
+        var anyCached = false;
+
+        for (var i = 0; i < _usageAccounts.Count; i++)
+        {
+            var acct = _usageAccounts[i];
+
+            if (multi)
+            {
+                UsageDetailPanel.Children.Add(new TextBlock
+                {
+                    Text = acct.Label,
+                    FontSize = 12,
+                    FontWeight = FontWeights.Bold,
+                    Margin = new Thickness(0, i == 0 ? 0 : 12, 0, 6),
+                    Foreground = (Brush)FindResource("TitleBarForeground"),
+                });
+            }
+
+            if (RenderAccountDetail(acct))
+                anyCached = true;
+        }
+
+        var footer = _lastUsageFetchTime is DateTime time ? $"Last updated: {time:HH:mm:ss}" : "";
+        if (anyCached)
+            footer = string.IsNullOrEmpty(footer)
+                ? "Showing cached data after a failed refresh"
+                : "Cached data shown for some logins · " + footer;
+        UsageFooterText.Text = footer;
+    }
+
+    /// <summary>
+    /// Renders one login's usage rows into the popup. Returns true if it fell back to
+    /// cached data because the latest fetch for this login failed.
+    /// </summary>
+    private bool RenderAccountDetail(UsageAccount acct)
+    {
+        var fg = (Brush)FindResource("TitleBarForeground");
+        var result = acct.LastResult;
+
+        if (result == null)
+        {
+            UsageDetailPanel.Children.Add(new TextBlock { Text = "Loading…", FontSize = 11, Foreground = fg });
+            return false;
+        }
+
+        // On failure, fall back to this login's last successful summary (if any),
+        // shown beneath an error banner.
         var isError = result.Status != UsageService.FetchStatus.Success || result.Summary == null;
-        var summary = isError ? _lastSuccessfulUsage : result.Summary;
+        var summary = isError ? acct.LastSuccess : result.Summary;
+        var usedCache = isError && summary != null;
 
         if (isError)
         {
             var msg = result.Status switch
             {
-                UsageService.FetchStatus.AuthMissing => "Claude Code credentials not found. Sign in via Claude Code first.",
-                UsageService.FetchStatus.AuthExpired => "OAuth token expired. Open Claude Code to refresh sign-in.",
+                UsageService.FetchStatus.AuthMissing => "Not signed in. Log in to this account from Claude Accounts.",
+                UsageService.FetchStatus.AuthExpired => "OAuth token expired. Log in to this account again.",
                 UsageService.FetchStatus.NetworkError => "Could not reach api.anthropic.com. Check your connection.",
                 _ => $"Could not fetch usage ({result.ErrorMessage})",
             };
@@ -3858,55 +4002,38 @@ public partial class MainWindow : Window
                 Text = msg,
                 FontSize = 11,
                 TextWrapping = TextWrapping.Wrap,
-                Foreground = (Brush)FindResource("TitleBarForeground"),
+                Foreground = fg,
                 Margin = new Thickness(0, 0, 0, summary != null ? 10 : 0),
             });
         }
 
         if (summary == null)
-        {
-            UsageFooterText.Text = _lastUsageFetchTime is DateTime t
-                ? $"Last attempt: {t:HH:mm:ss}"
-                : "";
-            return;
-        }
+            return false;
 
-        var s = summary;
-        AddUsageRow("5-hour session", s.FiveHour, isPrimary: true);
-        AddUsageRow("7-day weekly", s.SevenDay);
+        AddUsageRow("5-hour session", summary.FiveHour, isPrimary: true);
+        AddUsageRow("7-day weekly", summary.SevenDay);
 
         // Per-model breakdown (show only if populated)
-        if (s.SevenDayOpus?.Utilization != null)
-            AddUsageRow("7-day Opus", s.SevenDayOpus);
-        if (s.SevenDaySonnet?.Utilization != null)
-            AddUsageRow("7-day Sonnet", s.SevenDaySonnet);
+        if (summary.SevenDayOpus?.Utilization != null)
+            AddUsageRow("7-day Opus", summary.SevenDayOpus);
+        if (summary.SevenDaySonnet?.Utilization != null)
+            AddUsageRow("7-day Sonnet", summary.SevenDaySonnet);
 
         // Extra usage (if on)
-        if (s.ExtraUsage?.IsEnabled == true && (s.ExtraUsage.UsedCredits ?? 0) > 0)
+        if (summary.ExtraUsage?.IsEnabled == true && (summary.ExtraUsage.UsedCredits ?? 0) > 0)
         {
-            var currency = s.ExtraUsage.Currency ?? "";
-            var credits = s.ExtraUsage.UsedCredits ?? 0;
+            var currency = summary.ExtraUsage.Currency ?? "";
+            var credits = summary.ExtraUsage.UsedCredits ?? 0;
             UsageDetailPanel.Children.Add(new TextBlock
             {
                 Text = $"Extra usage: {credits:0} {currency} credits used",
                 FontSize = 11,
                 Margin = new Thickness(0, 8, 0, 0),
-                Foreground = (Brush)FindResource("TitleBarForeground"),
+                Foreground = fg,
             });
         }
 
-        // Footer: when showing cached data after an error, tell the user how old it is.
-        if (isError && _lastSuccessfulFetchTime is DateTime cachedTime)
-        {
-            var attempt = _lastUsageFetchTime is DateTime at ? $" · retried {at:HH:mm:ss}" : "";
-            UsageFooterText.Text = $"Showing cached data from {cachedTime:HH:mm:ss}{attempt}";
-        }
-        else
-        {
-            UsageFooterText.Text = _lastUsageFetchTime is DateTime time
-                ? $"Last updated: {time:HH:mm:ss}"
-                : "";
-        }
+        return usedCache;
     }
 
     private void AddUsageRow(string label, UsageWindow? window, bool isPrimary = false)

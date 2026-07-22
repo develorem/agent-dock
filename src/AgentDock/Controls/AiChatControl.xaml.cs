@@ -180,6 +180,15 @@ public partial class AiChatControl : UserControl
     {
         Log.Info($"AiChatControl: Initialize for '{projectPath}'");
         _projectPath = projectPath;
+        // Refresh the login picker whenever the Start panel appears (initial show
+        // and after a session ends) and when its dropdown opens, so accounts added
+        // via the Accounts dialog show up without restarting the app.
+        StartPanel.IsVisibleChanged += (_, e) =>
+        {
+            if ((bool)e.NewValue) PopulateAccountPicker();
+        };
+        AccountCombo.DropDownOpened += (_, _) => PopulateAccountPicker();
+        PopulateAccountPicker();
     }
 
     public void FocusInput()
@@ -281,6 +290,57 @@ public partial class AiChatControl : UserControl
     private void StartNormal_Click(object sender, RoutedEventArgs e) => StartSession(false);
     private void StartDangerous_Click(object sender, RoutedEventArgs e) => StartSession(true);
 
+    /// <summary>A selectable login on the Start panel. Id null = the machine default (~/.claude).</summary>
+    private sealed class AccountChoice
+    {
+        public string? Id { get; init; }
+        public string DisplayName { get; init; } = "";
+        /// <summary>Short friendly label (account name, or "Default") shown in the chat title.</summary>
+        public string Label { get; init; } = "";
+    }
+
+    /// <summary>
+    /// The login this session was started with, for display in the chat panel title:
+    /// the account name, "Default" for the machine login, or null when no accounts are
+    /// configured (single-account users see no change). Fixed for the session's life.
+    /// </summary>
+    public string? AccountLabel { get; private set; }
+
+    /// <summary>
+    /// Rebuilds the Start-panel login picker from the configured accounts, preserving
+    /// the current selection by id. The picker stays hidden until at least one account
+    /// exists (users who don't use multi-account never see it).
+    /// </summary>
+    private void PopulateAccountPicker()
+    {
+        var accounts = AccountManager.Load();
+        if (accounts.Count == 0)
+        {
+            AccountPickerPanel.Visibility = Visibility.Collapsed;
+            AccountCombo.ItemsSource = null;
+            return;
+        }
+
+        var previousId = (AccountCombo.SelectedItem as AccountChoice)?.Id;
+
+        var choices = new List<AccountChoice>
+        {
+            new() { Id = null, Label = "Default", DisplayName = "Default (this machine's login)" }
+        };
+        foreach (var a in accounts)
+        {
+            var email = AccountManager.ReadEmail(a.Id);
+            var suffix = email != null
+                ? $" — {email}"
+                : AccountManager.IsLoggedIn(a.Id) ? " — signed in" : " — not signed in";
+            choices.Add(new AccountChoice { Id = a.Id, Label = a.Name, DisplayName = a.Name + suffix });
+        }
+
+        AccountCombo.ItemsSource = choices;
+        AccountCombo.SelectedItem = choices.FirstOrDefault(c => c.Id == previousId) ?? choices[0];
+        AccountPickerPanel.Visibility = Visibility.Visible;
+    }
+
     private void StartSession(bool dangerous)
     {
         Log.Info($"AiChatControl: StartSession(dangerous={dangerous})");
@@ -291,9 +351,29 @@ public partial class AiChatControl : UserControl
             return;
         }
 
+        // Resolve the chosen login. null id (or no picker) = the machine default.
+        string? accountConfigDir = null;
+        AccountLabel = null;
+        if (AccountPickerPanel.Visibility == Visibility.Visible &&
+            AccountCombo.SelectedItem is AccountChoice choice)
+        {
+            if (choice.Id is { } accountId)
+            {
+                if (!AccountManager.IsLoggedIn(accountId))
+                {
+                    StartError.Text = "That account isn't signed in yet. Open Claude Accounts to log in first.";
+                    StartError.Visibility = Visibility.Visible;
+                    return;
+                }
+                accountConfigDir = AccountManager.ConfigDirFor(accountId);
+                Log.Info($"AiChatControl: StartSession using account id={accountId}");
+            }
+            AccountLabel = choice.Label;
+        }
+
         StartError.Visibility = Visibility.Collapsed;
 
-        _session = new ClaudeSession(_projectPath);
+        _session = new ClaudeSession(_projectPath, accountConfigDir);
         WireSessionEvents();
 
         StartPanel.Visibility = Visibility.Collapsed;
@@ -597,6 +677,7 @@ public partial class AiChatControl : UserControl
             session.Dispose();
         }
 
+        AccountLabel = null;
         ChatPanel.Visibility = Visibility.Collapsed;
         StartPanel.Visibility = Visibility.Visible;
         StopButton.IsEnabled = true;

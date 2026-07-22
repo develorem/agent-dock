@@ -210,6 +210,31 @@
                        Foreground="{DynamicResource ChatTextForeground}"
                        HorizontalAlignment="Center"
                        Margin="0,0,0,20" />
+            <!-- Account / login picker (shown only when accounts are configured) -->
+            <StackPanel x:Name="AccountPickerPanel" Visibility="Collapsed" Margin="0,0,0,16">
+                <TextBlock Text="LOGIN"
+                           FontFamily="Cascadia Code, Consolas, Courier New"
+                           FontSize="10" FontWeight="SemiBold"
+                           Foreground="{DynamicResource ChatMutedForeground}"
+                           Margin="0,0,0,4" />
+                <ComboBox x:Name="AccountCombo"
+                          Height="28"
+                          FontFamily="Cascadia Code, Consolas, Courier New"
+                          FontSize="12"
+                          VerticalContentAlignment="Center">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding DisplayName}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+                <TextBlock Text="Which Claude account this session signs in as. Fixed once started."
+                           FontFamily="Cascadia Code, Consolas, Courier New"
+                           FontSize="10"
+                           TextWrapping="Wrap"
+                           Foreground="{DynamicResource ChatMutedForeground}"
+                           Margin="0,4,0,0" />
+            </StackPanel>
             <!-- Claude (normal) -->
             <Button x:Name="StartNormalButton"
                     Click="StartNormal_Click"
