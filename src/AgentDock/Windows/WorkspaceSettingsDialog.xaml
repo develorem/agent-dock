@@ -92,6 +92,19 @@
             <Setter Property="Foreground" Value="{DynamicResource HelpForeground}" />
             <Setter Property="Margin" Value="0,0,0,4" />
         </Style>
+
+        <Style x:Key="NumberBox" TargetType="{x:Type TextBox}">
+            <Setter Property="Width" Value="52" />
+            <Setter Property="Height" Value="28" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="MaxLength" Value="2" />
+            <Setter Property="TextAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Foreground" Value="{DynamicResource HelpForeground}" />
+            <Setter Property="Background" Value="{DynamicResource HelpCardBackground}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource HelpCardBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+        </Style>
     </Window.Resources>
 
     <Border Background="{DynamicResource HelpBackground}"
@@ -166,6 +179,34 @@
                                 <ComboBoxItem Content="Right" Tag="Right" />
                                 <ComboBoxItem Content="Bottom" Tag="Bottom" />
                             </ComboBox>
+
+                            <TextBlock Text="Tab Groups" Style="{StaticResource FieldLabel}" />
+                            <CheckBox x:Name="ShowActiveProjectsCheck"
+                                      Content="Show the Active Projects group"
+                                      FontSize="12"
+                                      Foreground="{DynamicResource HelpForeground}"
+                                      Margin="0,0,0,4" />
+                            <TextBlock Text="Adds a dynamic group on the right of the group bar that gathers the projects with a live agent session, most recent first. Only appears when two or more groups exist."
+                                       FontSize="11"
+                                       TextWrapping="Wrap"
+                                       Foreground="{DynamicResource HelpForeground}"
+                                       Margin="0,0,0,10" />
+
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBox x:Name="ActiveProjectsLimitBox"
+                                         Style="{StaticResource NumberBox}"
+                                         PreviewTextInput="Digits_PreviewTextInput" />
+                                <TextBlock x:Name="ActiveProjectsLimitLabel"
+                                           FontSize="12"
+                                           VerticalAlignment="Center"
+                                           Margin="8,0,0,0"
+                                           Foreground="{DynamicResource HelpForeground}" />
+                            </StackPanel>
+                            <TextBlock Text="Projects beyond this many are left out of the group; they stay reachable from their own group."
+                                       FontSize="11"
+                                       TextWrapping="Wrap"
+                                       Foreground="{DynamicResource HelpForeground}"
+                                       Margin="0,4,0,16" />
 
                             <TextBlock Text="Workspace settings apply to the currently open workspace. Save the workspace (File → Save Workspace) to keep them across launches."
                                        FontSize="11"

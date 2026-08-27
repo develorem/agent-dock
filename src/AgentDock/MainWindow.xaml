@@ -19,6 +19,8 @@
                       CornerRadius="0" />
     </WindowChrome.WindowChrome>
 
+    <Grid x:Name="RootLayer">
+
     <DockPanel x:Name="RootPanel" LastChildFill="True">
 
         <!-- ===== Custom Title Bar ===== -->
@@ -320,26 +322,74 @@
         <!-- ===== Workspace area below title bar ===== -->
         <DockPanel x:Name="WorkspacePanel" LastChildFill="True">
 
+            <!-- Meta tab strip (groups). Always the top-most strip in the workspace so
+                 the accent rail it carries can frame everything below. Hidden until
+                 2+ groups exist. -->
+            <Border x:Name="MetaTabBorder" DockPanel.Dock="Top"
+                    Background="{DynamicResource GroupBarBackground}"
+                    Visibility="Collapsed">
+                <Grid>
+                    <!-- Accent rail along the strip's bottom edge. First child, so the tabs
+                         draw over it: each tab repaints the rail across its own bottom edge
+                         (see the tab template), except the active one, which leaves the gap
+                         that makes it read as joined to the workspace it owns. -->
+                    <Border x:Name="GroupBarAccentLine"
+                            Height="1"
+                            VerticalAlignment="Bottom"
+                            Background="{DynamicResource TabButtonActiveBorderBrush}" />
+                    <DockPanel LastChildFill="False">
+                        <!-- Dynamic "Active Projects" group — docked far right, set apart
+                             from the real groups. Populated in code; empty otherwise. -->
+                        <ContentControl x:Name="ActiveGroupHost"
+                                        DockPanel.Dock="Right"
+                                        VerticalAlignment="Bottom"
+                                        Margin="24,0,4,0" />
+                        <StackPanel x:Name="MetaTabPanel" Orientation="Horizontal"
+                                    DockPanel.Dock="Left">
+                            <!-- Meta tab elements are inserted here dynamically -->
+                        </StackPanel>
+                    </DockPanel>
+                </Grid>
+            </Border>
+
+            <!-- Everything below the group strip is boxed in by the same accent rail
+                 (down the left, across the bottom, up the right) so the visible
+                 workspace reads as belonging to the active group. Thickness is set in
+                 code and is zero whenever the group strip is hidden. -->
+            <Border x:Name="GroupFrameBorder"
+                    BorderBrush="{DynamicResource TabButtonActiveBorderBrush}"
+                    BorderThickness="0">
+                <DockPanel x:Name="WorkspaceInnerPanel" LastChildFill="True">
+
             <!-- Project Toolbar -->
             <Border x:Name="ToolbarBorder" DockPanel.Dock="Top"
                     Background="{DynamicResource ToolbarBackground}"
-                    BorderBrush="{DynamicResource ToolbarBorderBrush}" BorderThickness="0,1,0,1"
+                    BorderBrush="{DynamicResource ToolbarBorderBrush}" BorderThickness="0,1,0,0"
                     Visibility="Collapsed">
-                <DockPanel x:Name="ToolbarOuterPanel" LastChildFill="True">
-                    <!-- Meta tab strip (groups). Hidden until 2+ groups exist. -->
-                    <Border x:Name="MetaTabBorder" DockPanel.Dock="Top"
-                            Background="{DynamicResource GroupBarBackground}"
-                            BorderBrush="{DynamicResource ToolbarBorderBrush}"
-                            BorderThickness="0,0,0,1"
-                            Visibility="Collapsed">
-                        <StackPanel x:Name="MetaTabPanel" Orientation="Horizontal">
-                            <!-- Meta tab elements are inserted here dynamically -->
-                        </StackPanel>
-                    </Border>
+                <Grid>
+                    <!-- Accent rail along the strip's content-facing edge, in the project
+                         accent (a different colour from the group rail, so the nesting
+                         reads). First child, so the tabs draw over it: each tab repaints
+                         the rail across its own content-facing edge (see the tab template),
+                         except the active one, which leaves the gap that makes it read as
+                         joined to the content below. Geometry is set in code for the
+                         current toolbar position. -->
+                    <Border x:Name="ProjectBarAccentLine"
+                            Height="1"
+                            VerticalAlignment="Bottom"
+                            Background="{DynamicResource ProjectTabActiveBorderBrush}" />
                     <!-- Project tab buttons are inserted here dynamically -->
                     <StackPanel x:Name="ToolbarPanel" Orientation="Horizontal" />
-                </DockPanel>
+                </Grid>
             </Border>
+
+            <!-- The content area is boxed in by the project accent on the three sides the
+                 tab strip doesn't cover, so the active project reads as owning everything
+                 below its tab. Thickness is set in code and is zero whenever the project
+                 tab strip is hidden. -->
+            <Border x:Name="ProjectFrameBorder"
+                    BorderBrush="{DynamicResource ProjectTabActiveBorderBrush}"
+                    BorderThickness="0">
 
             <!-- Main Content Area -->
             <Grid x:Name="ContentArea" Background="{DynamicResource ContentBackground}">
@@ -460,9 +510,82 @@
                 <ContentPresenter x:Name="ProjectContentHost"
                                   Visibility="Collapsed" />
             </Grid>
+            </Border>
+
+                </DockPanel>
+            </Border>
 
         </DockPanel>
     </DockPanel>
+
+    <!-- ===== Busy Overlay =====
+         Sits above everything (including the title bar) so it both signals work in
+         progress and swallows clicks while a workspace is being opened. Shown via
+         ShowBusyOverlay() in code-behind; the spinner only animates because the
+         open path yields to the dispatcher between projects. -->
+    <Grid x:Name="BusyOverlay"
+          Background="{DynamicResource BusyOverlayScrim}"
+          Visibility="Collapsed"
+          Opacity="0">
+        <!-- Fixed width, and every line below the spinner has a reserved height, so the
+             card never resizes as the project name / counter text changes underneath it. -->
+        <Border Background="{DynamicResource HelpBackground}"
+                BorderBrush="{DynamicResource ToolbarBorderBrush}"
+                BorderThickness="1"
+                CornerRadius="6"
+                Padding="32,26"
+                Width="380"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center">
+            <StackPanel>
+                <Path x:Name="BusySpinner"
+                      Width="34" Height="34"
+                      Margin="0,0,0,16"
+                      HorizontalAlignment="Center"
+                      Data="M 17,3 A 14,14 0 1 1 3,17"
+                      Stroke="{DynamicResource TabButtonActiveBorderBrush}"
+                      StrokeThickness="3"
+                      StrokeStartLineCap="Round"
+                      StrokeEndLineCap="Round"
+                      RenderTransformOrigin="0.5,0.5">
+                    <Path.RenderTransform>
+                        <RotateTransform x:Name="BusySpinnerRotation" Angle="0" />
+                    </Path.RenderTransform>
+                </Path>
+                <TextBlock x:Name="BusyTitleText"
+                           Text="Opening workspace…"
+                           Height="19"
+                           TextAlignment="Center"
+                           TextTrimming="CharacterEllipsis"
+                           FontSize="14"
+                           FontWeight="SemiBold"
+                           Foreground="{DynamicResource HelpForeground}" />
+                <TextBlock x:Name="BusyCountText"
+                           Height="16"
+                           Margin="0,8,0,0"
+                           TextAlignment="Center"
+                           TextTrimming="CharacterEllipsis"
+                           FontSize="11"
+                           Foreground="{DynamicResource EmptyStateForeground}" />
+                <ProgressBar x:Name="BusyProgressBar"
+                             Height="6"
+                             Margin="0,6,0,0"
+                             Minimum="0" Maximum="100"
+                             Background="{DynamicResource HelpCardBackground}"
+                             Foreground="{DynamicResource TabButtonActiveBorderBrush}"
+                             BorderThickness="0" />
+                <TextBlock x:Name="BusyDetailText"
+                           Height="17"
+                           Margin="0,8,0,0"
+                           TextAlignment="Center"
+                           TextTrimming="CharacterEllipsis"
+                           FontSize="12"
+                           Foreground="{DynamicResource EmptyStateForeground}" />
+            </StackPanel>
+        </Border>
+    </Grid>
+
+    </Grid>
 
     <!-- Keyboard Shortcuts -->
     <Window.InputBindings>

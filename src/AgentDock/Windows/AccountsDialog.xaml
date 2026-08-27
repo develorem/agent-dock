@@ -87,7 +87,7 @@
             <TextBlock Grid.Row="1"
                        Style="{StaticResource FieldHint}"
                        Margin="20,14,20,6"
-                       Text="Each account is a separate Claude login. When you start a session you can pick which account it uses, letting you run more than one Claude plan at once across projects. Add an account, sign in once in the terminal that opens, then click Refresh." />
+                       Text="Each account is a separate Claude login. When you start a session you can pick which account it uses, letting you run more than one Claude plan at once across projects. Add an account and sign in once in the terminal that opens — this list updates itself when the sign-in finishes." />
 
             <!-- Account list -->
             <Border Grid.Row="2"
@@ -135,7 +135,8 @@
             <!-- Per-account actions + add row -->
             <StackPanel Grid.Row="3" Margin="20,0,20,12">
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                    <Button Content="Log In / Re-authenticate"
+                    <Button x:Name="LogInButton"
+                            Content="Log In / Re-authenticate"
                             Style="{StaticResource DialogButton}"
                             Click="LogInButton_Click"
                             Margin="0,0,8,0" />
@@ -143,13 +144,20 @@
                             Style="{StaticResource DialogButton}"
                             Click="RefreshButton_Click"
                             Margin="0,0,8,0" />
-                    <Button Content="Remove"
+                    <Button x:Name="RemoveButton"
+                            Content="Remove"
                             Style="{StaticResource DialogButton}"
                             Click="RemoveButton_Click" />
+                    <TextBlock x:Name="LoginStatus"
+                               Style="{StaticResource FieldHint}"
+                               VerticalAlignment="Center"
+                               Margin="10,0,0,0"
+                               Visibility="Collapsed" />
                 </StackPanel>
 
                 <DockPanel>
-                    <Button DockPanel.Dock="Right"
+                    <Button x:Name="AddButton"
+                            DockPanel.Dock="Right"
                             Content="Add Account"
                             Style="{StaticResource DialogButton}"
                             Click="AddButton_Click"
@@ -167,7 +175,7 @@
                 </DockPanel>
                 <TextBlock Style="{StaticResource FieldHint}"
                            Margin="0,4,0,0"
-                           Text="Give the new account a name (e.g. Personal or Work), then sign in when the terminal opens." />
+                           Text="Give the new account a name (e.g. Personal or Work), then complete the sign-in when the terminal opens." />
             </StackPanel>
 
             <!-- Footer -->

@@ -38,6 +38,22 @@ public class ClaudeSession : IDisposable
     public bool IsDangerousMode { get; private set; }
     public ClaudePermissionRequest? PendingPermission { get; private set; }
 
+    // Subagents / background shells that are still running, keyed by task_id. Kept
+    // deliberately separate from the turn lifecycle: a turn can return to Idle while
+    // these keep working ("I'll spin up a background worker…"). The tab indicator uses
+    // HasBackgroundWork to show "idle but still busy" rather than a solid-green
+    // "available" diamond (see MainWindow.RefreshBackgroundWorkVisual).
+    private readonly HashSet<string> _activeBackgroundTasks = [];
+
+    /// <summary>
+    /// True while one or more subagents / background tasks are still running, even if
+    /// the main conversation turn has already returned to <see cref="ClaudeSessionState.Idle"/>.
+    /// </summary>
+    public bool HasBackgroundWork
+    {
+        get { lock (_activeBackgroundTasks) { return _activeBackgroundTasks.Count > 0; } }
+    }
+
     // --- Events ---
 
     public event Action<ClaudeSessionState>? StateChanged;
@@ -51,6 +67,8 @@ public class ClaudeSession : IDisposable
     /// <summary>Raised on subagent / background-task lifecycle events (task_started,
     /// task_progress, task_updated, task_notification).</summary>
     public event Action<ClaudeTaskEvent>? TaskEvent;
+    /// <summary>Raised, on empty↔non-empty transitions only, when <see cref="HasBackgroundWork"/> changes.</summary>
+    public event Action? BackgroundWorkChanged;
     public event Action<string>? ErrorOutput;
     public event Action<int>? ProcessExited;
     public event Action? InactivityTimeout;
@@ -174,6 +192,10 @@ public class ClaudeSession : IDisposable
     {
         if (State != ClaudeSessionState.Idle)
             throw new InvalidOperationException($"Cannot send message in state {State}");
+
+        // Fresh turn — discard any background work tracked from a prior (now-exited)
+        // process so a stale entry can't wedge the indicator into a permanent "busy".
+        ClearBackgroundWork();
 
         SetState(ClaudeSessionState.Working);
 
@@ -645,7 +667,48 @@ public class ClaudeSession : IDisposable
         };
 
         Log.Info($"ClaudeSession: task {subtype} id={taskId} status={status ?? "-"} type={evt.TaskType ?? "-"} agent={evt.SubagentType ?? "-"}");
+        UpdateBackgroundWork(evt);
         TaskEvent?.Invoke(evt);
+    }
+
+    /// <summary>
+    /// Folds a task lifecycle event into <see cref="_activeBackgroundTasks"/> and raises
+    /// <see cref="BackgroundWorkChanged"/> only when the set crosses empty↔non-empty
+    /// (the tab indicator only cares whether *any* background work is in flight).
+    /// </summary>
+    private void UpdateBackgroundWork(ClaudeTaskEvent evt)
+    {
+        bool changed;
+        lock (_activeBackgroundTasks)
+        {
+            var wasActive = _activeBackgroundTasks.Count > 0;
+            if (evt.IsTerminal)
+                _activeBackgroundTasks.Remove(evt.TaskId);
+            else
+                _activeBackgroundTasks.Add(evt.TaskId);
+            changed = (_activeBackgroundTasks.Count > 0) != wasActive;
+        }
+
+        if (changed)
+            BackgroundWorkChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// Drops all tracked background work. Called when a new turn spawns and when the
+    /// process exits: once the process is gone no further terminal task events can
+    /// arrive, so this is the safety net that prevents a permanently "busy" indicator.
+    /// </summary>
+    private void ClearBackgroundWork()
+    {
+        bool changed;
+        lock (_activeBackgroundTasks)
+        {
+            changed = _activeBackgroundTasks.Count > 0;
+            _activeBackgroundTasks.Clear();
+        }
+
+        if (changed)
+            BackgroundWorkChanged?.Invoke();
     }
 
     private void HandleAssistantMessage(JsonElement root)
@@ -842,6 +905,10 @@ public class ClaudeSession : IDisposable
         }
 
         Log.Info($"ClaudeSession: process exited with code {exitCode}");
+
+        // The process is gone — no more task events can arrive, so any still-"running"
+        // background tasks are dead. Clear them so the indicator settles.
+        ClearBackgroundWork();
 
         // Only transition to error if we weren't expecting the exit
         if (State == ClaudeSessionState.Working)

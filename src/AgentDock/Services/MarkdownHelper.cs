@@ -210,6 +210,7 @@ public static partial class MarkdownHelper
         viewer.Markdown = PreProcess(markdown);
         ApplyCodeBlockTheme(viewer.Document);
         ConvertTablesToGrids(viewer.Document);
+        EnableMarkdownLinkCopy(viewer);
     }
 
     /// <summary>
@@ -324,7 +325,7 @@ public static partial class MarkdownHelper
         }
     }
 
-    private static Grid BuildTableGrid(Table table, Brush foreground)
+    private static FrameworkElement BuildTableGrid(Table table, Brush foreground)
     {
         var rows = table.RowGroups
             .SelectMany(rg => rg.Rows.Select(row => (row, isHeader: (rg.Tag as string) == "TableHeader")))
@@ -377,7 +378,127 @@ public static partial class MarkdownHelper
         }
 
         grid.ContextMenu = BuildTableContextMenu(textGrid);
-        return grid;
+
+        // A rendered table's Grid is a UI island: each cell is its own RichTextBox and the
+        // document-wide selection can't span them, so the table can't be drag-selected as a
+        // whole. Surface a visible "Copy table" button (in addition to the right-click menu)
+        // so the whole grid can be copied to the clipboard in one click.
+        return WrapTableWithCopyBar(grid, textGrid, foreground);
+    }
+
+    // Wraps the table Grid in a vertical stack with a small right-aligned "Copy table"
+    // button above it. The outer margin moves from the grid to the wrapper so the button
+    // bar and table read as one block.
+    private static FrameworkElement WrapTableWithCopyBar(Grid tableGrid, string[][] textGrid, Brush foreground)
+    {
+        var outerMargin = tableGrid.Margin;
+        tableGrid.Margin = new Thickness(0);
+
+        var stack = new StackPanel
+        {
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = outerMargin,
+        };
+        // Foreground inherits to the button glyph/label through TextElement.Foreground.
+        stack.SetValue(TextElement.ForegroundProperty, foreground);
+
+        var copyButton = BuildTableCopyButton(textGrid);
+        copyButton.HorizontalAlignment = HorizontalAlignment.Right;
+        copyButton.Margin = new Thickness(0, 0, 0, 3);
+
+        stack.Children.Add(copyButton);
+        stack.Children.Add(tableGrid);
+        return stack;
+    }
+
+    // A compact, theme-aware "Copy table" affordance rendered as a bordered Border (rather
+    // than a Button, to avoid the default WPF button chrome clashing with the chat surface).
+    // Hover highlights it; clicking copies the whole table and flashes a "Copied!" confirmation.
+    private static Border BuildTableCopyButton(string[][] textGrid)
+    {
+        var glyph = new TextBlock
+        {
+            FontFamily = new FontFamily("Segoe MDL2 Assets"),
+            Text = "", // Copy
+            FontSize = 11,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var label = new TextBlock
+        {
+            Text = "Copy table",
+            FontSize = 11,
+            Margin = new Thickness(5, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        var content = new StackPanel { Orientation = Orientation.Horizontal };
+        content.Children.Add(glyph);
+        content.Children.Add(label);
+
+        var border = new Border
+        {
+            Child = content,
+            Padding = new Thickness(7, 3, 7, 3),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Background = Brushes.Transparent,
+            Cursor = Cursors.Hand,
+            ToolTip = "Copy the whole table to the clipboard",
+            SnapsToDevicePixels = true,
+        };
+        border.SetResourceReference(Border.BorderBrushProperty, "MarkdownTableBorderBrush");
+
+        border.MouseEnter += (_, _) => border.SetResourceReference(Border.BackgroundProperty, "IconButtonHoverBackground");
+        border.MouseLeave += (_, _) => border.Background = Brushes.Transparent;
+        // Take the press on the PREVIEW down and capture the mouse, rather than simply
+        // handling MouseLeftButtonUp. The button lives in a BlockUIContainer inside a
+        // FlowDocumentScrollViewer, whose text editor captures the mouse on left-button-down
+        // to start a drag-selection; that capture redirects the matching button-up to the
+        // editor, so a bubbling MouseLeftButtonUp handler here never fires at all and the
+        // button looks dead. Claiming the down (Handled + our own capture) keeps the editor
+        // out of it and guarantees the up comes back to us.
+        border.PreviewMouseLeftButtonDown += (_, e) =>
+        {
+            border.CaptureMouse();
+            e.Handled = true;
+        };
+        border.PreviewMouseLeftButtonUp += (_, e) =>
+        {
+            if (!border.IsMouseCaptured) return;
+            border.ReleaseMouseCapture();
+            e.Handled = true;
+
+            // A press dragged off the button before release isn't a click.
+            var p = e.GetPosition(border);
+            if (p.X < 0 || p.Y < 0 || p.X > border.ActualWidth || p.Y > border.ActualHeight) return;
+
+            CopyTableToClipboard(textGrid);
+            FlashCopied(glyph, label);
+        };
+
+        return border;
+    }
+
+    // Briefly swaps the copy button to a checkmark + "Copied!" so the click has visible
+    // feedback, then reverts after a short delay.
+    private static void FlashCopied(TextBlock glyph, TextBlock label)
+    {
+        var originalGlyph = glyph.Text;
+        var originalLabel = label.Text;
+        glyph.Text = ""; // CheckMark
+        label.Text = "Copied!";
+
+        var timer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(1500),
+        };
+        timer.Tick += (_, _) =>
+        {
+            glyph.Text = originalGlyph;
+            label.Text = originalLabel;
+            timer.Stop();
+        };
+        timer.Start();
     }
 
     // Right-click menu for a rendered table: copies the whole table to the clipboard.
@@ -519,7 +640,7 @@ public static partial class MarkdownHelper
         if (isHeader) paragraph.FontWeight = FontWeights.Bold;
         PopulateCellParagraph(cell, paragraph);
 
-        return new RichTextBox
+        var box = new RichTextBox
         {
             Document = new FlowDocument(paragraph) { PagePadding = new Thickness(0) },
             IsReadOnly = true,
@@ -541,6 +662,12 @@ public static partial class MarkdownHelper
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             ContextMenu = BuildCellContextMenu(textGrid),
         };
+
+        // A cell is its own text host: selecting inside it copies through the cell's own
+        // editor, which the outer viewer's copy hook never sees. Hook the cell too, so a
+        // link in a table cell keeps its target when copied.
+        EnableMarkdownLinkCopy(box);
+        return box;
     }
 
     // Right-click menu for a table cell: "Copy" (the current selection, via the standard
@@ -803,8 +930,11 @@ public static partial class MarkdownHelper
             var url = link.CommandParameter as string ?? link.NavigateUri?.OriginalString;
             if (string.IsNullOrEmpty(url)) continue;
 
+            // Drop the command only. CommandParameter is deliberately left in place: with
+            // Command null it is inert for input, and it stays the one record of the link's
+            // target on the Hyperlink itself — which is what GetLinkTarget reads when a
+            // copied selection is rewritten as markdown (see EnableMarkdownLinkCopy).
             link.Command = null;
-            link.CommandParameter = null;
 
             var abs = FromFileLinkUri(url);
             if (abs != null)
@@ -829,6 +959,162 @@ public static partial class MarkdownHelper
                 link.Click += (_, _) => OpenInBrowser(target);
             }
         }
+    }
+
+    // Set on a text host once EnableMarkdownLinkCopy has hooked it, so repeated calls
+    // (RenderTo runs again on every theme change / view toggle, and the chat re-attaches
+    // its viewers on container recycling) don't stack duplicate handlers.
+    private static readonly DependencyProperty MarkdownCopyHookedProperty =
+        DependencyProperty.RegisterAttached(
+            "MarkdownCopyHooked", typeof(bool), typeof(MarkdownHelper), new PropertyMetadata(false));
+
+    /// <summary>
+    /// Makes copying from <paramref name="host"/> (a <see cref="FlowDocumentScrollViewer"/>
+    /// or <see cref="RichTextBox"/>) keep link targets: a selection spanning a rendered link
+    /// lands on the clipboard as markdown — <c>see [the docs](https://example.com) for more</c>
+    /// — instead of the bare display text, which silently dropped the URL.
+    ///
+    /// The rewrite only replaces the plain-text clipboard flavour, and only when the
+    /// selection actually contains a link whose target is worth writing; everything else
+    /// about the copy is untouched. The rewritten text is WPF's own extraction with the link
+    /// syntax spliced in at measured offsets (see <see cref="TryBuildMarkdownSelection"/>),
+    /// so a selection this code can't place a link within falls through to the stock copy
+    /// rather than being mangled.
+    /// </summary>
+    public static void EnableMarkdownLinkCopy(DependencyObject? host)
+    {
+        if (host == null || (bool)host.GetValue(MarkdownCopyHookedProperty)) return;
+        host.SetValue(MarkdownCopyHookedProperty, true);
+        DataObject.AddCopyingHandler(host, OnCopyingMarkdownText);
+    }
+
+    private static void OnCopyingMarkdownText(object sender, DataObjectCopyingEventArgs e)
+    {
+        if (e.IsDragDrop) return;
+        try
+        {
+            var selection = sender switch
+            {
+                FlowDocumentScrollViewer viewer => viewer.Selection,
+                RichTextBox box => box.Selection,
+                _ => (TextRange?)null,
+            };
+            if (selection == null || selection.IsEmpty) return;
+            if (!TryBuildMarkdownSelection(selection, out var markdown)) return;
+
+            e.DataObject.SetData(DataFormats.UnicodeText, markdown);
+            e.DataObject.SetData(DataFormats.Text, markdown);
+            e.DataObject.SetData(DataFormats.StringFormat, markdown);
+        }
+        catch (Exception ex)
+        {
+            // A failed rewrite must never block the copy — the stock flavours are already
+            // on the DataObject at this point, so bailing out just means plain text.
+            Log.Error("Failed to rewrite copied selection as markdown", ex);
+        }
+    }
+
+    /// <summary>
+    /// Rewrites <paramref name="selection"/> as markdown by taking WPF's own plain text for
+    /// the range and splicing <c>[</c> … <c>](target)</c> around each <see cref="Hyperlink"/>
+    /// it covers. Every offset is measured with <see cref="TextRange.Text"/> over a sub-range
+    /// of the same selection, so the result is the copied text verbatim plus the link syntax
+    /// — no reimplementation of WPF's text extraction (list bullets, table islands, block
+    /// boundaries) to drift out of sync. Returns false, leaving the clipboard alone, when the
+    /// selection covers no link whose target is worth writing, or when any offset fails to
+    /// line up with the extracted text.
+    /// </summary>
+    private static bool TryBuildMarkdownSelection(TextRange selection, out string markdown)
+    {
+        markdown = "";
+
+        var text = selection.Text;
+        var start = selection.Start;
+        var end = selection.End;
+        var links = new List<(int Offset, int Length, string Target)>();
+
+        // A link the selection starts part-way into is already open at `start`, so the walk
+        // below never sees its ElementStart — pick it up from the starting pointer's parents.
+        var straddling = FindAncestorHyperlink(start);
+        if (straddling != null && !TryMeasureLink(straddling, start, end, text, links))
+            return false;
+
+        for (var pos = start; pos != null && pos.CompareTo(end) < 0;
+             pos = pos.GetNextContextPosition(LogicalDirection.Forward))
+        {
+            if (pos.GetPointerContext(LogicalDirection.Forward) != TextPointerContext.ElementStart)
+                continue;
+            if (pos.GetAdjacentElement(LogicalDirection.Forward) is not Hyperlink link)
+                continue;
+            if (!TryMeasureLink(link, start, end, text, links))
+                return false;
+        }
+
+        if (links.Count == 0) return false;
+
+        // Splice back to front so the earlier offsets stay valid as the string grows.
+        var sb = new StringBuilder(text);
+        for (var i = links.Count - 1; i >= 0; i--)
+        {
+            var (offset, length, target) = links[i];
+            sb.Insert(offset + length, "](" + target + ")");
+            sb.Insert(offset, "[");
+        }
+
+        markdown = sb.ToString();
+        return true;
+    }
+
+    /// <summary>
+    /// Records where <paramref name="link"/>'s text sits inside <paramref name="text"/> (the
+    /// selection's plain text), clamped to the selected range so a link the selection only
+    /// partly covers still carries its target. Links with nothing useful to add — a file
+    /// reference, an empty span, or a bare URL whose text already IS the target — are skipped
+    /// without failing. Returns false only if the measured offset doesn't line up with the
+    /// extracted text, which means the caller must not touch the clipboard.
+    /// </summary>
+    private static bool TryMeasureLink(
+        Hyperlink link, TextPointer start, TextPointer end, string text,
+        List<(int Offset, int Length, string Target)> links)
+    {
+        var target = GetLinkTarget(link);
+        if (target == null) return true;
+
+        var from = link.ContentStart.CompareTo(start) < 0 ? start : link.ContentStart;
+        var to = link.ContentEnd.CompareTo(end) > 0 ? end : link.ContentEnd;
+        if (from.CompareTo(to) >= 0) return true;
+
+        var linkText = new TextRange(from, to).Text;
+        if (linkText.Length == 0 || linkText == target) return true;
+
+        var offset = new TextRange(start, from).Text.Length;
+        // Guard the arithmetic: a sub-range's text is expected to be the matching slice of
+        // the whole range's text, but rather than trust that, prove it for this link.
+        if (offset + linkText.Length > text.Length) return false;
+        if (string.CompareOrdinal(text, offset, linkText, 0, linkText.Length) != 0) return false;
+
+        links.Add((offset, linkText.Length, target));
+        return true;
+    }
+
+    // The innermost Hyperlink containing a pointer, or null if it sits in ordinary text.
+    private static Hyperlink? FindAncestorHyperlink(TextPointer pos)
+    {
+        for (var element = pos.Parent as TextElement; element != null; element = element.Parent as TextElement)
+            if (element is Hyperlink link) return link;
+        return null;
+    }
+
+    // The copy target of a rendered link. MdXaml stores the href in CommandParameter rather
+    // than NavigateUri (see WireLinks), so check that first. Internal file references are
+    // deliberately excluded: their display text is already the path, and an
+    // agentdock-file:// URI means nothing outside this app — copying them as bare text is
+    // the useful result.
+    private static string? GetLinkTarget(Hyperlink link)
+    {
+        var url = link.CommandParameter as string ?? link.NavigateUri?.OriginalString;
+        if (string.IsNullOrEmpty(url)) return null;
+        return FromFileLinkUri(url) != null ? null : url;
     }
 
     private static void OpenInBrowser(string url)

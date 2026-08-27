@@ -8,7 +8,7 @@ Before installing Agent Dock, make sure you have the following:
 
 Agent Dock is a Windows desktop application. macOS and Linux are not supported at this time.
 
-> **Voice dictation** (the microphone button in the AI Chat) requires Windows 10 version 2004 (build 19041, May 2020) or later. On older Win10 builds the rest of the app works fine; the mic button is just hidden.
+> Agent Dock targets Windows 10 version 2004 (build 19041, May 2020) or later.
 
 ### 2. .NET 10 Runtime
 

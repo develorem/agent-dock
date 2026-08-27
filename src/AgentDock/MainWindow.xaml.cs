@@ -3,9 +3,12 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using AgentDock.Controls;
 using AgentDock.Models;
@@ -30,6 +33,9 @@ public partial class MainWindow : Window
     public static readonly RoutedUICommand CloseProjectCommand =
         new("Close Project", nameof(CloseProjectCommand), typeof(MainWindow));
 
+    /// <summary>Slight top-left/top-right rounding applied to project and group tabs.</summary>
+    private const double TabCornerRadius = 5;
+
     private string _currentToolbarPosition = "Top";
 
     private readonly List<ProjectInfo> _projects = [];
@@ -49,6 +55,21 @@ public partial class MainWindow : Window
     // Tab grouping state (meta tabs)
     private readonly List<ProjectGroup> _groups = [];
     private string? _activeGroupId;
+
+    // Dynamic "Active Projects" group. Not a real ProjectGroup — a virtual meta tab,
+    // selected by parking this sentinel in _activeGroupId. Shown on the right of the
+    // meta bar (when grouping is in use and the setting is on); it gathers the
+    // most-recently-active projects that have a live agent session.
+    private const string ActiveProjectsGroupId = "__active_projects__";
+    // How many of those projects the group lists. Workspace setting, so a workspace with
+    // many long-running sessions can widen it without crowding every other workspace.
+    private int _activeProjectsLimit = WorkspaceFile.DefaultActiveProjectsLimit;
+    // On by default: the group is meant to be a permanent shortcut to whatever is live,
+    // so it shows unless the workspace explicitly turned it off.
+    private bool _showActiveProjectsGroup = true;
+    // Last time each project's session showed any activity (state change), for MRU
+    // ordering of the Active Projects group. Runtime-only — sessions don't survive restart.
+    private readonly Dictionary<ProjectInfo, DateTime> _projectLastActivity = [];
     // Group-level status diamond + pulse timer, keyed by group Id (rebuilt with the meta bar)
     private readonly Dictionary<string, Grid> _groupTabIcons = [];
     private readonly Dictionary<string, DispatcherTimer> _groupIconTimers = [];
@@ -66,6 +87,7 @@ public partial class MainWindow : Window
     private string? _currentWorkspacePath;
     private bool _workspaceDirty;
     private bool _suppressDirty; // suppress during workspace load
+    private bool _workspaceLoading; // a workspace open is in flight (overlay showing)
 
     // Prerequisites check results (populated on startup)
     private List<(string Name, bool Found, string Detail)>? _prerequisiteResults;
@@ -152,7 +174,8 @@ public partial class MainWindow : Window
         if (App.StartupWorkspacePath != null)
         {
             // Defer to after window is fully loaded
-            Loaded += (_, _) => OpenWorkspaceFile(App.StartupWorkspacePath);
+            var startupWorkspace = App.StartupWorkspacePath;
+            Loaded += async (_, _) => await OpenWorkspaceFile(startupWorkspace);
         }
         else if (App.StartupProjectFolders.Count > 0)
         {
@@ -338,7 +361,7 @@ public partial class MainWindow : Window
 
     private void AddProject_Click(object sender, RoutedEventArgs e) => AddProject();
 
-    private void OpenWorkspace_Click(object sender, RoutedEventArgs e)
+    private async void OpenWorkspace_Click(object sender, RoutedEventArgs e)
     {
         // Prompt to save if dirty
         if (!PromptSaveIfDirty())
@@ -354,7 +377,7 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog() != true)
             return;
 
-        OpenWorkspaceFile(dialog.FileName);
+        await OpenWorkspaceFile(dialog.FileName);
     }
 
     private void SaveWorkspace_Click(object sender, RoutedEventArgs e) => SaveWorkspace();
@@ -371,7 +394,9 @@ public partial class MainWindow : Window
         var result = Windows.WorkspaceSettingsDialog.Show(
             this,
             ThemeManager.CurrentTheme.Id,
-            _currentToolbarPosition);
+            _currentToolbarPosition,
+            _showActiveProjectsGroup,
+            _activeProjectsLimit);
 
         if (result == null) return;
 
@@ -382,6 +407,29 @@ public partial class MainWindow : Window
         {
             SetToolbarPosition(result.ToolbarPosition);
             AppSettings.SetString("ToolbarPosition", result.ToolbarPosition);
+        }
+
+        if (result.ShowActiveProjectsGroup != _showActiveProjectsGroup
+            || result.ActiveProjectsLimit != _activeProjectsLimit)
+        {
+            _showActiveProjectsGroup = result.ShowActiveProjectsGroup;
+            _activeProjectsLimit = result.ActiveProjectsLimit;
+
+            // Turning it off while it's the current view — fall back to a real group.
+            if (!_showActiveProjectsGroup && _activeGroupId == ActiveProjectsGroupId)
+            {
+                var firstGroup = _groups.OrderBy(g => g.Order).FirstOrDefault();
+                _activeGroupId = firstGroup?.Id;
+                var firstProject = _activeGroupId != null
+                    ? _projects.FirstOrDefault(p => p.GroupId == _activeGroupId)
+                    : null;
+                if (firstProject != null)
+                    SwitchToProject(firstProject);
+            }
+
+            RefreshMetaTabBar();
+            RefreshProjectTabVisibility();
+            SetWorkspaceDirty();
         }
     }
 
@@ -482,8 +530,6 @@ public partial class MainWindow : Window
         Log.Info($"Prereq: OSDescription='{System.Runtime.InteropServices.RuntimeInformation.OSDescription}', " +
                  $"Framework='{System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}', " +
                  $"Arch={System.Runtime.InteropServices.RuntimeInformation.OSArchitecture}");
-        Log.Info($"Prereq: DictationSupported={Services.DictationService.IsSupportedOnThisOS} " +
-                 $"(requires Win10 build 19041+)");
         Log.Info($"Prereq: User={Environment.UserName}, Machine={Environment.MachineName}");
 
         var results = new List<(string Name, bool Found, string Detail)>();
@@ -823,9 +869,14 @@ public partial class MainWindow : Window
         var project = new ProjectInfo { FolderPath = folderPath };
         project.CustomName = ProjectSettingsManager.Load(folderPath).Name;
 
-        // If groups are active, the new project joins whichever group is currently visible
+        // If groups are active, the new project joins whichever group is currently visible.
+        // The Active Projects tab is a virtual view over live sessions, not a real group, so
+        // adding while it's selected has to resolve to a real group — stamping its sentinel id
+        // onto the project would leave the tab in no group at all.
         if (_groups.Count > 0 && _activeGroupId != null)
-            project.GroupId = _activeGroupId;
+            project.GroupId = _activeGroupId == ActiveProjectsGroupId
+                ? GroupBehindActiveProjectsTab()
+                : _activeGroupId;
 
         _projects.Add(project);
         Log.Info($"AddProjectFromPath: created ProjectInfo for '{project.FolderName}'");
@@ -840,7 +891,9 @@ public partial class MainWindow : Window
             ToolbarPanel.Children.Insert(addBtnIdx, tabButton);
         else
             ToolbarPanel.Children.Add(tabButton);
-        ToolbarBorder.Visibility = Visibility.Visible;
+        UpdateProjectStripVisibility();
+        // Reopening the first project after closing them all brings the strip back.
+        UpdateGroupStripVisibility();
 
         // Create docking layout for this project
         var (content, chatControl, gitControl, descControl, todoControl) = CreateProjectDockingLayout(project, layoutXml);
@@ -853,6 +906,10 @@ public partial class MainWindow : Window
         // A scheduled message changes the tab's icon/tooltip even when the session
         // state itself doesn't move (e.g. Idle → Idle-with-schedule), so refresh on it.
         chatControl.ScheduleChanged += () => UpdateTabIcon(project, chatControl.CurrentState);
+        // Background work (subagents / background tasks) can start or finish while the
+        // session sits at Idle, without a state change — refresh the diamond directly so
+        // it pulses "still busy" rather than showing a solid-green "available".
+        chatControl.SessionBackgroundWorkChanged += () => RefreshBackgroundWorkVisual(project);
 
         // Switch to the new project
         SwitchToProject(project);
@@ -1004,40 +1061,109 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Brush for the tab's own segment of the strip's accent rail, along the edge facing
+    /// the content. Inactive tabs paint it in the accent so the strip rail reads as one
+    /// unbroken line; the current tab leaves it null, so the rail stops either side of it
+    /// and the tab reads as joined to everything below.
+    /// </summary>
+    public static readonly DependencyProperty TabRailBrushProperty =
+        DependencyProperty.RegisterAttached(
+            "TabRailBrush", typeof(Brush), typeof(MainWindow), new PropertyMetadata(null));
+
+    public static void SetTabRailBrush(DependencyObject target, Brush? value)
+        => target.SetValue(TabRailBrushProperty, value);
+
+    public static Brush? GetTabRailBrush(DependencyObject target)
+        => (Brush?)target.GetValue(TabRailBrushProperty);
+
+    /// <summary>
+    /// Which edge that rail segment sits on — always the one facing the content, so it
+    /// lines up with the strip rail. Bottom for group tabs and a top-docked project
+    /// strip; the other three positions are set in <see cref="UpdateProjectFrame"/>.
+    /// </summary>
+    public static readonly DependencyProperty TabRailThicknessProperty =
+        DependencyProperty.RegisterAttached(
+            "TabRailThickness", typeof(Thickness), typeof(MainWindow),
+            new PropertyMetadata(new Thickness(0, 0, 0, 1)));
+
+    public static void SetTabRailThickness(DependencyObject target, Thickness value)
+        => target.SetValue(TabRailThicknessProperty, value);
+
+    public static Thickness GetTabRailThickness(DependencyObject target)
+        => (Thickness)target.GetValue(TabRailThicknessProperty);
+
+    /// <summary>
     /// Builds the flat tab <see cref="ControlTemplate"/> shared by project and group tabs.
-    /// The "Bd" border carries the TemplateBound background and bottom accent
-    /// (BorderBrush/Thickness); a 1px right separator (using the toolbar divider brush)
-    /// is overlaid so adjacent tabs are visually separated by a vertical line.
+    /// The "Bd" border carries the TemplateBound background and outline
+    /// (BorderBrush/Thickness) plus a top-only corner radius, so every tab — active or
+    /// not — reads as a tab with curved top corners. Neighbouring tabs are separated by
+    /// those outlines meeting, so no extra divider is drawn. Over the top of that sits
+    /// "TabRail": the tab's own slice of the strip's accent rail, which the tab paints
+    /// only while it isn't the current one.
     /// </summary>
     private static ControlTemplate CreateTabControlTemplate()
     {
         var template = new ControlTemplate(typeof(Button));
 
+        var root = new FrameworkElementFactory(typeof(Grid));
+
         var borderFactory = new FrameworkElementFactory(typeof(Border), "Bd");
         borderFactory.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(BackgroundProperty));
         borderFactory.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(BorderBrushProperty));
         borderFactory.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(BorderThicknessProperty));
-
-        // Grid lets us overlay the vertical separator on top of the (padded) content.
-        var grid = new FrameworkElementFactory(typeof(Grid));
+        borderFactory.SetValue(Border.CornerRadiusProperty, new CornerRadius(TabCornerRadius, TabCornerRadius, 0, 0));
 
         var contentPresenter = new FrameworkElementFactory(typeof(ContentPresenter));
         contentPresenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
-        // Apply the button's Padding as the content's Margin so the separator stays at the true right edge.
         contentPresenter.SetValue(FrameworkElement.MarginProperty, new TemplateBindingExtension(PaddingProperty));
-        grid.AppendChild(contentPresenter);
+        borderFactory.AppendChild(contentPresenter);
+        root.AppendChild(borderFactory);
 
-        var separatorBrush = ThemeManager.GetBrush("ToolbarBorderBrush");
-        var rightSeparator = new FrameworkElementFactory(typeof(Border));
-        rightSeparator.SetValue(FrameworkElement.WidthProperty, 1.0);
-        rightSeparator.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Right);
-        rightSeparator.SetValue(Border.BackgroundProperty, separatorBrush);
-        grid.AppendChild(rightSeparator);
+        // The strip's rail is drawn behind the tabs, so an opaque tab hides the slice
+        // running under it. This edge-only border hands that slice back — except on the
+        // current tab, where the brush is null and the gap is the whole point.
+        var rail = new FrameworkElementFactory(typeof(Border), "TabRail");
+        rail.SetValue(UIElement.IsHitTestVisibleProperty, false);
+        rail.SetValue(UIElement.SnapsToDevicePixelsProperty, true);
+        rail.SetBinding(Border.BorderBrushProperty, new Binding
+        {
+            RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent),
+            Path = new PropertyPath(TabRailBrushProperty)
+        });
+        rail.SetBinding(Border.BorderThicknessProperty, new Binding
+        {
+            RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent),
+            Path = new PropertyPath(TabRailThicknessProperty)
+        });
+        root.AppendChild(rail);
 
-        borderFactory.AppendChild(grid);
-        template.VisualTree = borderFactory;
+        template.VisualTree = root;
         return template;
     }
+
+    /// <summary>
+    /// Project and group tabs are outlined on three sides (left/top/right) rather than
+    /// underlined: the strip's accent rail supplies the fourth side, so the active tab's
+    /// accent outline closes into a box, while inactive tabs keep the same thickness in
+    /// the divider brush and separate from their neighbours.
+    /// </summary>
+    private static readonly Thickness TabOutlineThickness = new(1, 1, 1, 0);
+
+    /// <summary>Outline brush for a tab that isn't the current one, in either strip.</summary>
+    private static Brush InactiveTabOutlineBrush() => ThemeManager.GetBrush("ToolbarBorderBrush");
+
+    /// <summary>
+    /// The current project tab takes the strip's own background, so tab and strip read as
+    /// one surface carrying the project accent — the same relationship the group strip has
+    /// with the project strip below it.
+    /// </summary>
+    private static Brush ActiveProjectTabBrush() => ThemeManager.GetBrush("ToolbarBackground");
+
+    /// <summary>
+    /// Project tabs that aren't current sit a shade darker than the strip, so they read as
+    /// recessed rather than bleeding into the strip (and the content area) around them.
+    /// </summary>
+    private static Brush InactiveProjectTabBrush() => ThemeManager.GetBrush("ProjectTabInactiveBackground");
 
     private Button CreateProjectTabButton(ProjectInfo project)
     {
@@ -1078,8 +1204,8 @@ public partial class MainWindow : Window
 
         _projectTabIcons[project] = statusGrid;
 
-        // VS Code-like tab: flat rectangle, transparent bottom-accent on inactive,
-        // themed bottom-accent on active, with a 1px vertical separator on the right.
+        // Flat tab with curved top corners, outlined on three sides: the divider brush
+        // when inactive, the project accent when active (see SetTabButtonActive).
         var tabTemplate = CreateTabControlTemplate();
 
         var button = new Button
@@ -1088,9 +1214,9 @@ public partial class MainWindow : Window
             Height = 32,
             Margin = new Thickness(0),
             Padding = new Thickness(12, 0, 12, 0),
-            Background = ThemeManager.GetBrush("TabButtonInactiveBackground"),
-            BorderBrush = Brushes.Transparent,
-            BorderThickness = new Thickness(0, 0, 0, 2),
+            Background = InactiveProjectTabBrush(),
+            BorderBrush = InactiveTabOutlineBrush(),
+            BorderThickness = TabOutlineThickness,
             Cursor = Cursors.Hand,
             HorizontalContentAlignment = HorizontalAlignment.Left,
             Tag = project,
@@ -1114,6 +1240,11 @@ public partial class MainWindow : Window
             }
         };
 
+        // Carries the strip's accent rail across its own content-facing edge while it
+        // isn't the current tab; SetTabButtonActive drops it when it becomes current.
+        SetTabRailBrush(button, ThemeManager.GetBrush("ProjectTabActiveBorderBrush"));
+        SetTabRailThickness(button, ProjectTabRailThickness());
+
         button.Click += (_, _) =>
         {
             if (!_tabDragging)
@@ -1128,7 +1259,7 @@ public partial class MainWindow : Window
         button.MouseLeave += (_, _) =>
         {
             if (project != _activeProject)
-                button.Background = ThemeManager.GetBrush("TabButtonInactiveBackground");
+                button.Background = InactiveProjectTabBrush();
         };
 
         // Drag initiation (DragOver/Drop handled at ToolbarPanel level)
@@ -1193,9 +1324,12 @@ public partial class MainWindow : Window
 
         var button = new Button
         {
-            Width = 32,
-            Height = 32,
-            Margin = new Thickness(6, 0, 0, 0),
+            // Inset from the strip's 32px height, so its closed rounded border clears
+            // the project accent rail along the strip's content-facing edge.
+            Width = 26,
+            Height = 26,
+            Margin = new Thickness(6, 3, 3, 3),
+            VerticalAlignment = VerticalAlignment.Center,
             Background = Brushes.Transparent,
             BorderBrush = ThemeManager.GetBrush("AddButtonBorderBrush"),
             BorderThickness = new Thickness(1),
@@ -1538,11 +1672,13 @@ public partial class MainWindow : Window
 
         if (_groups.Count < 2)
         {
-            MetaTabBorder.Visibility = Visibility.Collapsed;
+            ActiveGroupHost.Content = null;
+            _activeGroupButton = null;
+            UpdateGroupStripVisibility();
             return;
         }
 
-        MetaTabBorder.Visibility = Visibility.Visible;
+        UpdateGroupStripVisibility();
 
         foreach (var group in _groups.OrderBy(g => g.Order))
             MetaTabPanel.Children.Add(CreateMetaTabElement(group));
@@ -1553,14 +1689,145 @@ public partial class MainWindow : Window
         // Apply the aggregate child indicator to each freshly-built group diamond.
         foreach (var group in _groups)
             RefreshGroupIndicator(group.Id);
+
+        // The dynamic "Active Projects" group sits apart on the right.
+        RenderActiveGroupButton();
+    }
+
+    /// <summary>
+    /// Shows the group strip only when there are at least two groups and at least one
+    /// open project. With every project closed the workspace falls back to the empty
+    /// state, where a group strip (and the frame it anchors) would have nothing to own.
+    /// </summary>
+    private void UpdateGroupStripVisibility()
+    {
+        MetaTabBorder.Visibility = _groups.Count >= 2 && _projects.Count > 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        UpdateGroupFrame();
+        // The project strip's top gap only applies while the group strip is showing.
+        UpdateProjectFrame();
+    }
+
+    /// <summary>
+    /// Keeps the accent frame in step with the group strip. When the strip is showing,
+    /// the rail along its bottom edge is continued down the left of the workspace,
+    /// across the bottom and back up the right, so the whole visible area reads as
+    /// belonging to the active group. With no strip there's nothing to frame.
+    /// </summary>
+    private void UpdateGroupFrame()
+    {
+        var framed = MetaTabBorder.Visibility == Visibility.Visible;
+        GroupFrameBorder.BorderThickness = framed ? new Thickness(1, 0, 1, 1) : new Thickness(0);
+        ToolbarBorder.BorderThickness = ToolbarRuleThickness();
+    }
+
+    /// <summary>
+    /// The project strip's own plain rule. The edge facing the content area is left to
+    /// the project accent rail (see <see cref="UpdateProjectFrame"/>), and a top-docked
+    /// strip drops its outer rule when the group strip's accent rail already sits
+    /// against it. Every other dock position butts against the window edge.
+    /// </summary>
+    private Thickness ToolbarRuleThickness()
+    {
+        if (_currentToolbarPosition != "Top")
+            return new Thickness(0);
+
+        var railAbove = MetaTabBorder.Visibility == Visibility.Visible;
+        return new Thickness(0, railAbove ? 0 : 1, 0, 0);
+    }
+
+    /// <summary>
+    /// Shows the project tab strip only while projects are open, and keeps the project
+    /// accent frame in step with it.
+    /// </summary>
+    private void UpdateProjectStripVisibility()
+    {
+        ToolbarBorder.Visibility = _projects.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        UpdateProjectFrame();
+    }
+
+    /// <summary>Vertical breathing room between the group tabs and the project tabs.</summary>
+    private const double StripGap = 4;
+
+    /// <summary>
+    /// The edge a project tab draws its rail slice on: the same one the strip's rail
+    /// runs along, which is whichever side of the strip faces the content area.
+    /// </summary>
+    private Thickness ProjectTabRailThickness() => _currentToolbarPosition switch
+    {
+        "Bottom" => new Thickness(0, 1, 0, 0),
+        "Left" => new Thickness(0, 0, 1, 0),
+        "Right" => new Thickness(1, 0, 0, 0),
+        _ => new Thickness(0, 0, 0, 1),
+    };
+
+    /// <summary>
+    /// Routes the project accent along the tab strip's content-facing edge and around
+    /// the remaining three sides of the content area, so the active project reads as
+    /// owning everything below its tab — the same trick the group strip uses one level
+    /// out, in a different colour. Zero thickness whenever the strip is hidden.
+    /// </summary>
+    private void UpdateProjectFrame()
+    {
+        var framed = ToolbarBorder.Visibility == Visibility.Visible;
+
+        // Rail hugs the strip edge that faces the content; the frame covers the rest.
+        var (railWidth, railHeight, railH, railV, frame) = _currentToolbarPosition switch
+        {
+            "Bottom" => (double.NaN, 1.0, HorizontalAlignment.Stretch, VerticalAlignment.Top,
+                         new Thickness(1, 1, 1, 0)),
+            "Left" => (1.0, double.NaN, HorizontalAlignment.Right, VerticalAlignment.Stretch,
+                       new Thickness(0, 1, 1, 1)),
+            "Right" => (1.0, double.NaN, HorizontalAlignment.Left, VerticalAlignment.Stretch,
+                        new Thickness(1, 1, 0, 1)),
+            _ => (double.NaN, 1.0, HorizontalAlignment.Stretch, VerticalAlignment.Bottom,
+                  new Thickness(1, 0, 1, 1)),
+        };
+
+        ProjectBarAccentLine.Width = railWidth;
+        ProjectBarAccentLine.Height = railHeight;
+        ProjectBarAccentLine.HorizontalAlignment = railH;
+        ProjectBarAccentLine.VerticalAlignment = railV;
+        ProjectFrameBorder.BorderThickness = framed ? frame : new Thickness(0);
+
+        // Each tab paints its own slice of that rail, so move those onto the new edge too.
+        var tabRail = ProjectTabRailThickness();
+        foreach (var child in ToolbarPanel.Children)
+        {
+            if (child is Button tab && tab.Tag is ProjectInfo)
+                SetTabRailThickness(tab, tabRail);
+        }
+
+        // Breathing room under the group strip: every dock position but Bottom puts the
+        // project tabs directly beneath the group tabs, where the two rows of tabs would
+        // otherwise meet edge to edge. The gap shows the project strip's background, so
+        // the current tab still reads as continuous with the strip.
+        var underGroupStrip = MetaTabBorder.Visibility == Visibility.Visible
+                              && _currentToolbarPosition != "Bottom";
+        ToolbarPanel.Margin = new Thickness(0, underGroupStrip ? StripGap : 0, 0, 0);
     }
 
     /// <summary>
     /// Hides project tabs that aren't in the active group when grouping is in use.
-    /// Shows every tab otherwise.
+    /// Shows every tab otherwise. The dynamic Active Projects group shows the
+    /// most-recently-active projects with a live session (plus the current tab, so
+    /// it never vanishes under the user while they're viewing it).
     /// </summary>
     private void RefreshProjectTabVisibility()
     {
+        if (_activeGroupId == ActiveProjectsGroupId)
+        {
+            var active = GetActiveProjects();
+            foreach (var (project, button) in _projectTabButtons)
+            {
+                button.Visibility = active.Contains(project) || project == _activeProject
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+            }
+            return;
+        }
+
         var filtering = _groups.Count >= 2 && _activeGroupId != null;
 
         foreach (var (project, button) in _projectTabButtons)
@@ -1571,9 +1838,210 @@ public partial class MainWindow : Window
         }
     }
 
+    // --- Dynamic "Active Projects" group ---
+
+    private Button? _activeGroupButton;
+
+    /// <summary>True when the project has a live agent session (started, not exited).</summary>
+    private bool IsProjectActive(ProjectInfo project) =>
+        _projectChatControls.TryGetValue(project, out var chat)
+        && chat.CurrentState is not (ClaudeSessionState.NotStarted or ClaudeSessionState.Exited);
+
+    /// <summary>
+    /// The projects shown in the dynamic Active Projects group: those with a live
+    /// session, most-recently-active first, capped at <see cref="_activeProjectsLimit"/>.
+    /// </summary>
+    private List<ProjectInfo> GetActiveProjects() =>
+        _projects
+            .Where(IsProjectActive)
+            .OrderByDescending(p => _projectLastActivity.TryGetValue(p, out var t) ? t : DateTime.MinValue)
+            .Take(_activeProjectsLimit)
+            .ToList();
+
+    /// <summary>
+    /// The real group standing in for the Active Projects meta tab when a project has to be
+    /// filed somewhere: the group of the project currently on screen, falling back to the first
+    /// group. <see cref="ActiveProjectsGroupId"/> is a view, not a group, and must never reach
+    /// <see cref="ProjectInfo.GroupId"/>.
+    /// </summary>
+    private string? GroupBehindActiveProjectsTab() =>
+        _activeProject?.GroupId is { } id && _groups.Any(g => g.Id == id)
+            ? id
+            : _groups.OrderBy(g => g.Order).FirstOrDefault()?.Id;
+
+    /// <summary>
+    /// Rebuilds the Active Projects button into its host, or clears it when grouping
+    /// isn't in use or the setting is off.
+    /// </summary>
+    private void RenderActiveGroupButton()
+    {
+        if (_groups.Count < 2 || !_showActiveProjectsGroup)
+        {
+            ActiveGroupHost.Content = null;
+            _activeGroupButton = null;
+            _groupTabIcons.Remove(ActiveProjectsGroupId);
+            return;
+        }
+
+        _activeGroupButton = CreateActiveGroupElement();
+        ActiveGroupHost.Content = _activeGroupButton;
+        RefreshActiveGroup();
+    }
+
+    private Button CreateActiveGroupElement()
+    {
+        var template = CreateTabControlTemplate();
+        var accent = ThemeManager.GetBrush("ActiveGroupAccentForeground");
+
+        var builtIn = BuiltInIcons.Find("bolt") ?? BuiltInIcons.Default;
+        var iconElement = new TextBlock
+        {
+            Text = builtIn.Glyph,
+            FontFamily = new FontFamily(builtIn.FontFamily),
+            FontSize = 14,
+            Foreground = accent,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 5, 0)
+        };
+
+        var label = new TextBlock
+        {
+            Text = "Active",
+            FontSize = 12,
+            FontWeight = FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = accent
+        };
+
+        // Aggregate status diamond, reusing the group-indicator machinery (keyed by the sentinel).
+        var statusGrid = new Grid
+        {
+            Width = 20,
+            Height = 20,
+            Margin = new Thickness(5, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        var diamondIcon = new TextBlock
+        {
+            Text = "◇",
+            FontFamily = new FontFamily("Segoe UI Symbol"),
+            FontSize = 14,
+            Foreground = ThemeManager.GetBrush("TabIconInactiveDiamondForeground"),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        var statusBadge = new TextBlock
+        {
+            Text = "",
+            FontSize = 9,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Visibility = Visibility.Collapsed
+        };
+        statusGrid.Children.Add(diamondIcon);
+        statusGrid.Children.Add(statusBadge);
+        _groupTabIcons[ActiveProjectsGroupId] = statusGrid;
+
+        var contentPanel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Children = { iconElement, label, statusGrid }
+        };
+
+        var isActive = _activeGroupId == ActiveProjectsGroupId;
+
+        var button = new Button
+        {
+            MinWidth = 44,
+            Height = 32,
+            Margin = new Thickness(0),
+            Padding = new Thickness(12, 0, 12, 0),
+            Background = isActive
+                ? ThemeManager.GetBrush("GroupTabActiveBackground")
+                : ThemeManager.GetBrush("TabButtonInactiveBackground"),
+            // Same three-sided outline as the real group tabs. Its magenta bolt/label
+            // are what set it apart; an underline here would break the accent rail that
+            // runs along the strip.
+            BorderBrush = isActive
+                ? ThemeManager.GetBrush("TabButtonActiveBorderBrush")
+                : InactiveTabOutlineBrush(),
+            BorderThickness = TabOutlineThickness,
+            Cursor = Cursors.Hand,
+            HorizontalContentAlignment = HorizontalAlignment.Left,
+            Template = template,
+            Content = contentPanel,
+            ToolTip = "Active Projects — projects with a live agent session, most recent first"
+        };
+
+        SetTabRailBrush(button, isActive ? null : ThemeManager.GetBrush("TabButtonActiveBorderBrush"));
+
+        button.Click += (_, _) =>
+        {
+            // Re-clicking while already selected re-prunes any tab that has since gone idle-away.
+            if (_activeGroupId == ActiveProjectsGroupId)
+            {
+                RefreshProjectTabVisibility();
+                return;
+            }
+            if (GetActiveProjects().Count == 0)
+                return; // disabled/empty — nothing to show
+            SetActiveGroup(ActiveProjectsGroupId);
+        };
+        button.MouseEnter += (_, _) =>
+        {
+            if (_activeGroupId != ActiveProjectsGroupId && button.IsEnabled)
+                button.Background = MakeTabHoverBrush();
+        };
+        button.MouseLeave += (_, _) =>
+        {
+            if (_activeGroupId != ActiveProjectsGroupId)
+                button.Background = ThemeManager.GetBrush("TabButtonInactiveBackground");
+        };
+
+        return button;
+    }
+
+    /// <summary>
+    /// Refreshes the Active Projects button: its aggregate diamond, its enabled/dimmed
+    /// state (disabled when empty and not selected), its selected highlight, and — when
+    /// it's the current view — which project tabs are visible.
+    /// </summary>
+    private void RefreshActiveGroup()
+    {
+        if (_activeGroupButton == null)
+            return;
+
+        var active = GetActiveProjects();
+        var isSelected = _activeGroupId == ActiveProjectsGroupId;
+
+        _activeGroupButton.IsEnabled = active.Count > 0 || isSelected;
+        _activeGroupButton.Opacity = _activeGroupButton.IsEnabled ? 1.0 : 0.5;
+        _activeGroupButton.Background = isSelected
+            ? ThemeManager.GetBrush("GroupTabActiveBackground")
+            : ThemeManager.GetBrush("TabButtonInactiveBackground");
+        _activeGroupButton.BorderBrush = isSelected
+            ? ThemeManager.GetBrush("TabButtonActiveBorderBrush")
+            : InactiveTabOutlineBrush();
+        SetTabRailBrush(_activeGroupButton,
+            isSelected ? null : ThemeManager.GetBrush("TabButtonActiveBorderBrush"));
+
+        if (_groupTabIcons.TryGetValue(ActiveProjectsGroupId, out var grid))
+        {
+            var indicator = active.Count == 0
+                ? TabIndicator.Inactive
+                : active.Select(GetProjectIndicator).Max();
+            ApplyGroupIndicator(ActiveProjectsGroupId, grid, indicator);
+        }
+
+        if (isSelected)
+            RefreshProjectTabVisibility();
+    }
+
     private Button CreateMetaTabElement(ProjectGroup group)
     {
-        // Flat template (matches project tab visual language, incl. right separator)
+        var isActive = group.Id == _activeGroupId;
+
+        // Flat template, matching the project tab visual language.
         var template = CreateTabControlTemplate();
 
         var iconElement = CreateGroupIconElement(group);
@@ -1622,8 +2090,6 @@ public partial class MainWindow : Window
             Children = { iconElement, label, statusGrid }
         };
 
-        var isActive = group.Id == _activeGroupId;
-
         var button = new Button
         {
             Tag = group,
@@ -1636,8 +2102,8 @@ public partial class MainWindow : Window
                 : ThemeManager.GetBrush("TabButtonInactiveBackground"),
             BorderBrush = isActive
                 ? ThemeManager.GetBrush("TabButtonActiveBorderBrush")
-                : Brushes.Transparent,
-            BorderThickness = new Thickness(0, 0, 0, 2),
+                : InactiveTabOutlineBrush(),
+            BorderThickness = TabOutlineThickness,
             Cursor = Cursors.Hand,
             HorizontalContentAlignment = HorizontalAlignment.Left,
             Template = template,
@@ -1645,6 +2111,10 @@ public partial class MainWindow : Window
             AllowDrop = true,
             ToolTip = "Click to switch group · click again to rename · drag to reorder · right-click for options"
         };
+
+        // Only the tabs that aren't current carry the strip's rail across their bottom
+        // edge; the current one leaves the gap, so it reads as holding the workspace.
+        SetTabRailBrush(button, isActive ? null : ThemeManager.GetBrush("TabButtonActiveBorderBrush"));
 
         bool IsRenaming() => contentPanel.Children.OfType<TextBox>().Any();
 
@@ -1771,9 +2241,12 @@ public partial class MainWindow : Window
 
         var button = new Button
         {
-            Width = 32,
-            Height = 32,
-            Margin = new Thickness(6, 0, 0, 0),
+            // Inset from the strip's 32px height and centred, so its closed rounded
+            // border clears the accent rail along the strip's bottom edge instead of
+            // overdrawing it.
+            Width = 26,
+            Height = 26,
+            Margin = new Thickness(6, 3, 0, 3),
             VerticalAlignment = VerticalAlignment.Center,
             Background = Brushes.Transparent,
             BorderBrush = ThemeManager.GetBrush("AddButtonBorderBrush"),
@@ -1901,6 +2374,30 @@ public partial class MainWindow : Window
         _activeGroupId = groupId;
         RefreshMetaTabBar();
         RefreshProjectTabVisibility();
+
+        // Dynamic Active Projects group: pick the most attention-worthy active project
+        // when the current one isn't in the active set.
+        if (groupId == ActiveProjectsGroupId)
+        {
+            var active = GetActiveProjects();
+            if (_activeProject == null || !active.Contains(_activeProject))
+            {
+                var first = active.OrderByDescending(GetProjectIndicator).FirstOrDefault();
+                if (first != null)
+                {
+                    SwitchToProject(first);
+                }
+                else
+                {
+                    _activeProject = null;
+                    ProjectContentHost.Content = null;
+                    ProjectContentHost.Visibility = Visibility.Collapsed;
+                    EmptyStatePanel.Visibility = Visibility.Visible;
+                    UpdateTitleBar();
+                }
+            }
+            return;
+        }
 
         // If the active project isn't in the new group, switch to one that is.
         // Prefer the project most in need of attention, matching the priority the
@@ -2037,26 +2534,13 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Returns the orientation for the meta tab strip and adjusts the meta border thickness
-    /// for the supplied toolbar position.
+    /// The group strip stays a horizontal bar pinned to the top of the workspace for every
+    /// toolbar position — it frames the whole area below it, wherever the project tabs sit.
     /// </summary>
     private void ApplyMetaTabLayoutForToolbarPosition(string position)
     {
-        switch (position)
-        {
-            case "Top":
-            case "Bottom":
-                DockPanel.SetDock(MetaTabBorder, Dock.Top);
-                MetaTabBorder.BorderThickness = new Thickness(0, 0, 0, 1);
-                MetaTabPanel.Orientation = Orientation.Horizontal;
-                break;
-            case "Left":
-            case "Right":
-                DockPanel.SetDock(MetaTabBorder, Dock.Top);
-                MetaTabBorder.BorderThickness = new Thickness(0, 0, 0, 1);
-                MetaTabPanel.Orientation = Orientation.Horizontal;
-                break;
-        }
+        DockPanel.SetDock(MetaTabBorder, Dock.Top);
+        MetaTabPanel.Orientation = Orientation.Horizontal;
     }
 
     private (DockingManager, AiChatControl, GitStatusControl, ProjectDescriptionControl, TodoListControl) CreateProjectDockingLayout(ProjectInfo project, string? layoutXml = null)
@@ -2137,8 +2621,10 @@ public partial class MainWindow : Window
             fileExplorerControl.RevealAndSelect(path);
         };
 
-        // Update AI Chat panel title when model is reported or when stats change
+        // Update AI Chat panel title when model is reported, when stats change, or when
+        // the session status changes — the chat pane has no status strip of its own.
         aiChatControl.SessionModelChanged += _ => UpdateAiChatTitle(project, aiChatControl);
+        aiChatControl.SessionStatusChanged += () => UpdateAiChatTitle(project, aiChatControl);
         aiChatControl.SessionStatsChanged += _ =>
         {
             UpdateAiChatTitle(project, aiChatControl);
@@ -2443,13 +2929,19 @@ public partial class MainWindow : Window
         }
 
         // If groups are in use and this project lives in a different group,
-        // switch the active group so its tab is actually visible.
+        // switch the active group so its tab is actually visible. Exception: while
+        // viewing the dynamic Active Projects group, stay there if the project is one
+        // of its members (don't jump back to the project's real group).
         if (_groups.Count >= 2 && project.GroupId != null && project.GroupId != _activeGroupId)
         {
-            Log.Info($"SwitchToProject: switching active group '{_activeGroupId}' -> '{project.GroupId}'");
-            _activeGroupId = project.GroupId;
-            RefreshMetaTabBar();
-            RefreshProjectTabVisibility();
+            var stayInActiveGroup = _activeGroupId == ActiveProjectsGroupId && GetActiveProjects().Contains(project);
+            if (!stayInActiveGroup)
+            {
+                Log.Info($"SwitchToProject: switching active group '{_activeGroupId}' -> '{project.GroupId}'");
+                _activeGroupId = project.GroupId;
+                RefreshMetaTabBar();
+                RefreshProjectTabVisibility();
+            }
         }
 
         // Update tab button styles
@@ -2493,6 +2985,12 @@ public partial class MainWindow : Window
         // Focus the AI chat input if the session is idle
         if (_projectChatControls.TryGetValue(project, out var chatControl))
             chatControl.FocusInput();
+
+        // While viewing the Active Projects group, re-prune the strip so a tab that
+        // lingered only because it was the previous view now collapses if it's no
+        // longer in the active set.
+        if (_activeGroupId == ActiveProjectsGroupId)
+            RefreshProjectTabVisibility();
 
         Log.Info($"SwitchToProject: '{project.FolderName}' — complete");
     }
@@ -2558,12 +3056,17 @@ public partial class MainWindow : Window
         if (anchorable == null)
             return;
 
-        var modelLabel = FormatModelName(ctrl.Model);
-        var prefix = modelLabel ?? "AI Chat";
+        var prefix = FormatModelName(ctrl.Model) ?? "AI Chat";
 
         // Show which login this session runs as, when accounts are configured.
         if (!string.IsNullOrEmpty(ctrl.AccountLabel))
             prefix += $" · {ctrl.AccountLabel}";
+
+        // Session status (Idle / spinner+Working / ⚠ danger mode) lives here rather than
+        // in a strip inside the pane. It goes before the cost so it survives first when
+        // a narrow pane truncates the title.
+        if (!string.IsNullOrEmpty(ctrl.StatusLabel))
+            prefix += $" · {ctrl.StatusLabel}";
 
         var stats = ctrl.Stats;
         if (stats.TotalCostUsd > 0 || stats.TotalTokens > 0)
@@ -2603,17 +3106,25 @@ public partial class MainWindow : Window
         return $"{family} {version}";
     }
 
+    /// <summary>
+    /// Paints a project tab as current or not. The current tab takes the strip's own
+    /// background and a three-sided accent outline, and drops its slice of the accent
+    /// rail so the outline opens straight into the content area it owns; the rest sit a
+    /// shade darker and keep their slice, so the rail reads as unbroken around them.
+    /// </summary>
     private static void SetTabButtonActive(Button button, bool active)
     {
         if (active)
         {
-            button.Background = ThemeManager.GetBrush("TabButtonActiveBackground");
-            button.BorderBrush = ThemeManager.GetBrush("TabButtonActiveBorderBrush");
+            button.Background = ActiveProjectTabBrush();
+            button.BorderBrush = ThemeManager.GetBrush("ProjectTabActiveBorderBrush");
+            SetTabRailBrush(button, null);
         }
         else
         {
-            button.Background = ThemeManager.GetBrush("TabButtonInactiveBackground");
-            button.BorderBrush = Brushes.Transparent;
+            button.Background = InactiveProjectTabBrush();
+            button.BorderBrush = InactiveTabOutlineBrush();
+            SetTabRailBrush(button, ThemeManager.GetBrush("ProjectTabActiveBorderBrush"));
         }
     }
 
@@ -2680,6 +3191,7 @@ public partial class MainWindow : Window
         _projectDescriptionControls.Remove(project);
         _projectTodoListControls.Remove(project);
         _projectNewResponse.Remove(project);
+        _projectLastActivity.Remove(project);
 
         // Remove content
         _projectContents.Remove(project);
@@ -2689,6 +3201,9 @@ public partial class MainWindow : Window
 
         // The closed project's group diamond may need to drop priority.
         RefreshGroupIndicator(closedGroupId);
+
+        // Closing may have removed a member of the Active Projects set.
+        RefreshActiveGroup();
 
         SetWorkspaceDirty();
 
@@ -2720,7 +3235,8 @@ public partial class MainWindow : Window
                 ProjectContentHost.Content = null;
                 ProjectContentHost.Visibility = Visibility.Collapsed;
                 EmptyStatePanel.Visibility = Visibility.Visible;
-                ToolbarBorder.Visibility = Visibility.Collapsed;
+                UpdateProjectStripVisibility();
+                UpdateGroupStripVisibility();
                 UpdateTitleBar();
             }
         }
@@ -2772,16 +3288,22 @@ public partial class MainWindow : Window
 
         _projectPreviewControls.Clear();
         _previousTabStates.Clear();
+        _projectLastActivity.Clear();
         _projects.Clear();
         _activeProject = null;
         _groups.Clear();
         _activeGroupId = null;
+        _showActiveProjectsGroup = true;
+        _activeProjectsLimit = WorkspaceFile.DefaultActiveProjectsLimit;
+        _activeGroupButton = null;
+        _groupTabIcons.Remove(ActiveProjectsGroupId);
+        ActiveGroupHost.Content = null;
         MetaTabPanel.Children.Clear();
-        MetaTabBorder.Visibility = Visibility.Collapsed;
+        UpdateGroupStripVisibility();
         ProjectContentHost.Content = null;
         ProjectContentHost.Visibility = Visibility.Collapsed;
         EmptyStatePanel.Visibility = Visibility.Visible;
-        ToolbarBorder.Visibility = Visibility.Collapsed;
+        UpdateProjectStripVisibility();
     }
 
     private static void OpenInExplorer(ProjectInfo project)
@@ -2889,6 +3411,10 @@ public partial class MainWindow : Window
 
     private void UpdateTabIcon(ProjectInfo project, ClaudeSessionState state)
     {
+        // Every state (or schedule) change is recent activity — drives the Active
+        // Projects group's most-recently-active ordering.
+        _projectLastActivity[project] = DateTime.UtcNow;
+
         if (!_projectTabIcons.TryGetValue(project, out var statusGrid))
             return;
 
@@ -2906,6 +3432,13 @@ public partial class MainWindow : Window
                 when soundSettings.SoundOnAgentWaiting
                      && prevState is ClaudeSessionState.Working or ClaudeSessionState.WaitingForPermission:
                 SoundService.PlayMessageNudge();
+                break;
+            // A question (AskUserQuestion) or tool-permission prompt parks the turn here,
+            // which is just as much "waiting for input" as returning to Idle — without this
+            // the prompt appears silently and only chimes once the whole turn finishes.
+            // Its own sound, so a blocked turn is audibly distinct from a finished one.
+            case ClaudeSessionState.WaitingForPermission when soundSettings.SoundOnAgentWaiting:
+                SoundService.PlayQuestionPrompt();
                 break;
             case ClaudeSessionState.Exited when soundSettings.SoundOnSessionEnd:
                 SoundService.PlayDeviceDisconnect();
@@ -2955,13 +3488,19 @@ public partial class MainWindow : Window
             case ClaudeSessionState.Idle:
                 diamondIcon.Text = "\u25C6"; // ◆
                 diamondIcon.Foreground = ThemeManager.GetBrush("TabIconIdleForeground");
-                // Flash the diamond when a background tab just finished a turn so the
-                // user notices there's a completion waiting. Stops as soon as the tab
-                // is switched to (see SwitchToProject).
-                if (project != _activeProject &&
-                    prevState is ClaudeSessionState.Working or ClaudeSessionState.WaitingForPermission)
-                {
+                // Flash the green diamond for either of two reasons: a background tab
+                // just finished a turn (an unseen completion, cleared on switch-to, see
+                // SwitchToProject), or the session is still doing background work after
+                // its turn returned to Idle (stays until the work drains, even on the
+                // active tab). Solid green means truly idle and available.
+                var justFinishedUnseen = project != _activeProject &&
+                    prevState is ClaudeSessionState.Working or ClaudeSessionState.WaitingForPermission;
+                if (justFinishedUnseen)
                     _projectNewResponse.Add(project);
+                var hasBackgroundWork = _projectChatControls.TryGetValue(project, out var idleChat)
+                    && idleChat.HasBackgroundWork;
+                if (justFinishedUnseen || hasBackgroundWork)
+                {
                     StartAttentionPulse(project, diamondIcon);
                 }
                 else if (scheduledUtc != null)
@@ -2995,6 +3534,9 @@ public partial class MainWindow : Window
 
         // Roll the child's new state up into its group's aggregate diamond.
         RefreshGroupIndicator(project.GroupId);
+
+        // A session going live/idle/exited may add or drop it from the Active Projects set.
+        RefreshActiveGroup();
     }
 
     /// <summary>
@@ -3016,9 +3558,14 @@ public partial class MainWindow : Window
         if (!_projectTabButtons.TryGetValue(project, out var button))
             return;
 
-        button.ToolTip = scheduledUtc is { } utc
-            ? $"{project.FolderPath}\nMessage scheduled for {utc.ToLocalTime():g}"
-            : project.FolderPath;
+        var tip = project.FolderPath;
+        if (scheduledUtc is { } utc)
+            tip += $"\nMessage scheduled for {utc.ToLocalTime():g}";
+        if (_projectChatControls.TryGetValue(project, out var chat) &&
+            chat.CurrentState == ClaudeSessionState.Idle && chat.HasBackgroundWork)
+            tip += "\nStill working in the background…";
+
+        button.ToolTip = tip;
     }
 
     private void StartDiamondPulse(ProjectInfo project, TextBlock diamondIcon)
@@ -3066,6 +3613,18 @@ public partial class MainWindow : Window
         if (!_tabIconTimers.TryGetValue(project, out var timer))
             return;
 
+        // The completion has now been seen — drop the group's flashing-green state.
+        _projectNewResponse.Remove(project);
+
+        // ...but if the session is still doing background work, the diamond must keep
+        // pulsing for THAT reason. "Seen" only clears the unseen-completion state, not
+        // the still-working one, so leave the flash running.
+        if (chat.HasBackgroundWork)
+        {
+            RefreshGroupIndicator(project.GroupId);
+            return;
+        }
+
         timer.Stop();
         _tabIconTimers.Remove(project);
 
@@ -3080,8 +3639,49 @@ public partial class MainWindow : Window
                 ApplyScheduledVisual(diamond);
         }
 
-        // The completion has now been seen — drop the group's flashing-green state.
-        _projectNewResponse.Remove(project);
+        RefreshGroupIndicator(project.GroupId);
+    }
+
+    /// <summary>
+    /// Re-evaluates an Idle session's diamond when its background-work status changes
+    /// (subagents / background shells starting or draining). A turn can return to Idle
+    /// while that work keeps running, in which case a solid-green "available" diamond is
+    /// misleading — so we pulse it (same flash as an unseen completion) until the work
+    /// drains, then settle back to solid green. No-op unless the session is Idle; every
+    /// other state already owns the diamond.
+    /// </summary>
+    private void RefreshBackgroundWorkVisual(ProjectInfo project)
+    {
+        if (!_projectChatControls.TryGetValue(project, out var chat) ||
+            chat.CurrentState != ClaudeSessionState.Idle)
+            return;
+        if (!_projectTabIcons.TryGetValue(project, out var statusGrid) ||
+            statusGrid.Children.Count == 0 ||
+            statusGrid.Children[0] is not TextBlock diamondIcon)
+            return;
+
+        // While Idle, any running icon timer is an attention pulse (Working uses its own
+        // state). Pulse if either an unseen completion is waiting or background work is live.
+        var shouldPulse = _projectNewResponse.Contains(project) || chat.HasBackgroundWork;
+        var pulsing = _tabIconTimers.ContainsKey(project);
+
+        if (shouldPulse && !pulsing)
+        {
+            StartAttentionPulse(project, diamondIcon);
+        }
+        else if (!shouldPulse && pulsing)
+        {
+            if (_tabIconTimers.TryGetValue(project, out var timer))
+            {
+                timer.Stop();
+                _tabIconTimers.Remove(project);
+            }
+            diamondIcon.Visibility = Visibility.Visible;
+            if (chat.ScheduledFireTimeUtc != null)
+                ApplyScheduledVisual(diamondIcon);
+        }
+
+        UpdateTabScheduleTooltip(project, chat.ScheduledFireTimeUtc);
         RefreshGroupIndicator(project.GroupId);
     }
 
@@ -3093,13 +3693,14 @@ public partial class MainWindow : Window
     /// </summary>
     private enum TabIndicator
     {
-        Inactive = 0,    // hollow purple ◇ — no or ended session
-        Scheduled = 1,   // clock ◷ — a message is parked to send later (lowest signal)
-        Working = 2,     // flashing blue ◆
-        Idle = 3,        // solid green ◆ — ready, completion already seen
-        NewResponse = 4, // flashing green ◆ — completed turn the user hasn't viewed
-        Question = 5,    // solid orange ◆ — waiting for a permission answer
-        Error = 6,       // red ◆ + "!" — session error
+        Inactive = 0,          // hollow purple ◇ — no or ended session
+        Scheduled = 1,         // clock ◷ — a message is parked to send later (lowest signal)
+        Working = 2,           // flashing blue ◆
+        Idle = 3,              // solid green ◆ — ready, completion already seen
+        BackgroundWorking = 4, // flashing green ◆ — turn idle but subagents/background tasks still running
+        NewResponse = 5,       // flashing green ◆ — completed turn the user hasn't viewed
+        Question = 6,          // solid orange ◆ — waiting for a permission answer
+        Error = 7,             // red ◆ + "!" — session error
     }
 
     private TabIndicator GetProjectIndicator(ProjectInfo project)
@@ -3114,6 +3715,7 @@ public partial class MainWindow : Window
             ClaudeSessionState.WaitingForPermission => TabIndicator.Question,
             ClaudeSessionState.Idle =>
                 _projectNewResponse.Contains(project) ? TabIndicator.NewResponse
+                : chat.HasBackgroundWork ? TabIndicator.BackgroundWorking
                 : scheduled ? TabIndicator.Scheduled
                 : TabIndicator.Idle,
             ClaudeSessionState.Working => TabIndicator.Working,
@@ -3173,6 +3775,12 @@ public partial class MainWindow : Window
             case TabIndicator.Idle:
                 diamond.Text = "◆";
                 diamond.Foreground = ThemeManager.GetBrush("TabIconIdleForeground");
+                break;
+
+            case TabIndicator.BackgroundWorking:
+                diamond.Text = "◆";
+                diamond.Foreground = ThemeManager.GetBrush("TabIconIdleForeground");
+                StartGroupPulse(groupId, diamond, 700); // flashing green — still busy in the background
                 break;
 
             case TabIndicator.NewResponse:
@@ -3249,7 +3857,11 @@ public partial class MainWindow : Window
             Theme = ThemeManager.CurrentTheme.Id,
             ToolbarPosition = _currentToolbarPosition,
             ActiveProjectPath = _activeProject?.FolderPath,
-            ActiveGroupId = _activeGroupId,
+            // The dynamic group's sentinel isn't a real group — don't persist it as the
+            // active group (its sessions won't survive restart anyway).
+            ActiveGroupId = _activeGroupId == ActiveProjectsGroupId ? null : _activeGroupId,
+            ShowActiveProjectsGroup = _showActiveProjectsGroup,
+            ActiveProjectsLimit = _activeProjectsLimit,
             Groups = _groups.Select(g => new ProjectGroup
             {
                 Id = g.Id,
@@ -3307,9 +3919,17 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OpenWorkspaceFile(string filePath)
+    private async Task OpenWorkspaceFile(string filePath)
     {
         Log.Info($"OpenWorkspaceFile: '{filePath}'");
+
+        // A workspace open runs across dispatcher yields, so guard against a second
+        // one starting (double-click, menu item during the spinner) mid-restore.
+        if (_workspaceLoading)
+        {
+            Log.Warn("OpenWorkspaceFile: another workspace open is already in progress");
+            return;
+        }
 
         WorkspaceFile? workspace;
         try
@@ -3339,6 +3959,32 @@ public partial class MainWindow : Window
             return;
         }
 
+        _workspaceLoading = true;
+        ShowBusyOverlay(
+            $"Opening {Path.GetFileNameWithoutExtension(filePath)}…",
+            "Preparing workspace");
+        try
+        {
+            await RestoreWorkspaceAsync(workspace, filePath);
+        }
+        finally
+        {
+            // Restore never leaves dirty tracking off, even if it faulted part-way
+            _suppressDirty = false;
+            HideBusyOverlay();
+            _workspaceLoading = false;
+        }
+    }
+
+    /// <summary>
+    /// Restores a loaded workspace into the window. Yields to the dispatcher between
+    /// projects so the busy overlay paints and its spinner keeps turning.
+    /// </summary>
+    private async Task RestoreWorkspaceAsync(WorkspaceFile workspace, string filePath)
+    {
+        // Let the overlay paint before the (blocking) teardown of the old projects
+        await Dispatcher.Yield(DispatcherPriority.Background);
+
         // Close all current projects
         CloseAllProjects();
 
@@ -3358,6 +4004,8 @@ public partial class MainWindow : Window
         // Restore groups before adding projects so AddProjectFromPath doesn't auto-assign GroupId
         _groups.Clear();
         _activeGroupId = null;
+        _showActiveProjectsGroup = workspace.ShowActiveProjectsGroup;
+        _activeProjectsLimit = WorkspaceFile.ClampActiveProjectsLimit(workspace.ActiveProjectsLimit);
         if (workspace.Groups != null && workspace.Groups.Count > 0)
         {
             foreach (var g in workspace.Groups)
@@ -3378,17 +4026,36 @@ public partial class MainWindow : Window
             p => p.GroupId,
             StringComparer.OrdinalIgnoreCase);
 
+        var loaded = 0;
         foreach (var wp in workspace.Projects)
         {
+            loaded++;
+            UpdateBusyOverlay(
+                Path.GetFileName(wp.FolderPath.TrimEnd(Path.DirectorySeparatorChar)),
+                loaded,
+                workspace.Projects.Count);
+            await Dispatcher.Yield(DispatcherPriority.Background);
+
             var project = AddProjectFromPath(wp.FolderPath, wp.DockingLayout);
             if (project != null)
             {
-                // Overwrite any default group assignment with the serialized one
-                project.GroupId = pathToGroup.TryGetValue(wp.FolderPath, out var gid) ? gid : null;
+                // Overwrite any default group assignment with the serialized one. An id that
+                // matches no group — a deleted group, or the Active Projects sentinel that
+                // earlier builds could persist — would hide the tab under every group tab, so
+                // adopt those orphans into the first group instead.
+                var savedGroupId = pathToGroup.TryGetValue(wp.FolderPath, out var gid) ? gid : null;
+                project.GroupId = _groups.Count == 0
+                    ? null
+                    : savedGroupId != null && _groups.Any(g => g.Id == savedGroupId)
+                        ? savedGroupId
+                        : _groups.OrderBy(g => g.Order).First().Id;
                 if (string.Equals(wp.FolderPath, workspace.ActiveProjectPath, StringComparison.OrdinalIgnoreCase))
                     activeProject = project;
             }
         }
+
+        UpdateBusyOverlay("Restoring layout", workspace.Projects.Count, workspace.Projects.Count);
+        await Dispatcher.Yield(DispatcherPriority.Background);
 
         // Determine active group (prefer saved, fall back to first group, or null if none)
         _activeGroupId = workspace.ActiveGroupId != null && _groups.Any(g => g.Id == workspace.ActiveGroupId)
@@ -3421,6 +4088,68 @@ public partial class MainWindow : Window
         UpdateTitleBar();
         PopulateRecentWorkspacesMenu();
         Log.Info("OpenWorkspaceFile: complete");
+    }
+
+    // --- Busy Overlay ---
+
+    /// <summary>
+    /// Shows the modal busy overlay and starts the spinner. The card fades in over a
+    /// short delay so work that finishes quickly never flashes a spinner at the user.
+    /// </summary>
+    private void ShowBusyOverlay(string title, string? detail = null)
+    {
+        BusyTitleText.Text = title;
+        UpdateBusyOverlay(detail);
+
+        BusyOverlay.Visibility = Visibility.Visible;
+        BusyOverlay.BeginAnimation(OpacityProperty, new DoubleAnimation
+        {
+            From = 0,
+            To = 1,
+            BeginTime = TimeSpan.FromMilliseconds(180),
+            Duration = new Duration(TimeSpan.FromMilliseconds(120))
+        });
+
+        BusySpinnerRotation.BeginAnimation(RotateTransform.AngleProperty, new DoubleAnimation
+        {
+            From = 0,
+            To = 360,
+            Duration = new Duration(TimeSpan.FromMilliseconds(900)),
+            RepeatBehavior = RepeatBehavior.Forever
+        });
+    }
+
+    /// <summary>
+    /// Updates the overlay's detail line and, when <paramref name="total"/> is set, the
+    /// "n of m" counter and progress bar. The card is a fixed size with reserved line
+    /// heights, so nothing here can make it resize — text just trims.
+    /// </summary>
+    private void UpdateBusyOverlay(string? detail, int current = 0, int total = 0)
+    {
+        BusyDetailText.Text = detail ?? "";
+
+        // A single-project workspace gets no counter or bar — there's nothing to track.
+        if (total > 1)
+        {
+            BusyCountText.Text = $"Project {Math.Min(current, total)} of {total}";
+            BusyProgressBar.Value = Math.Clamp((double)current / total * 100, 0, 100);
+            BusyProgressBar.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            BusyCountText.Text = "";
+            BusyProgressBar.Value = 0;
+            // Hidden, not collapsed: the bar keeps its slot so the card height is stable.
+            BusyProgressBar.Visibility = Visibility.Hidden;
+        }
+    }
+
+    private void HideBusyOverlay()
+    {
+        BusySpinnerRotation.BeginAnimation(RotateTransform.AngleProperty, null);
+        BusyOverlay.BeginAnimation(OpacityProperty, null);
+        BusyOverlay.Opacity = 0;
+        BusyOverlay.Visibility = Visibility.Collapsed;
     }
 
     /// <summary>
@@ -3486,11 +4215,11 @@ public partial class MainWindow : Window
                     ToolTip = path
                 };
                 var capturedPath = path;
-                item.Click += (_, _) =>
+                item.Click += async (_, _) =>
                 {
                     if (!PromptSaveIfDirty())
                         return;
-                    OpenWorkspaceFile(capturedPath);
+                    await OpenWorkspaceFile(capturedPath);
                 };
                 FileMenu.Items.Insert(insertIndex, item);
                 _recentWorkspaceMenuItems.Add(item);
@@ -3541,7 +4270,7 @@ public partial class MainWindow : Window
             button.Content = label;
 
             var capturedPath = path;
-            button.Click += (_, _) => OpenWorkspaceFile(capturedPath);
+            button.Click += async (_, _) => await OpenWorkspaceFile(capturedPath);
 
             EmptyStateRecentList.Children.Add(button);
         }
@@ -3555,29 +4284,24 @@ public partial class MainWindow : Window
             return;
 
         Dock dock;
-        Thickness borderThickness;
         Orientation orientation;
 
         switch (position)
         {
             case "Top":
                 dock = Dock.Top;
-                borderThickness = new Thickness(0, 1, 0, 1);
                 orientation = Orientation.Horizontal;
                 break;
             case "Bottom":
                 dock = Dock.Bottom;
-                borderThickness = new Thickness(0, 1, 0, 0);
                 orientation = Orientation.Horizontal;
                 break;
             case "Left":
                 dock = Dock.Left;
-                borderThickness = new Thickness(0, 0, 1, 0);
                 orientation = Orientation.Vertical;
                 break;
             case "Right":
                 dock = Dock.Right;
-                borderThickness = new Thickness(1, 0, 0, 0);
                 orientation = Orientation.Vertical;
                 break;
             default:
@@ -3585,19 +4309,22 @@ public partial class MainWindow : Window
         }
 
         DockPanel.SetDock(ToolbarBorder, dock);
-        ToolbarBorder.BorderThickness = borderThickness;
         ToolbarPanel.Orientation = orientation;
         ApplyMetaTabLayoutForToolbarPosition(position);
         _currentToolbarPosition = position;
+        // May drop the toolbar's outer rule when the group strip is already showing;
+        // re-routes the project accent rail onto the strip's new content-facing edge.
+        UpdateGroupFrame();
+        UpdateProjectFrame();
 
         // Force DockPanel layout recalculation
-        var children = new UIElement[WorkspacePanel.Children.Count];
-        for (int i = 0; i < WorkspacePanel.Children.Count; i++)
-            children[i] = WorkspacePanel.Children[i];
+        var children = new UIElement[WorkspaceInnerPanel.Children.Count];
+        for (int i = 0; i < WorkspaceInnerPanel.Children.Count; i++)
+            children[i] = WorkspaceInnerPanel.Children[i];
 
-        WorkspacePanel.Children.Clear();
+        WorkspaceInnerPanel.Children.Clear();
         foreach (var child in children)
-            WorkspacePanel.Children.Add(child);
+            WorkspaceInnerPanel.Children.Add(child);
     }
 
     // --- Window Closing ---
@@ -3722,6 +4449,7 @@ public partial class MainWindow : Window
         public string? ConfigDir;                   // null = ~/.claude
         public UsageService.FetchResult? LastResult;
         public UsageSummary? LastSuccess;
+        public DateTime? RetryAfterUtc;             // set on HTTP 429 — don't re-fetch until this passes
     }
 
     private List<UsageAccount> _usageAccounts = new();
@@ -3805,15 +4533,35 @@ public partial class MainWindow : Window
 
         RebuildUsageAccounts();
 
-        // Each account uses a distinct OAuth token (its own rate-limit bucket), so
-        // fetching them together on one tick is safe.
-        await Task.WhenAll(_usageAccounts.Select(async acct =>
+        // The usage endpoint rate-limits by source, so fetch accounts one at a time with
+        // a small stagger rather than bursting them concurrently — a simultaneous burst
+        // trips a 429 on one of the in-flight requests. Accounts still inside a prior
+        // 429's Retry-After window are skipped (their cached result keeps showing).
+        var now = DateTime.UtcNow;
+        var firstFetch = true;
+        foreach (var acct in _usageAccounts)
         {
+            if (acct.RetryAfterUtc is { } until && until > now)
+                continue;
+
+            if (!firstFetch)
+                await Task.Delay(TimeSpan.FromMilliseconds(250));
+            firstFetch = false;
+
             var result = await UsageService.FetchAsync(acct.ConfigDir);
             acct.LastResult = result;
+
             if (result.Status == UsageService.FetchStatus.Success && result.Summary != null)
+            {
                 acct.LastSuccess = result.Summary;
-        }));
+                acct.RetryAfterUtc = null;
+            }
+            else if (result.Status == UsageService.FetchStatus.RateLimited)
+            {
+                // Back off this account until the server's Retry-After (default 60s).
+                acct.RetryAfterUtc = DateTime.UtcNow + (result.RetryAfter ?? TimeSpan.FromSeconds(60));
+            }
+        }
 
         _lastUsageFetchTime = DateTime.Now;
 
@@ -3840,15 +4588,65 @@ public partial class MainWindow : Window
                 UsageService.FetchStatus.AuthMissing => "Session: sign in to Claude",
                 UsageService.FetchStatus.AuthExpired => "Session: auth expired",
                 UsageService.FetchStatus.NetworkError => "Session: offline",
+                UsageService.FetchStatus.RateLimited => "Session: rate limited",
                 UsageService.FetchStatus.ServerError => "Session: error",
                 UsageService.FetchStatus.Success => FormatSessionHeader(result.Summary),
+                // Stale token: nothing is wrong with the login, we just can't read a
+                // fresh figure. Keep showing the last one rather than raising an alarm.
+                UsageService.FetchStatus.TokenStale => FormatSessionHeader(accts[0].LastSuccess),
                 _ => "Session: —",
             };
             return;
         }
 
         // Multiple logins: one compact 5-hour bracket each, e.g. "[Default 57%] [Work 23%]".
-        UsageText.Text = string.Join(" ", accts.Select(a => $"[{a.Label} {FormatCompactPct(a)}]"));
+        // Each bracket is tinted with the account's accent colour so it lines up with
+        // that account's group box in the popup and is easy to pick out at a glance.
+        UsageText.Inlines.Clear();
+        for (var i = 0; i < accts.Count; i++)
+        {
+            if (i > 0)
+                UsageText.Inlines.Add(new Run(" "));
+            UsageText.Inlines.Add(new Run($"[{accts[i].Label} {FormatCompactPct(accts[i])}]")
+            {
+                Foreground = AccountAccentBrush(i),
+            });
+        }
+    }
+
+    // Distinct accent colours assigned to accounts by position so each account's
+    // group box, progress bars and title-bar bracket share one easy-to-spot colour.
+    // Mid-saturation hues chosen to stay legible on both the light and dark themes.
+    private static readonly Color[] AccountAccentColors =
+    {
+        Color.FromRgb(0x4C, 0x9A, 0xFF), // blue
+        Color.FromRgb(0x36, 0xB3, 0x7E), // green
+        Color.FromRgb(0xF2, 0x99, 0x2A), // amber
+        Color.FromRgb(0xE5, 0x5C, 0x4C), // red
+        Color.FromRgb(0x9F, 0x7A, 0xEA), // purple
+        Color.FromRgb(0x00, 0xB8, 0xD9), // teal
+        Color.FromRgb(0xE0, 0x62, 0xA0), // pink
+        Color.FromRgb(0xC9, 0x8A, 0x3B), // bronze
+    };
+
+    private static Color AccountAccentColor(int index) =>
+        AccountAccentColors[index % AccountAccentColors.Length];
+
+    /// <summary>Solid accent brush for the account at <paramref name="index"/> (frozen, reusable).</summary>
+    private static Brush AccountAccentBrush(int index)
+    {
+        var brush = new SolidColorBrush(AccountAccentColor(index));
+        brush.Freeze();
+        return brush;
+    }
+
+    /// <summary>Faint wash of the account's accent colour, for the group-box fill.</summary>
+    private static Brush AccountTintBrush(int index)
+    {
+        var c = AccountAccentColor(index);
+        var brush = new SolidColorBrush(Color.FromArgb(0x22, c.R, c.G, c.B));
+        brush.Freeze();
+        return brush;
     }
 
     /// <summary>Compact 5-hour figure for one login: its percentage, cached value on a
@@ -3868,6 +4666,9 @@ public partial class MainWindow : Window
             UsageService.FetchStatus.AuthMissing => "sign in",
             UsageService.FetchStatus.AuthExpired => "auth",
             UsageService.FetchStatus.NetworkError => "offline",
+            UsageService.FetchStatus.RateLimited => "wait",
+            // TokenStale falls through to "—": the cached percentage above is preferred
+            // when there is one, and a healthy account shouldn't be flagged when there isn't.
             _ => "—",
         };
     }
@@ -3897,10 +4698,16 @@ public partial class MainWindow : Window
 
     private async void UsageButton_Click(object sender, RoutedEventArgs e)
     {
-        // Show popup immediately with cached data, then refresh in background.
-        // RefreshUsageAsync re-renders the popup when it completes.
+        // Show popup immediately with cached data. Only hit the network if the last
+        // fetch is stale — opening the popup shouldn't re-poll the (rate-limited)
+        // endpoint each time. The 90s timer and the explicit Refresh button cover
+        // fresh pulls.
         RenderUsageDetails();
         UsagePopup.IsOpen = true;
+
+        if (_lastUsageFetchTime is DateTime t && DateTime.Now - t < TimeSpan.FromSeconds(60))
+            return;
+
         await RefreshUsageAsync();
     }
 
@@ -3935,7 +4742,8 @@ public partial class MainWindow : Window
             return;
         }
 
-        // Show per-login section headers only when more than one login is tracked.
+        // Wrap each login in its own accent-coloured group box only when more than
+        // one login is tracked; a single default login keeps the original flat layout.
         var multi = _usageAccounts.Count > 1 || _usageAccounts[0].Id != null;
         var anyCached = false;
 
@@ -3945,18 +4753,32 @@ public partial class MainWindow : Window
 
             if (multi)
             {
-                UsageDetailPanel.Children.Add(new TextBlock
+                var accent = AccountAccentBrush(i);
+
+                var body = new StackPanel();
+                if (RenderAccountDetail(acct, body, accent))
+                    anyCached = true;
+
+                UsageDetailPanel.Children.Add(new GroupBox
                 {
-                    Text = acct.Label,
-                    FontSize = 12,
-                    FontWeight = FontWeights.Bold,
-                    Margin = new Thickness(0, i == 0 ? 0 : 12, 0, 6),
-                    Foreground = (Brush)FindResource("TitleBarForeground"),
+                    Style = (Style)FindResource("UsageAccountGroupBox"),
+                    BorderBrush = accent,
+                    Background = AccountTintBrush(i),
+                    Margin = new Thickness(0, i == 0 ? 2 : 14, 0, 0),
+                    Header = new TextBlock
+                    {
+                        Text = acct.Label,
+                        FontSize = 12,
+                        FontWeight = FontWeights.Bold,
+                        Foreground = accent,
+                    },
+                    Content = body,
                 });
             }
-
-            if (RenderAccountDetail(acct))
+            else if (RenderAccountDetail(acct, UsageDetailPanel, null))
+            {
                 anyCached = true;
+            }
         }
 
         var footer = _lastUsageFetchTime is DateTime time ? $"Last updated: {time:HH:mm:ss}" : "";
@@ -3968,17 +4790,19 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Renders one login's usage rows into the popup. Returns true if it fell back to
-    /// cached data because the latest fetch for this login failed.
+    /// Renders one login's usage rows into <paramref name="target"/>. When
+    /// <paramref name="barBrush"/> is non-null, the progress bars are tinted with it so
+    /// they match the account's group box. Returns true if it fell back to cached data
+    /// because the latest fetch for this login failed.
     /// </summary>
-    private bool RenderAccountDetail(UsageAccount acct)
+    private bool RenderAccountDetail(UsageAccount acct, Panel target, Brush? barBrush)
     {
         var fg = (Brush)FindResource("TitleBarForeground");
         var result = acct.LastResult;
 
         if (result == null)
         {
-            UsageDetailPanel.Children.Add(new TextBlock { Text = "Loading…", FontSize = 11, Foreground = fg });
+            target.Children.Add(new TextBlock { Text = "Loading…", FontSize = 11, Foreground = fg });
             return false;
         }
 
@@ -3993,11 +4817,15 @@ public partial class MainWindow : Window
             var msg = result.Status switch
             {
                 UsageService.FetchStatus.AuthMissing => "Not signed in. Log in to this account from Claude Accounts.",
-                UsageService.FetchStatus.AuthExpired => "OAuth token expired. Log in to this account again.",
+                UsageService.FetchStatus.AuthExpired => "OAuth token was rejected. Log in to this account again.",
                 UsageService.FetchStatus.NetworkError => "Could not reach api.anthropic.com. Check your connection.",
+                UsageService.FetchStatus.RateLimited => "Usage rate-limited (HTTP 429). Showing cached data; will retry shortly.",
+                // Not a fault: the CLI renews this token the next time you send a message.
+                UsageService.FetchStatus.TokenStale =>
+                    "Usage figure is stale — the stored token has lapsed and refreshes on next use. This account still works.",
                 _ => $"Could not fetch usage ({result.ErrorMessage})",
             };
-            UsageDetailPanel.Children.Add(new TextBlock
+            target.Children.Add(new TextBlock
             {
                 Text = msg,
                 FontSize = 11,
@@ -4010,21 +4838,22 @@ public partial class MainWindow : Window
         if (summary == null)
             return false;
 
-        AddUsageRow("5-hour session", summary.FiveHour, isPrimary: true);
-        AddUsageRow("7-day weekly", summary.SevenDay);
+        AddUsageRow(target, "5-hour session", summary.FiveHour, barBrush, isPrimary: true,
+            windowDuration: TimeSpan.FromHours(5));
+        AddUsageRow(target, "7-day weekly", summary.SevenDay, barBrush);
 
         // Per-model breakdown (show only if populated)
         if (summary.SevenDayOpus?.Utilization != null)
-            AddUsageRow("7-day Opus", summary.SevenDayOpus);
+            AddUsageRow(target, "7-day Opus", summary.SevenDayOpus, barBrush);
         if (summary.SevenDaySonnet?.Utilization != null)
-            AddUsageRow("7-day Sonnet", summary.SevenDaySonnet);
+            AddUsageRow(target, "7-day Sonnet", summary.SevenDaySonnet, barBrush);
 
         // Extra usage (if on)
         if (summary.ExtraUsage?.IsEnabled == true && (summary.ExtraUsage.UsedCredits ?? 0) > 0)
         {
             var currency = summary.ExtraUsage.Currency ?? "";
             var credits = summary.ExtraUsage.UsedCredits ?? 0;
-            UsageDetailPanel.Children.Add(new TextBlock
+            target.Children.Add(new TextBlock
             {
                 Text = $"Extra usage: {credits:0} {currency} credits used",
                 FontSize = 11,
@@ -4036,7 +4865,7 @@ public partial class MainWindow : Window
         return usedCache;
     }
 
-    private void AddUsageRow(string label, UsageWindow? window, bool isPrimary = false)
+    private void AddUsageRow(Panel target, string label, UsageWindow? window, Brush? barBrush = null, bool isPrimary = false, TimeSpan? windowDuration = null)
     {
         var container = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
 
@@ -4080,7 +4909,32 @@ public partial class MainWindow : Window
             Height = 6,
             Margin = new Thickness(0, 3, 0, 0),
         };
+        if (barBrush != null)
+            bar.Foreground = barBrush;
         container.Children.Add(bar);
+
+        // A thinner "time" bar sitting just below the token bar: how far we are
+        // through the fixed-length window (e.g. 3h into a 5h window = ~60%). If the
+        // time bar is ahead of the token bar we're pacing fine; if the token bar is
+        // well ahead, we're burning through the budget too fast.
+        if (windowDuration is TimeSpan duration && duration > TimeSpan.Zero && window?.ResetsAt != null)
+        {
+            var remaining = window.ResetsAt.Value - DateTimeOffset.Now;
+            var elapsed = duration - remaining;
+            var timePct = Math.Clamp(elapsed.TotalSeconds / duration.TotalSeconds, 0, 1) * 100;
+
+            var timeBar = new ProgressBar
+            {
+                Minimum = 0,
+                Maximum = 100,
+                Value = timePct,
+                Height = 3,
+                Margin = new Thickness(0, 1, 0, 0),
+                Foreground = new SolidColorBrush(Color.FromRgb(0xD9, 0x90, 0x2B)),
+                ToolTip = $"Time elapsed in this window: {timePct:0}%",
+            };
+            container.Children.Add(timeBar);
+        }
 
         var pctBlock = new TextBlock
         {
@@ -4091,6 +4945,6 @@ public partial class MainWindow : Window
         };
         container.Children.Add(pctBlock);
 
-        UsageDetailPanel.Children.Add(container);
+        target.Children.Add(container);
     }
 }

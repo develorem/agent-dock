@@ -403,4 +403,44 @@
         </Style.Triggers>
     </Style>
 
+    <!-- ==================== Usage account group box ====================
+         A retro Windows-Forms-style group box: a rounded frame with the
+         account name straddling the top-left border line. Used to visually
+         separate each account's usage bars in the usage popup. BorderBrush,
+         Background and Header are set per-account in code so each account
+         gets its own accent colour. -->
+    <Style x:Key="UsageAccountGroupBox" TargetType="{x:Type GroupBox}">
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Padding" Value="12,14,12,10" />
+        <Setter Property="Foreground" Value="{DynamicResource TitleBarForeground}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type GroupBox}">
+                    <Grid>
+                        <!-- The frame. Its top edge runs through the middle of
+                             the header chip below, which is what makes the label
+                             appear to sit "on" the line. -->
+                        <Border Margin="0,8,0,0"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6">
+                            <ContentPresenter Margin="{TemplateBinding Padding}" />
+                        </Border>
+                        <!-- Header chip. Its background matches the popup so it
+                             "breaks" the frame line, the classic group-box look. -->
+                        <Border HorizontalAlignment="Left"
+                                VerticalAlignment="Top"
+                                Margin="10,0,0,0"
+                                Padding="5,0"
+                                Background="{DynamicResource TitleBarBackground}">
+                            <ContentPresenter ContentSource="Header"
+                                              RecognizesAccessKey="False" />
+                        </Border>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
 </ResourceDictionary>

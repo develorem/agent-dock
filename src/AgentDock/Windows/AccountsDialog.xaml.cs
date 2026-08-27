@@ -15,10 +15,16 @@ public partial class AccountsDialog : Window
         public string ConfigDir { get; init; } = "";
     }
 
+    // Cancelled when the dialog closes, so a sign-in we're still waiting on doesn't keep
+    // a watcher (and a reference to dead visuals) alive. The login process itself is left
+    // running — the user may still be mid-flow in the browser.
+    private readonly CancellationTokenSource _closing = new();
+
     private AccountsDialog()
     {
         InitializeComponent();
         Populate();
+        Closed += (_, _) => _closing.Cancel();
     }
 
     /// <summary>Opens the accounts manager. Changes are persisted by AccountManager directly.</summary>
@@ -32,11 +38,15 @@ public partial class AccountsDialog : Window
     {
         var rows = AccountManager.Load().Select(a =>
         {
+            // Login state decides the wording; the email is only a label. A revoked
+            // account keeps its email in .claude.json, so reading the email first (as
+            // this used to) rendered dead accounts as perfectly signed in — leaving no
+            // hint that Log In was the thing to click.
             var email = AccountManager.ReadEmail(a.Id);
-            var status = email != null
-                ? $"— {email}"
-                : AccountManager.IsLoggedIn(a.Id)
-                    ? "— signed in"
+            var status = AccountManager.IsLoggedIn(a.Id)
+                ? email != null ? $"— {email}" : "— signed in"
+                : email != null
+                    ? $"— {email} · signed out (click Log In)"
                     : "— not signed in (click Log In)";
 
             return new AccountRow
@@ -52,7 +62,7 @@ public partial class AccountsDialog : Window
         EmptyHint.Visibility = rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private void AddButton_Click(object sender, RoutedEventArgs e)
+    private async void AddButton_Click(object sender, RoutedEventArgs e)
     {
         var name = NewAccountName.Text.Trim();
         if (name.Length == 0)
@@ -64,15 +74,42 @@ public partial class AccountsDialog : Window
         var account = AccountManager.Add(name);
         NewAccountName.Text = "";
         Populate();
-        AccountManager.LaunchLogin(account.Id);
+        await RunLoginAsync(account.Id, account.Name);
+    }
 
-        ThemedMessageBox.Show(
-            this,
-            $"A terminal window has opened to sign in to \"{account.Name}\".\n\n" +
-            "Complete the Claude login there, then close that window and click Refresh to confirm the account is signed in.",
-            "Sign in",
-            MessageBoxButton.OK,
-            MessageBoxImage.Information);
+    /// <summary>
+    /// Runs a sign-in and refreshes the list when it finishes, so the user never has to
+    /// click Refresh to find out whether it worked. Status is reported inline rather than
+    /// in a message box: a modal here would sit on top of the very list it's telling the
+    /// user to go and look at.
+    /// </summary>
+    private async Task RunLoginAsync(string accountId, string accountName)
+    {
+        LogInButton.IsEnabled = false;
+        RemoveButton.IsEnabled = false;
+        AddButton.IsEnabled = false;
+        LoginStatus.Text = $"Signing in to \"{accountName}\" — complete it in the terminal window…";
+        LoginStatus.Visibility = Visibility.Visible;
+
+        bool signedIn;
+        try
+        {
+            signedIn = await AccountManager.RunLoginAsync(accountId, _closing.Token);
+        }
+        finally
+        {
+            // The dialog may already be gone; touching dead visuals is harmless but
+            // pointless, and re-enabling buttons on a closed window is not worth guarding
+            // separately from the status text.
+            LogInButton.IsEnabled = true;
+            RemoveButton.IsEnabled = true;
+            AddButton.IsEnabled = true;
+        }
+
+        Populate();
+        LoginStatus.Text = signedIn
+            ? $"\"{accountName}\" is signed in."
+            : $"\"{accountName}\" is still not signed in — click Log In to try again.";
     }
 
     private void NewAccountName_KeyDown(object sender, KeyEventArgs e)
@@ -81,7 +118,7 @@ public partial class AccountsDialog : Window
             AddButton_Click(sender, e);
     }
 
-    private void LogInButton_Click(object sender, RoutedEventArgs e)
+    private async void LogInButton_Click(object sender, RoutedEventArgs e)
     {
         if (AccountsList.SelectedItem is not AccountRow row)
         {
@@ -90,7 +127,7 @@ public partial class AccountsDialog : Window
             return;
         }
 
-        AccountManager.LaunchLogin(row.Id);
+        await RunLoginAsync(row.Id, row.Name);
     }
 
     private void RemoveButton_Click(object sender, RoutedEventArgs e)
