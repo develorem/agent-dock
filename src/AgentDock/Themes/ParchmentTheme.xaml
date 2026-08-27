@@ -13,10 +13,22 @@
     <SolidColorBrush x:Key="TabButtonActiveBackground" Color="#E8DCC0" />
     <SolidColorBrush x:Key="TabButtonActiveBorderBrush" Color="#B89030" />
     <SolidColorBrush x:Key="TabButtonInactiveBackground" Color="Transparent" />
+    <!-- Active *project* tab accent: outlines the tab and runs as a rail along the
+         project strip's content edge, then frames the content area. Deliberately a
+         different hue from TabButtonActiveBorderBrush (the group rail) so the two
+         nested frames stay tellable apart. -->
+    <SolidColorBrush x:Key="ProjectTabActiveBorderBrush" Color="#7C5CBF" />
+    <!-- Project tabs that are not current sit a shade darker than the strip they
+         live on (the current one takes ToolbarBackground itself), matching the recessed
+         surface the group strip uses. -->
+    <SolidColorBrush x:Key="ProjectTabInactiveBackground" Color="#E2D8C8" />
 
     <!-- Group (meta) tab bar — a separate strip above the project tabs -->
     <SolidColorBrush x:Key="GroupBarBackground" Color="#E2D8C8" />
-    <SolidColorBrush x:Key="GroupTabActiveBackground" Color="#F7F1E6" />
+    <!-- Tracks ToolbarBackground so the active group tab reads as one surface with the
+         project strip below it. -->
+    <SolidColorBrush x:Key="GroupTabActiveBackground" Color="#F0E8DC" />
+    <SolidColorBrush x:Key="ActiveGroupAccentForeground" Color="#B5179E" />
 
     <!-- Taskbar icon accent bar -->
     <SolidColorBrush x:Key="TaskbarAccentColor" Color="#E8DCA0" />
@@ -92,6 +104,9 @@
     <SolidColorBrush x:Key="ScrollBarThumbPressed" Color="#8B7D6B" />
     <SolidColorBrush x:Key="ScrollBarArrowForeground" Color="#A09080" />
     <SolidColorBrush x:Key="ScrollBarArrowHover" Color="#B89030" />
+
+    <!-- Busy overlay -->
+    <SolidColorBrush x:Key="BusyOverlayScrim" Color="#59000000" />
 
     <!-- Help / About windows -->
     <SolidColorBrush x:Key="HelpBackground" Color="#FAF5EE" />

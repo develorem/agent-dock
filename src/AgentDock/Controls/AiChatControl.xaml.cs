@@ -119,9 +119,38 @@ public partial class AiChatControl : UserControl
     public event Action<ClaudeSessionState>? SessionStateChanged;
 
     /// <summary>
+    /// Raised when the session's background-work status changes (subagents / background
+    /// tasks starting or draining) independent of the main turn state, so the tab icon
+    /// can pulse while the session is Idle-but-still-busy.
+    /// </summary>
+    public event Action? SessionBackgroundWorkChanged;
+
+    /// <summary>
     /// Raised when cumulative session stats change (cost, tokens).
     /// </summary>
     public event Action<SessionStats>? SessionStatsChanged;
+
+    /// <summary>
+    /// Raised whenever <see cref="StatusLabel"/> changes, including on every frame of
+    /// the working spinner. The chat pane has no status strip of its own — the host
+    /// renders this in the dock panel's title bar next to cost and tokens.
+    /// </summary>
+    public event Action? SessionStatusChanged;
+
+    /// <summary>
+    /// Human-readable session status ("Idle", "⠹ Working...", "⚠ Error"), or empty
+    /// when no session is running.
+    /// </summary>
+    public string StatusLabel { get; private set; } = "";
+
+    // Sets StatusLabel and notifies the host, skipping no-op writes so an unchanged
+    // status doesn't churn the title bar.
+    private void SetStatus(string status)
+    {
+        if (StatusLabel == status) return;
+        StatusLabel = status;
+        SessionStatusChanged?.Invoke();
+    }
 
     /// <summary>
     /// Raised when the session init arrives and the model is known.
@@ -157,6 +186,12 @@ public partial class AiChatControl : UserControl
     /// </summary>
     public ClaudeSessionState CurrentState => _session?.State ?? ClaudeSessionState.NotStarted;
 
+    /// <summary>
+    /// True while the session has subagents / background tasks still running, even
+    /// though the main turn may have returned to Idle.
+    /// </summary>
+    public bool HasBackgroundWork => _session?.HasBackgroundWork ?? false;
+
     public AiChatControl()
     {
         Log.Info("AiChatControl: constructor");
@@ -169,17 +204,23 @@ public partial class AiChatControl : UserControl
         // attachment instead of pasting its path (or nothing) as text.
         DataObject.AddPastingHandler(InputBox, InputBox_Pasting);
         Log.Info("AiChatControl: InitializeComponent complete");
-
-        // Older Win10 builds don't ship the WinRT dictation recognizer — hide the
-        // mic button rather than show one that would always error.
-        if (!DictationService.IsSupportedOnThisOS)
-            MicButton.Visibility = Visibility.Collapsed;
     }
 
     public void Initialize(string projectPath)
     {
         Log.Info($"AiChatControl: Initialize for '{projectPath}'");
         _projectPath = projectPath;
+        // Reopen on whichever login this project last started a session with.
+        _preferredAccountId = ProjectSettingsManager.Load(projectPath).ClaudeAccountId;
+        // Refresh the login picker whenever the Start panel appears (initial show
+        // and after a session ends) and when its dropdown opens, so accounts added
+        // via the Accounts dialog show up without restarting the app.
+        StartPanel.IsVisibleChanged += (_, e) =>
+        {
+            if ((bool)e.NewValue) PopulateAccountPicker();
+        };
+        AccountCombo.DropDownOpened += (_, _) => PopulateAccountPicker();
+        PopulateAccountPicker();
     }
 
     public void FocusInput()
@@ -207,79 +248,112 @@ public partial class AiChatControl : UserControl
         _session?.Dispose();
         _session = null;
         _processor = null;
-        _dictation?.Dispose();
-        _dictation = null;
-    }
-
-    // --- Dictation ---
-
-    private DictationService? _dictation;
-
-    private async void MicButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (_dictation == null)
-        {
-            _dictation = new DictationService();
-            _dictation.TextRecognized += text => Dispatcher.BeginInvoke(() => InsertDictatedText(text));
-            _dictation.StateChanged += state => Dispatcher.BeginInvoke(() => UpdateMicVisual(state));
-            _dictation.ErrorOccurred += msg => Dispatcher.BeginInvoke(() => SetMicErrorTooltip(msg));
-        }
-        try
-        {
-            await _dictation.ToggleAsync();
-        }
-        catch (Exception ex)
-        {
-            Log.Error("Dictation toggle failed", ex);
-            SetMicErrorTooltip(ex.Message);
-        }
-    }
-
-    private void InsertDictatedText(string text)
-    {
-        var caret = InputBox.CaretIndex;
-        var existing = InputBox.Text;
-        var needsLeadingSpace = caret > 0 && caret <= existing.Length
-            && !char.IsWhiteSpace(existing[caret - 1]);
-        var insert = (needsLeadingSpace ? " " : "") + text;
-        InputBox.Text = existing.Insert(caret, insert);
-        InputBox.CaretIndex = caret + insert.Length;
-    }
-
-    private void UpdateMicVisual(DictationState state)
-    {
-        switch (state)
-        {
-            case DictationState.Idle:
-                MicIcon.Foreground = ThemeManager.GetBrush("ChatMutedForeground");
-                MicButton.ToolTip = "Start dictation";
-                break;
-            case DictationState.Starting:
-                MicIcon.Foreground = ThemeManager.GetBrush("ChatMutedForeground");
-                MicButton.ToolTip = "Starting…";
-                break;
-            case DictationState.Listening:
-                MicIcon.Foreground = ThemeManager.GetBrush("ChatDangerForeground");
-                MicButton.ToolTip = "Listening — click to stop";
-                break;
-            case DictationState.Stopping:
-                MicButton.ToolTip = "Stopping…";
-                break;
-            case DictationState.Error:
-                MicIcon.Foreground = ThemeManager.GetBrush("ChatMutedForeground");
-                break;
-        }
-    }
-
-    private void SetMicErrorTooltip(string message)
-    {
-        MicButton.ToolTip = $"Dictation error: {message}";
     }
 
     // --- Start Session ---
 
     private void StartNormal_Click(object sender, RoutedEventArgs e) => StartSession(false);
     private void StartDangerous_Click(object sender, RoutedEventArgs e) => StartSession(true);
+
+    /// <summary>A selectable login on the Start panel — one per configured account.</summary>
+    private sealed class AccountChoice
+    {
+        public string Id { get; init; } = "";
+        public string DisplayName { get; init; } = "";
+        /// <summary>Short friendly label (the account name) shown in the chat title.</summary>
+        public string Label { get; init; } = "";
+    }
+
+    /// <summary>
+    /// The login this session was started with, for display in the chat panel title:
+    /// the account name, or null when no accounts are configured (single-account users
+    /// see no change). Fixed for the session's life.
+    /// </summary>
+    public string? AccountLabel { get; private set; }
+
+    /// <summary>
+    /// Id of the login this session is running as, or null for the machine default.
+    /// Kept alongside <see cref="AccountLabel"/> so a failed turn can check whether that
+    /// account is still signed in and say so. Fixed for the session's life.
+    /// </summary>
+    private string? _sessionAccountId;
+
+    /// <summary>
+    /// The account id remembered for this project (persisted in .agentdock/settings.json).
+    /// Seeds the picker on load and is rewritten whenever the user picks a different login.
+    /// </summary>
+    private string? _preferredAccountId;
+
+    /// <summary>Suppresses the persist-on-change handler while the picker is repopulated.</summary>
+    private bool _populatingAccounts;
+
+    /// <summary>
+    /// Rebuilds the Start-panel login picker from the configured accounts, preserving
+    /// the current selection by id. The picker stays hidden until at least one account
+    /// exists (users who don't use multi-account never see it). There's no "Default"
+    /// entry: once accounts are configured, a session always runs as one of them.
+    /// </summary>
+    private void PopulateAccountPicker()
+    {
+        var accounts = AccountManager.Load();
+        if (accounts.Count == 0)
+        {
+            AccountPickerPanel.Visibility = Visibility.Collapsed;
+            AccountCombo.ItemsSource = null;
+            return;
+        }
+
+        var previousId = (AccountCombo.SelectedItem as AccountChoice)?.Id ?? _preferredAccountId;
+
+        var choices = new List<AccountChoice>();
+        foreach (var a in accounts)
+        {
+            // Login state first, email as the label — a signed-out account still has an
+            // email on disk, and showing only that hides the fact it can't run.
+            var email = AccountManager.ReadEmail(a.Id);
+            var suffix = AccountManager.IsLoggedIn(a.Id)
+                ? email != null ? $" — {email}" : " — signed in"
+                : email != null ? $" — {email} · signed out" : " — not signed in";
+            choices.Add(new AccountChoice { Id = a.Id, Label = a.Name, DisplayName = a.Name + suffix });
+        }
+
+        var selected = choices.FirstOrDefault(c => c.Id == previousId) ?? choices[0];
+
+        // Repopulating fires SelectionChanged; that's not a user choice, so don't persist it.
+        _populatingAccounts = true;
+        try
+        {
+            AccountCombo.ItemsSource = choices;
+            AccountCombo.SelectedItem = selected;
+        }
+        finally
+        {
+            _populatingAccounts = false;
+        }
+
+        _preferredAccountId = selected.Id;
+        AccountPickerPanel.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>
+    /// Remembers the chosen login against the project so the next session — this run or
+    /// after a restart — starts on the same account. Written straight to the project's
+    /// settings file, so there's nothing for the user to save.
+    /// </summary>
+    private void AccountCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_populatingAccounts || AccountCombo.SelectedItem is not AccountChoice choice)
+            return;
+        if (choice.Id == _preferredAccountId)
+            return;
+
+        _preferredAccountId = choice.Id;
+        if (!string.IsNullOrEmpty(_projectPath))
+        {
+            Log.Info($"AiChatControl: remembering account id={choice.Id} for '{_projectPath}'");
+            ProjectSettingsManager.Update(_projectPath, s => s.ClaudeAccountId = choice.Id);
+        }
+    }
 
     private void StartSession(bool dangerous)
     {
@@ -291,14 +365,33 @@ public partial class AiChatControl : UserControl
             return;
         }
 
+        // Resolve the chosen login. No picker (no accounts configured) = the machine default.
+        string? accountConfigDir = null;
+        AccountLabel = null;
+        _sessionAccountId = null;
+        if (AccountPickerPanel.Visibility == Visibility.Visible &&
+            AccountCombo.SelectedItem is AccountChoice choice)
+        {
+            if (!AccountManager.IsLoggedIn(choice.Id))
+            {
+                StartError.Text = "That account isn't signed in yet. Open Claude Accounts to log in first.";
+                StartError.Visibility = Visibility.Visible;
+                return;
+            }
+            accountConfigDir = AccountManager.ConfigDirFor(choice.Id);
+            Log.Info($"AiChatControl: StartSession using account id={choice.Id}");
+            AccountLabel = choice.Label;
+            _sessionAccountId = choice.Id;
+        }
+
         StartError.Visibility = Visibility.Collapsed;
 
-        _session = new ClaudeSession(_projectPath);
+        _session = new ClaudeSession(_projectPath, accountConfigDir);
         WireSessionEvents();
 
         StartPanel.Visibility = Visibility.Collapsed;
         ChatPanel.Visibility = Visibility.Visible;
-        StatusText.Text = "Initializing...";
+        SetStatus("Initializing...");
 
         _session.Start(dangerous);
     }
@@ -319,6 +412,7 @@ public partial class AiChatControl : UserControl
         _session.ErrorOutput += text => Post(() => OnErrorOutput(text));
         _session.ProcessExited += code => Post(() => OnProcessExited(code));
         _session.InactivityTimeout += () => Post(OnInactivityTimeout);
+        _session.BackgroundWorkChanged += () => Post(() => SessionBackgroundWorkChanged?.Invoke());
 
         // Transcript classification (thinking / commentary / execution / answer)
         // runs on the session's background read-loop thread via the processor — no
@@ -473,7 +567,7 @@ public partial class AiChatControl : UserControl
                 _activeWorkflows = 0;
             }
 
-            StatusText.Text = state switch
+            SetStatus(DecorateStatus(state switch
             {
                 ClaudeSessionState.Initializing => "Initializing...",
                 ClaudeSessionState.Idle => "Idle",
@@ -481,24 +575,11 @@ public partial class AiChatControl : UserControl
                 ClaudeSessionState.Exited => "Session ended",
                 ClaudeSessionState.Error => "Error",
                 _ => ""
-            };
+            }));
         }
 
-        StatusText.Foreground = state switch
-        {
-            ClaudeSessionState.Working => ThemeManager.GetBrush("ChatStatusWorkingForeground"),
-            ClaudeSessionState.WaitingForPermission => ThemeManager.GetBrush("ChatStatusWarningForeground"),
-            ClaudeSessionState.Error => ThemeManager.GetBrush("ChatStatusErrorForeground"),
-            _ => ThemeManager.GetBrush("ChatMutedForeground")
-        };
-
-        var showDanger = _session?.IsDangerousMode == true
-            && state != ClaudeSessionState.NotStarted
-            && state != ClaudeSessionState.Exited;
-        DangerIcon.Visibility = showDanger ? Visibility.Visible : Visibility.Collapsed;
-
-        // Keep the input box and mic usable while a turn is running so the user can
-        // draft follow-ups; the Send button stays enabled too, but now enqueues rather
+        // Keep the input box usable while a turn is running so the user can draft
+        // follow-ups; the Send button stays enabled too, but now enqueues rather
         // than dispatching when the session is busy (see SendCurrentMessage).
         UpdateSendButtonEnabled();
 
@@ -516,14 +597,26 @@ public partial class AiChatControl : UserControl
     private void StartWorkingAnimation()
     {
         _spinnerIndex = 0;
-        StatusText.Text = WorkingStatusText();
+        SetStatus(WorkingStatusText());
         _workingTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(80) };
         _workingTimer.Tick += (_, _) =>
         {
             _spinnerIndex = (_spinnerIndex + 1) % SpinnerFrames.Length;
-            StatusText.Text = WorkingStatusText();
+            SetStatus(WorkingStatusText());
         };
         _workingTimer.Start();
+    }
+
+    // Prefixes a warning glyph while the session runs with permissions bypassed. This
+    // used to be a separate icon in the (now removed) status strip.
+    private string DecorateStatus(string status)
+    {
+        if (string.IsNullOrEmpty(status)) return status;
+        var state = _session?.State ?? ClaudeSessionState.NotStarted;
+        var showDanger = _session?.IsDangerousMode == true
+            && state != ClaudeSessionState.NotStarted
+            && state != ClaudeSessionState.Exited;
+        return showDanger ? $"⚠ {status}" : status;
     }
 
     // "⠹ Working..." plus a "· N subagents · M background tasks running" suffix when the
@@ -532,7 +625,7 @@ public partial class AiChatControl : UserControl
     // the 80 ms animation tick and a count change render it.
     private string WorkingStatusText()
     {
-        var text = $"{SpinnerFrames[_spinnerIndex]} Working...";
+        var text = DecorateStatus($"{SpinnerFrames[_spinnerIndex]} Working...");
 
         var parts = new List<string>(3);
         if (_activeSubagents > 0)
@@ -553,7 +646,7 @@ public partial class AiChatControl : UserControl
     private void RefreshWorkingStatus()
     {
         if (_session?.State == ClaudeSessionState.Working)
-            StatusText.Text = WorkingStatusText();
+            SetStatus(WorkingStatusText());
     }
 
     private void StopWorkingAnimation()
@@ -575,13 +668,12 @@ public partial class AiChatControl : UserControl
     // --- Sending Messages ---
 
     private void Send_Click(object sender, RoutedEventArgs e) => SendCurrentMessage();
-    private async void Stop_Click(object sender, RoutedEventArgs e)
+    private async void EndSession_Click(object sender, RoutedEventArgs e)
     {
         StopWorkingAnimation();
-        StopButton.IsEnabled = false;
+        EndSessionButton.IsEnabled = false;
         SendButton.IsEnabled = false;
-        StatusText.Text = "Stopping...";
-        StatusText.Foreground = ThemeManager.GetBrush("ChatMutedForeground");
+        SetStatus("Stopping...");
 
         RemoveWaitingBubble();
         RemoveInactivityWarning();
@@ -597,9 +689,12 @@ public partial class AiChatControl : UserControl
             session.Dispose();
         }
 
+        AccountLabel = null;
+        _sessionAccountId = null;
         ChatPanel.Visibility = Visibility.Collapsed;
         StartPanel.Visibility = Visibility.Visible;
-        StopButton.IsEnabled = true;
+        EndSessionButton.IsEnabled = true;
+        SetStatus("");
         ClearMessages();
     }
 
@@ -734,7 +829,7 @@ public partial class AiChatControl : UserControl
         AddMenuItem(menu, "Clear Chat", "/clear", isIdle, ExecuteLocalCommand);
         AddMenuItem(menu, "Compact History", "/compact", isIdle, ExecuteLocalCommand);
         menu.Items.Add(new Separator());
-        AddMenuItem(menu, "Stop Session", "/stop", hasSession, ExecuteLocalCommand);
+        AddMenuItem(menu, "End Session", "/stop", hasSession, ExecuteLocalCommand);
         AddMenuItem(menu, "Open Logs Folder", "/logs", true, ExecuteLocalCommand);
 
         menu.IsOpen = true;
@@ -822,10 +917,53 @@ public partial class AiChatControl : UserControl
     private void UpdateSendButtonEnabled()
         => SendButton.IsEnabled = _session?.State is ClaudeSessionState.Idle or ClaudeSessionState.Working;
 
-    // Clock button: always opens the compose dialog to add a time-scheduled message to
-    // the queue. Cancelling / viewing pending items is done inline in the queue panel,
-    // so there's no separate manage dialog anymore.
-    private void ScheduleButton_Click(object sender, RoutedEventArgs e)
+    // The dropdown half of the split Send button. Send is the default action, so the
+    // menu only exists to reach the alternative (schedule for later); "Send now" is
+    // repeated there so the menu reads as a complete choice.
+    private void SendMenu_Click(object sender, RoutedEventArgs e)
+    {
+        var menu = new ContextMenu
+        {
+            PlacementTarget = SendMenuButton,
+            Placement = System.Windows.Controls.Primitives.PlacementMode.Top
+        };
+
+        var sendNow = new MenuItem
+        {
+            Icon = MenuGlyph(SendGlyph),
+            Header = "Send now",
+            IsEnabled = SendButton.IsEnabled
+        };
+        sendNow.Click += (_, _) => SendCurrentMessage();
+        menu.Items.Add(sendNow);
+
+        var schedule = new MenuItem
+        {
+            Icon = MenuGlyph(ScheduleGlyph),
+            Header = "Schedule for later…",
+            IsEnabled = _session != null
+        };
+        schedule.Click += (_, _) => ShowScheduleDialog();
+        menu.Items.Add(schedule);
+
+        menu.IsOpen = true;
+    }
+
+    // Segoe MDL2 Assets code points for the send-menu icons.
+    private const string SendGlyph = "\uE724";
+    private const string ScheduleGlyph = "\uE823";
+
+    private static TextBlock MenuGlyph(string glyph) => new()
+    {
+        Text = glyph,
+        FontFamily = new FontFamily("Segoe MDL2 Assets"),
+        FontSize = 12
+    };
+
+    // Opens the compose dialog to add a time-scheduled message to the queue. Cancelling
+    // / viewing pending items is done inline in the queue panel, so there's no separate
+    // manage dialog.
+    private void ShowScheduleDialog()
     {
         if (_session == null) return;
 
@@ -921,15 +1059,17 @@ public partial class AiChatControl : UserControl
         Dispatch(head.Text, head.Attachments, head.Thumbnails);
     }
 
-    // Tints the clock glyph while a scheduled (time-gated) message is pending so the
-    // waiting state reads at a glance.
+    // The clock button folded into the Send split button's dropdown, so a pending
+    // scheduled message is signalled by tinting the dropdown arrow instead.
     private void UpdateScheduleButtonVisual()
     {
         var hasScheduled = _queue.NextScheduledFireUtc != null;
-        ScheduleIcon.Foreground = hasScheduled
+        SendMenuIcon.Foreground = hasScheduled
             ? ThemeManager.GetBrush("ChatStatusWarningForeground")
             : ThemeManager.GetBrush("ChatButtonForeground");
-        ScheduleButton.ToolTip = "Schedule a message to send later";
+        SendMenuButton.ToolTip = hasScheduled
+            ? "A scheduled message is waiting — click for send options"
+            : "More send options";
     }
 
     /// <summary>
@@ -979,7 +1119,7 @@ public partial class AiChatControl : UserControl
                 break;
 
             case "/stop":
-                Stop_Click(this, new RoutedEventArgs());
+                EndSession_Click(this, new RoutedEventArgs());
                 break;
 
             case "/logs":
@@ -1098,16 +1238,19 @@ public partial class AiChatControl : UserControl
             PendingAttachments.Remove(a);
     }
 
-    // The Cancel (✕) button: discard the drafted text and any queued attachments.
-    private void CancelButton_Click(object sender, RoutedEventArgs e)
+    // The floating clear (✕) button: discard the drafted text and any queued attachments.
+    private void ClearInput_Click(object sender, RoutedEventArgs e)
     {
         InputBox.Text = "";
         PendingAttachments.Clear();
         FocusInput();
     }
 
+    // Entering/leaving the composer toggles the floating clear button.
+    private void InputArea_MouseChanged(object sender, MouseEventArgs e) => UpdateComposerButtons();
+
     // Shows the attachments bar only when something is queued, and keeps the
-    // Cancel button in sync.
+    // clear button in sync.
     private void UpdateAttachmentsBar()
     {
         AttachmentsBar.Visibility = PendingAttachments.Count > 0
@@ -1116,12 +1259,16 @@ public partial class AiChatControl : UserControl
         UpdateComposerButtons();
     }
 
-    // The Cancel button is always visible (to avoid the composer resizing as it
-    // appears/disappears) but is only enabled when there's something to discard
-    // (drafted text or queued images).
+    // The clear button floats over the composer instead of taking a slot in the button
+    // column, so it can appear and vanish without reflowing anything: shown only while
+    // the pointer is over the composer and there's something to discard.
     private void UpdateComposerButtons()
-        => CancelButton.IsEnabled =
-            !string.IsNullOrEmpty(InputBox.Text) || PendingAttachments.Count > 0;
+    {
+        var hasContent = !string.IsNullOrEmpty(InputBox.Text) || PendingAttachments.Count > 0;
+        ClearInputButton.Visibility = hasContent && InputArea.IsMouseOver
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    }
 
     // --- Message Collection Helpers ---
 
@@ -1183,8 +1330,8 @@ public partial class AiChatControl : UserControl
     {
         FinalizeActivity(result.DurationMs.HasValue ? result.DurationMs.Value / 1000.0 : null);
 
-        if (result.IsError && result.Errors?.Count > 0)
-            AddSystemMessage($"Error: {string.Join("; ", result.Errors)}", isWarning: true);
+        if (result.IsError)
+            ReportTurnError(result);
 
         var (costDelta, tokenDelta) = Stats.Update(result);
 
@@ -1203,6 +1350,46 @@ public partial class AiChatControl : UserControl
         }
 
         SessionStatsChanged?.Invoke(Stats);
+    }
+
+    /// <summary>
+    /// Reports a failed turn in the transcript. Prefers the structured <c>errors</c>
+    /// list, falling back to the result text.
+    /// </summary>
+    /// <remarks>
+    /// The fallback matters: an auth failure arrives as a synthetic result with
+    /// <c>is_error: true</c>, an empty <c>errors</c> list, zero tokens and zero cost, and
+    /// the reason only in <c>result</c>. Gating the message on a non-empty <c>errors</c>
+    /// list meant those turns finished in total silence — the session looked like it had
+    /// answered with nothing, which is how two revoked accounts went unnoticed.
+    ///
+    /// A zero-token error against a named account is also the signature of that account
+    /// being signed out, so confirm it and point at the fix rather than leaving the user
+    /// to interpret a raw CLI message.
+    /// </remarks>
+    private void ReportTurnError(ClaudeResultMessage result)
+    {
+        var detail = result.Errors?.Count > 0
+            ? string.Join("; ", result.Errors)
+            : string.IsNullOrWhiteSpace(result.Result)
+                ? "the turn failed without reporting a reason"
+                : result.Result.Trim();
+
+        AddSystemMessage($"Error: {detail}", isWarning: true);
+
+        var noWorkDone = result.InputTokens == 0 && result.OutputTokens == 0;
+        if (noWorkDone && _sessionAccountId != null && !AccountManager.IsLoggedIn(_sessionAccountId))
+        {
+            // No session restart needed: turns are one-shot with --resume, so SessionId
+            // outlives the failed process. Signing back in and re-sending picks the
+            // conversation up where it stopped.
+            AddSystemMessage(
+                $"The \"{AccountLabel}\" account is signed out, so this turn couldn't run. " +
+                "Open Claude Accounts, select it, and click Log In — a terminal window will " +
+                "open for the browser sign-in. Then just send your message again; this " +
+                "session resumes where it left off.",
+                isWarning: true);
+        }
     }
 
     // --- Activity bubble lifecycle ---
@@ -1331,6 +1518,7 @@ public partial class AiChatControl : UserControl
 
                     var btn = new Button
                     {
+                        Template = (ControlTemplate)FindResource("ChatButtonChrome"),
                         Cursor = Cursors.Hand,
                         Background = ThemeManager.GetBrush("ChatOptionButtonBackground"),
                         BorderBrush = ThemeManager.GetBrush("ChatOptionButtonBorderBrush"),
@@ -1410,8 +1598,11 @@ public partial class AiChatControl : UserControl
 
     private void QuestionCustomInput_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Enter)
+        // Match the main composer: Enter sends, Shift+Enter inserts a newline so
+        // multi-line answers (e.g. pasted or dictated text) can be typed here.
+        if (e.Key == Key.Enter && !Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
         {
+            e.Handled = true;
             var text = QuestionCustomInput.Text.Trim();
             if (!string.IsNullOrEmpty(text))
                 SubmitQuestionAnswer(text);
@@ -1450,7 +1641,7 @@ public partial class AiChatControl : UserControl
             OnKill = () =>
             {
                 RemoveInactivityWarning();
-                Stop_Click(this, new RoutedEventArgs());
+                EndSession_Click(this, new RoutedEventArgs());
             }
         };
         Messages.Add(_inactivityVm);
@@ -1558,6 +1749,9 @@ public partial class AiChatControl : UserControl
 
     private static void AttachAssistantDocument(MarkdownScrollViewer viewer, AssistantMessage? msg)
     {
+        // Idempotent — the helper hooks each viewer once, however often containers recycle.
+        MarkdownHelper.EnableMarkdownLinkCopy(viewer);
+
         // GetMarkdown builds the document on first realize (UI thread) and caches
         // it; subsequent realizations of the same message reuse the instance.
         var doc = msg?.GetMarkdown();

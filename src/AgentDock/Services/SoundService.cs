@@ -12,6 +12,16 @@ public static class SoundService
     public static void PlayDeviceDisconnect() => PlayRegistrySound("DeviceDisconnect");
     public static void PlayMessageNudge() => PlayRegistrySound("MessageNudge");
 
+    /// <summary>
+    /// Sound for the agent stopping to ask something (a question or a permission prompt),
+    /// deliberately distinct from <see cref="PlayMessageNudge"/> so a prompt that blocks the
+    /// turn is audibly different from the turn simply finishing. Uses the instant-message
+    /// notification rather than the obvious-sounding "SystemQuestion" event, which still
+    /// exists in the registry but ships with no .wav assigned on Windows 10/11 — it would
+    /// silently play nothing.
+    /// </summary>
+    public static void PlayQuestionPrompt() => PlayRegistrySound("Notification.IM");
+
     private static void PlayRegistrySound(string eventName)
     {
         try

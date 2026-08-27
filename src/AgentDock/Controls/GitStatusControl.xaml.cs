@@ -117,16 +117,25 @@ public partial class GitStatusControl : UserControl
 
     private void StartWatching(string projectPath)
     {
-        // Debounce timer — coalesces rapid file changes into a single refresh
-        _debounceTimer = new DispatcherTimer
+        // Debounce timer — coalesces rapid file changes into a single refresh.
+        // The Tick lambda captures the local, not the field: StopWatching nulls
+        // the field (and FallBackToPolling replaces it), but a Tick already
+        // queued on the dispatcher still fires after that — reading the field
+        // there threw NullReferenceException when a tab was switched away or a
+        // project was closed mid-debounce.
+        _debounceTimer?.Stop();
+        var debounceTimer = new DispatcherTimer
         {
             Interval = TimeSpan.FromMilliseconds(500)
         };
-        _debounceTimer.Tick += (_, _) =>
+        debounceTimer.Tick += (_, _) =>
         {
-            _debounceTimer.Stop();
+            debounceTimer.Stop();
+            // Stale tick from a timer we have since torn down or replaced.
+            if (!ReferenceEquals(_debounceTimer, debounceTimer)) return;
             RefreshStatus();
         };
+        _debounceTimer = debounceTimer;
 
         try
         {
@@ -186,6 +195,9 @@ public partial class GitStatusControl : UserControl
     private void FallBackToPolling()
     {
         DisposeWatcher();
+        // OnWatcherError can fire repeatedly; without this the previous timer
+        // keeps ticking, rooted by the dispatcher, after the field is replaced.
+        _debounceTimer?.Stop();
 
         var pollTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
         pollTimer.Tick += (_, _) => RefreshStatus();

@@ -23,6 +23,31 @@ public class WorkspaceFile
     /// Id of the group whose projects are visible. Null when no grouping is in use.
     /// </summary>
     public string? ActiveGroupId { get; set; }
+
+    /// <summary>
+    /// When true, a dynamic "Active Projects" group is shown on the right of the meta
+    /// tab bar (only while grouping is in use). It gathers the projects with a live
+    /// agent session, most-recently-active first. On unless a workspace file turns it
+    /// off, including for legacy files that predate the setting.
+    /// </summary>
+    public bool ShowActiveProjectsGroup { get; set; } = true;
+
+    /// <summary>
+    /// How many projects the dynamic "Active Projects" group shows before it stops
+    /// listing them. Legacy files that predate the setting get the default.
+    /// </summary>
+    public int ActiveProjectsLimit { get; set; } = DefaultActiveProjectsLimit;
+
+    public const int DefaultActiveProjectsLimit = 5;
+    public const int MinActiveProjectsLimit = 1;
+    public const int MaxActiveProjectsLimit = 20;
+
+    /// <summary>
+    /// Holds a limit inside the supported range. Guards both workspace files edited by
+    /// hand and free-text entry in the settings dialog.
+    /// </summary>
+    public static int ClampActiveProjectsLimit(int value) =>
+        Math.Clamp(value, MinActiveProjectsLimit, MaxActiveProjectsLimit);
 }
 
 /// <summary>

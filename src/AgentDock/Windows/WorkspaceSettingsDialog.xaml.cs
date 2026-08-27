@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -12,13 +13,25 @@ public partial class WorkspaceSettingsDialog : Window
     {
         public string ThemeId { get; set; } = "";
         public string ToolbarPosition { get; set; } = "Top";
+        public bool ShowActiveProjectsGroup { get; set; }
+        public int ActiveProjectsLimit { get; set; } = WorkspaceFile.DefaultActiveProjectsLimit;
     }
 
     public Result? Outcome { get; private set; }
 
-    private WorkspaceSettingsDialog(string currentThemeId, string currentToolbarPosition)
+    private WorkspaceSettingsDialog(
+        string currentThemeId,
+        string currentToolbarPosition,
+        bool showActiveProjectsGroup,
+        int activeProjectsLimit)
     {
         InitializeComponent();
+
+        ShowActiveProjectsCheck.IsChecked = showActiveProjectsGroup;
+        ActiveProjectsLimitBox.Text =
+            WorkspaceFile.ClampActiveProjectsLimit(activeProjectsLimit).ToString();
+        ActiveProjectsLimitLabel.Text =
+            $"projects shown ({WorkspaceFile.MinActiveProjectsLimit}–{WorkspaceFile.MaxActiveProjectsLimit})";
 
         ThemeCombo.ItemsSource = ThemeRegistry.All;
         ThemeCombo.SelectedItem =
@@ -36,11 +49,23 @@ public partial class WorkspaceSettingsDialog : Window
             ToolbarPositionCombo.SelectedIndex = 0;
     }
 
-    public static Result? Show(Window owner, string currentThemeId, string currentToolbarPosition)
+    public static Result? Show(
+        Window owner,
+        string currentThemeId,
+        string currentToolbarPosition,
+        bool showActiveProjectsGroup,
+        int activeProjectsLimit)
     {
-        var dlg = new WorkspaceSettingsDialog(currentThemeId, currentToolbarPosition) { Owner = owner };
+        var dlg = new WorkspaceSettingsDialog(
+            currentThemeId, currentToolbarPosition, showActiveProjectsGroup, activeProjectsLimit)
+        { Owner = owner };
         return dlg.ShowDialog() == true ? dlg.Outcome : null;
     }
+
+    private static readonly Regex NonDigit = new("[^0-9]", RegexOptions.Compiled);
+
+    private void Digits_PreviewTextInput(object sender, TextCompositionEventArgs e)
+        => e.Handled = NonDigit.IsMatch(e.Text);
 
     private void NavList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -55,10 +80,17 @@ public partial class WorkspaceSettingsDialog : Window
         var theme = ThemeCombo.SelectedItem as ThemeDescriptor ?? ThemeRegistry.Default;
         var toolbar = (ToolbarPositionCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "Top";
 
+        // An empty or out-of-range box falls back to the default rather than blocking OK.
+        var limit = int.TryParse(ActiveProjectsLimitBox.Text, out var parsed)
+            ? WorkspaceFile.ClampActiveProjectsLimit(parsed)
+            : WorkspaceFile.DefaultActiveProjectsLimit;
+
         Outcome = new Result
         {
             ThemeId = theme.Id,
-            ToolbarPosition = toolbar
+            ToolbarPosition = toolbar,
+            ShowActiveProjectsGroup = ShowActiveProjectsCheck.IsChecked == true,
+            ActiveProjectsLimit = limit
         };
         DialogResult = true;
     }

@@ -68,4 +68,11 @@ public class ProjectSettings
     /// Play the Windows "device disconnect" sound when a session ends.
     /// </summary>
     public bool SoundOnSessionEnd { get; set; } = true;
+
+    /// <summary>
+    /// Id of the <see cref="ClaudeAccount"/> last chosen on this project's Start panel,
+    /// so the picker reopens on the same login next time. Null (or an id that no longer
+    /// resolves) falls back to the first configured account.
+    /// </summary>
+    public string? ClaudeAccountId { get; set; }
 }

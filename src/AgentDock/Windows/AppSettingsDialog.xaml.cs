@@ -21,7 +21,9 @@ public partial class AppSettingsDialog : Window
 
     public Result? Outcome { get; private set; }
 
-    private readonly StackPanel[] _sections;
+    // Null until InitializeComponent returns. The nav list's first item is selected in
+    // XAML, so NavList_SelectionChanged fires mid-load, before this is assigned.
+    private readonly StackPanel[]? _sections;
 
     private AppSettingsDialog(
         string currentThemeId,
@@ -81,6 +83,10 @@ public partial class AppSettingsDialog : Window
 
     private void NavList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        // Fires during InitializeComponent for the XAML-selected item; the sections
+        // already have their correct start visibility from XAML, so nothing to do yet.
+        if (_sections == null) return;
+
         if (NavList.SelectedItem is not ListBoxItem item || item.Tag is not string tag)
             return;
 

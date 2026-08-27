@@ -10,6 +10,31 @@
              Background="{DynamicResource ChatBackground}">
     <UserControl.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis" />
+
+        <!-- Rounded chrome shared by every text button in the chat pane. The corner
+             radius is per-style rather than templated because the split Send control
+             needs square inner edges where its two halves meet. -->
+        <ControlTemplate x:Key="ChatButtonChrome" TargetType="Button">
+            <Border x:Name="Chrome"
+                    Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="5"
+                    SnapsToDevicePixels="True">
+                <ContentPresenter Margin="{TemplateBinding Padding}"
+                                  HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+            </Border>
+            <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter TargetName="Chrome" Property="Opacity" Value="0.85" />
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                    <Setter TargetName="Chrome" Property="Opacity" Value="0.7" />
+                </Trigger>
+            </ControlTemplate.Triggers>
+        </ControlTemplate>
+
         <Style x:Key="ChatButtonStyle" TargetType="Button">
             <Setter Property="FontFamily" Value="Cascadia Code, Consolas, Courier New" />
             <Setter Property="FontSize" Value="11" />
@@ -19,12 +44,80 @@
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="Padding" Value="8,4" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Template" Value="{StaticResource ChatButtonChrome}" />
             <Style.Triggers>
                 <Trigger Property="IsEnabled" Value="False">
                     <Setter Property="Opacity" Value="0.35" />
                     <Setter Property="Cursor" Value="Arrow" />
                 </Trigger>
             </Style.Triggers>
+        </Style>
+
+        <!-- Left half of the split Send control: rounded outer edge, square where it
+             butts against the dropdown arrow. -->
+        <Style x:Key="ChatSplitPrimaryStyle" TargetType="Button" BasedOn="{StaticResource ChatButtonStyle}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Chrome"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="1,1,0,1"
+                                CornerRadius="5,0,0,5"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter Margin="{TemplateBinding Padding}"
+                                              HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="Opacity" Value="0.85" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Chrome" Property="Opacity" Value="0.7" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Right half of the split Send control: the dropdown arrow. A one-pixel
+             divider on its left separates it from the primary half. -->
+        <Style x:Key="ChatSplitDropdownStyle" TargetType="Button" BasedOn="{StaticResource ChatButtonStyle}">
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Chrome"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="0,5,5,0"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="Opacity" Value="0.85" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Chrome" Property="Opacity" Value="0.7" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Outline-only danger button (End Session). -->
+        <Style x:Key="ChatDangerButtonStyle" TargetType="Button" BasedOn="{StaticResource ChatButtonStyle}">
+            <Setter Property="Foreground" Value="{DynamicResource ChatDangerForeground}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ChatStopButtonBorderBrush}" />
         </Style>
         <Style x:Key="ChatMarkdownStyle" TargetType="FlowDocument"
                BasedOn="{StaticResource BaseMarkdownStyle}">
@@ -210,6 +303,32 @@
                        Foreground="{DynamicResource ChatTextForeground}"
                        HorizontalAlignment="Center"
                        Margin="0,0,0,20" />
+            <!-- Account / login picker (shown only when accounts are configured) -->
+            <StackPanel x:Name="AccountPickerPanel" Visibility="Collapsed" Margin="0,0,0,16">
+                <TextBlock Text="LOGIN"
+                           FontFamily="Cascadia Code, Consolas, Courier New"
+                           FontSize="10" FontWeight="SemiBold"
+                           Foreground="{DynamicResource ChatMutedForeground}"
+                           Margin="0,0,0,4" />
+                <ComboBox x:Name="AccountCombo"
+                          Height="28"
+                          FontFamily="Cascadia Code, Consolas, Courier New"
+                          FontSize="12"
+                          VerticalContentAlignment="Center"
+                          SelectionChanged="AccountCombo_SelectionChanged">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding DisplayName}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+                <TextBlock Text="Which Claude account this session signs in as. Remembered for this project; fixed once started."
+                           FontFamily="Cascadia Code, Consolas, Courier New"
+                           FontSize="10"
+                           TextWrapping="Wrap"
+                           Foreground="{DynamicResource ChatMutedForeground}"
+                           Margin="0,4,0,0" />
+            </StackPanel>
             <!-- Claude (normal) -->
             <Button x:Name="StartNormalButton"
                     Click="StartNormal_Click"
@@ -279,38 +398,9 @@
         <!-- Chat area (shown when session is active) -->
         <DockPanel x:Name="ChatPanel" Visibility="Collapsed">
 
-            <!-- Status bar at top -->
-            <Border DockPanel.Dock="Top" Background="{DynamicResource ChatStatusBarBackground}" Padding="8,4">
-                <DockPanel>
-                    <TextBlock x:Name="DangerIcon"
-                               Text="⚠"
-                               FontSize="12"
-                               Foreground="{DynamicResource ChatDangerForeground}"
-                               VerticalAlignment="Center"
-                               Margin="0,0,4,0"
-                               ToolTip="Dangerous mode — all permissions auto-approved"
-                               Visibility="Collapsed" />
-                    <TextBlock x:Name="StatusText"
-                               Text="Initializing..."
-                               FontFamily="Cascadia Code, Consolas, Courier New"
-                               FontSize="11"
-                               Foreground="{DynamicResource ChatMutedForeground}"
-                               VerticalAlignment="Center" />
-                    <Button x:Name="StopButton"
-                            Content="Stop"
-                            Click="Stop_Click"
-                            DockPanel.Dock="Right"
-                            HorizontalAlignment="Right"
-                            FontFamily="Cascadia Code, Consolas, Courier New"
-                            FontSize="10"
-                            Foreground="{DynamicResource ChatDangerForeground}"
-                            Background="Transparent"
-                            BorderBrush="{DynamicResource ChatStopButtonBorderBrush}"
-                            BorderThickness="1"
-                            Cursor="Hand"
-                            Padding="8,2" />
-                </DockPanel>
-            </Border>
+            <!-- Session status (Idle / Working / danger mode) is surfaced in the dock
+                 panel's own title bar alongside cost and tokens — see
+                 MainWindow.UpdateAiChatTitle — so the chat pane has no status strip. -->
 
             <!-- Permission prompt (replaces input when permission needed) -->
             <Border x:Name="PermissionPanel"
@@ -349,14 +439,10 @@
                                 Margin="0,0,6,0" />
                         <Button Content="Deny"
                                 Click="PermissionDeny_Click"
-                                FontFamily="Cascadia Code, Consolas, Courier New"
-                                FontSize="11"
+                                Style="{StaticResource ChatButtonStyle}"
                                 Foreground="{DynamicResource ChatDangerForeground}"
                                 Background="{DynamicResource ChatDangerBackground}"
                                 BorderBrush="{DynamicResource ChatStopButtonBorderBrush}"
-                                BorderThickness="1"
-                                Cursor="Hand"
-                                Padding="8,4"
                                 Width="80" Height="28" />
                     </StackPanel>
                 </StackPanel>
@@ -387,14 +473,11 @@
                         <Button Content="Send"
                                 Click="QuestionCustomSend_Click"
                                 DockPanel.Dock="Right"
-                                FontFamily="Cascadia Code, Consolas, Courier New"
+                                Style="{StaticResource ChatButtonStyle}"
                                 FontSize="10"
                                 Foreground="{DynamicResource ChatTextForeground}"
                                 Background="{DynamicResource ChatOptionButtonBackground}"
                                 BorderBrush="{DynamicResource ChatQuestionBorderBrush}"
-                                BorderThickness="1"
-                                Cursor="Hand"
-                                Padding="8,4"
                                 Height="26"
                                 Margin="6,0,0,0" />
                         <TextBox x:Name="QuestionCustomInput"
@@ -406,7 +489,12 @@
                                  BorderBrush="{DynamicResource ChatInputBorderBrush}"
                                  BorderThickness="1"
                                  Padding="4,3"
-                                 ToolTip="Type a custom response"
+                                 AcceptsReturn="True"
+                                 TextWrapping="Wrap"
+                                 MaxHeight="120"
+                                 VerticalScrollBarVisibility="Auto"
+                                 VerticalContentAlignment="Top"
+                                 ToolTip="Type a custom response (Enter to send, Shift+Enter for a new line)"
                                  KeyDown="QuestionCustomInput_KeyDown" />
                     </DockPanel>
                 </StackPanel>
@@ -488,42 +576,41 @@
                     </ItemsControl.ItemsPanel>
                 </ItemsControl>
                 <DockPanel>
-                    <Button x:Name="SendButton"
-                            Content="Send"
-                            Click="Send_Click"
-                            DockPanel.Dock="Right"
-                            VerticalAlignment="Bottom"
-                            Style="{StaticResource ChatButtonStyle}"
-                            Width="60" Height="28"
-                            Margin="6,0,0,0"
-                            ToolTip="Send now, or — while Claude is working — queue to run after the current task (Enter)" />
-                    <Button x:Name="ScheduleButton"
-                            Click="ScheduleButton_Click"
-                            DockPanel.Dock="Right"
-                            VerticalAlignment="Bottom"
-                            Style="{StaticResource ChatButtonStyle}"
-                            Width="32" Height="28"
-                            Margin="6,0,0,0"
-                            ToolTip="Schedule this message to send later">
-                        <TextBlock x:Name="ScheduleIcon"
-                                   Text="&#xE823;"
-                                   FontFamily="Segoe MDL2 Assets"
-                                   FontSize="14" />
-                    </Button>
-                    <Button x:Name="CancelButton"
-                            Click="CancelButton_Click"
-                            DockPanel.Dock="Right"
-                            VerticalAlignment="Bottom"
-                            IsEnabled="False"
-                            Style="{StaticResource ChatButtonStyle}"
-                            Width="32" Height="28"
-                            Margin="6,0,0,0"
-                            ToolTip="Clear the message and remove any attachments">
-                        <TextBlock Text="&#xE74D;"
-                                   FontFamily="Segoe MDL2 Assets"
-                                   FontSize="14"
-                                   Foreground="{DynamicResource ChatDangerForeground}" />
-                    </Button>
+                    <!-- Action column, full-width so both controls line up. End Session
+                         sits above Send so the primary action keeps the conventional
+                         bottom-right corner. -->
+                    <StackPanel DockPanel.Dock="Right"
+                                VerticalAlignment="Bottom"
+                                Width="118"
+                                Margin="6,0,0,0">
+                        <Button x:Name="EndSessionButton"
+                                Content="End Session"
+                                Click="EndSession_Click"
+                                Style="{StaticResource ChatDangerButtonStyle}"
+                                FontSize="10"
+                                Height="24"
+                                Margin="0,0,0,6"
+                                ToolTip="Stop the Claude process and return to the agent picker" />
+                        <!-- Split button: clicking sends, the arrow offers Schedule. -->
+                        <DockPanel Height="28">
+                            <Button x:Name="SendMenuButton"
+                                    DockPanel.Dock="Right"
+                                    Click="SendMenu_Click"
+                                    Style="{StaticResource ChatSplitDropdownStyle}"
+                                    Width="22"
+                                    ToolTip="More send options">
+                                <TextBlock x:Name="SendMenuIcon"
+                                           Text="&#xE70D;"
+                                           FontFamily="Segoe MDL2 Assets"
+                                           FontSize="10" />
+                            </Button>
+                            <Button x:Name="SendButton"
+                                    Content="Send"
+                                    Click="Send_Click"
+                                    Style="{StaticResource ChatSplitPrimaryStyle}"
+                                    ToolTip="Send now, or — while Claude is working — queue to run after the current task (Enter)" />
+                        </DockPanel>
+                    </StackPanel>
                     <Popup x:Name="SlashCommandPopup"
                            PlacementTarget="{Binding ElementName=InputBox}"
                            Placement="Top"
@@ -565,63 +652,91 @@
                             </ListBox>
                         </Border>
                     </Popup>
-                    <Border x:Name="InputBorder"
-                            Background="{DynamicResource ChatInputBackground}"
-                            BorderBrush="{DynamicResource ChatInputBorderBrush}"
-                            BorderThickness="1"
-                            VerticalAlignment="Bottom"
-                            MouseLeftButtonDown="InputBorder_MouseLeftButtonDown">
-                        <DockPanel LastChildFill="True">
-                            <Button x:Name="PromptMenuButton"
-                                    DockPanel.Dock="Left"
-                                    Click="PromptMenu_Click"
-                                    Background="Transparent"
-                                    BorderThickness="0"
-                                    Cursor="Hand"
-                                    Padding="0"
-                                    VerticalAlignment="Top"
-                                    Margin="6,4,4,0"
-                                    ToolTip="Commands">
-                                <TextBlock Text=">"
-                                           FontFamily="Cascadia Code, Consolas, Courier New"
-                                           FontSize="12" FontWeight="Bold"
-                                           Foreground="{DynamicResource ChatInputPromptForeground}" />
-                            </Button>
-                            <Button x:Name="MicButton"
-                                    DockPanel.Dock="Right"
-                                    Click="MicButton_Click"
-                                    Background="Transparent"
-                                    BorderThickness="0"
-                                    Cursor="Hand"
-                                    Padding="0"
-                                    VerticalAlignment="Bottom"
-                                    Margin="4,0,6,4"
-                                    ToolTip="Start dictation">
-                                <TextBlock x:Name="MicIcon"
-                                           Text="&#xE720;"
-                                           FontFamily="Segoe MDL2 Assets"
-                                           FontSize="14"
-                                           Foreground="{DynamicResource ChatMutedForeground}" />
-                            </Button>
-                            <TextBox x:Name="InputBox"
-                                     FontFamily="Cascadia Code, Consolas, Courier New"
-                                     FontSize="12"
-                                     Foreground="{DynamicResource ChatInputForeground}"
-                                     Background="Transparent"
-                                     CaretBrush="{DynamicResource ChatInputForeground}"
-                                     BorderThickness="0"
-                                     Padding="0,4,6,4"
-                                     AcceptsReturn="True"
-                                     TextWrapping="Wrap"
-                                     VerticalScrollBarVisibility="Auto"
-                                     MaxHeight="120"
-                                     MinHeight="52"
-                                     KeyDown="InputBox_KeyDown"
-                                     PreviewKeyDown="InputBox_PreviewKeyDown"
-                                     TextChanged="InputBox_TextChanged"
-                                     VerticalContentAlignment="Top" />
-                        </DockPanel>
-                    </Border>
+                    <!-- The composer proper. The clear (✕) affordance floats over the
+                         top-right of the box on hover instead of taking a slot in the
+                         button column. -->
+                    <Grid x:Name="InputArea"
+                          VerticalAlignment="Bottom"
+                          MouseEnter="InputArea_MouseChanged"
+                          MouseLeave="InputArea_MouseChanged">
+                        <Border x:Name="InputBorder"
+                                Background="{DynamicResource ChatInputBackground}"
+                                BorderBrush="{DynamicResource ChatInputBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="5"
+                                MouseLeftButtonDown="InputBorder_MouseLeftButtonDown">
+                            <DockPanel LastChildFill="True">
+                                <Button x:Name="PromptMenuButton"
+                                        DockPanel.Dock="Left"
+                                        Click="PromptMenu_Click"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        Cursor="Hand"
+                                        Padding="0"
+                                        VerticalAlignment="Top"
+                                        Margin="6,4,4,0"
+                                        ToolTip="Commands">
+                                    <TextBlock Text=">"
+                                               FontFamily="Cascadia Code, Consolas, Courier New"
+                                               FontSize="12" FontWeight="Bold"
+                                               Foreground="{DynamicResource ChatInputPromptForeground}" />
+                                </Button>
+                                <TextBox x:Name="InputBox"
+                                         FontFamily="Cascadia Code, Consolas, Courier New"
+                                         FontSize="12"
+                                         Foreground="{DynamicResource ChatInputForeground}"
+                                         Background="Transparent"
+                                         CaretBrush="{DynamicResource ChatInputForeground}"
+                                         BorderThickness="0"
+                                         Padding="0,4,4,4"
+                                         AcceptsReturn="True"
+                                         TextWrapping="Wrap"
+                                         VerticalScrollBarVisibility="Auto"
+                                         MaxHeight="120"
+                                         MinHeight="52"
+                                         KeyDown="InputBox_KeyDown"
+                                         PreviewKeyDown="InputBox_PreviewKeyDown"
+                                         TextChanged="InputBox_TextChanged"
+                                         VerticalContentAlignment="Top" />
+                            </DockPanel>
+                        </Border>
+                        <Button x:Name="ClearInputButton"
+                                Click="ClearInput_Click"
+                                HorizontalAlignment="Right"
+                                VerticalAlignment="Top"
+                                Visibility="Collapsed"
+                                Background="{DynamicResource ChatInputBackground}"
+                                BorderThickness="0"
+                                Cursor="Hand"
+                                Padding="0"
+                                Width="16" Height="16"
+                                Margin="0,3,3,0"
+                                ToolTip="Clear the message and remove any attachments">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="Chrome"
+                                            Background="{TemplateBinding Background}"
+                                            CornerRadius="8"
+                                            Opacity="0.85">
+                                        <TextBlock x:Name="Glyph"
+                                                   Text="&#xE711;"
+                                                   FontFamily="Segoe MDL2 Assets"
+                                                   FontSize="10"
+                                                   HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource ChatMutedForeground}" />
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="Chrome" Property="Opacity" Value="1" />
+                                            <Setter TargetName="Glyph" Property="Foreground"
+                                                    Value="{DynamicResource ChatDangerForeground}" />
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                    </Grid>
                 </DockPanel>
                 </StackPanel>
             </Border>
@@ -879,25 +994,16 @@
                                     <Button Content="Wait longer"
                                             Click="InactivityWait_Click"
                                             Tag="{Binding}"
-                                            Cursor="Hand"
-                                            FontFamily="Cascadia Code, Consolas, Courier New"
-                                            FontSize="11"
-                                            Background="{DynamicResource ChatButtonBackground}"
-                                            Foreground="{DynamicResource ChatButtonForeground}"
-                                            BorderBrush="{DynamicResource ChatButtonBorderBrush}"
-                                            BorderThickness="1"
+                                            Style="{StaticResource ChatButtonStyle}"
                                             Padding="10,4"
                                             Margin="0,0,8,0" />
                                     <Button Content="Kill process"
                                             Click="InactivityKill_Click"
                                             Tag="{Binding}"
-                                            Cursor="Hand"
-                                            FontFamily="Cascadia Code, Consolas, Courier New"
-                                            FontSize="11"
+                                            Style="{StaticResource ChatButtonStyle}"
                                             Background="{DynamicResource ChatKillButtonBackground}"
                                             Foreground="{DynamicResource ChatDangerForeground}"
                                             BorderBrush="{DynamicResource ChatKillButtonBorderBrush}"
-                                            BorderThickness="1"
                                             Padding="10,4" />
                                 </StackPanel>
                             </StackPanel>
