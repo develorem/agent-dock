@@ -2,6 +2,8 @@ using System.Windows;
 using System.Windows.Input;
 using AgentDock.Services;
 
+using AgentDock.Services.Abstractions;
+
 namespace AgentDock.Windows;
 
 public partial class UpdateDialog : Window
@@ -9,8 +11,17 @@ public partial class UpdateDialog : Window
     private readonly UpdateInfo _updateInfo;
     private CancellationTokenSource? _downloadCts;
 
-    public UpdateDialog(Window owner, UpdateInfo updateInfo)
+    private readonly IMarkdownRenderer _markdown;
+    private readonly IUpdateCheckService _updateCheck;
+
+    public UpdateDialog(
+        Window owner,
+        UpdateInfo updateInfo,
+        IMarkdownRenderer markdown,
+        IUpdateCheckService updateCheck)
     {
+        _markdown = markdown;
+        _updateCheck = updateCheck;
         InitializeComponent();
         Owner = owner;
         _updateInfo = updateInfo;
@@ -20,8 +31,8 @@ public partial class UpdateDialog : Window
 
         if (!string.IsNullOrWhiteSpace(updateInfo.Notes))
         {
-            var notes = MarkdownHelper.StripLeadingVersionHeading(updateInfo.Notes);
-            MarkdownHelper.RenderTo(NotesViewer, notes);
+            var notes = MarkdownRenderer.StripLeadingVersionHeading(updateInfo.Notes);
+            _markdown.RenderTo(NotesViewer, notes);
             NotesPanel.Visibility = Visibility.Visible;
         }
     }
@@ -47,7 +58,7 @@ public partial class UpdateDialog : Window
                 : "Download complete. Installing...";
         });
 
-        var installerPath = await UpdateCheckService.DownloadInstallerAsync(
+        var installerPath = await _updateCheck.DownloadInstallerAsync(
             _updateInfo.DownloadUrl, progress, _downloadCts.Token);
 
         if (installerPath == null)
@@ -59,7 +70,7 @@ public partial class UpdateDialog : Window
             return;
         }
 
-        UpdateCheckService.LaunchUpdateAndShutdown(installerPath);
+        _updateCheck.LaunchUpdateAndShutdown(installerPath);
     }
 
     private void LaterButton_Click(object sender, RoutedEventArgs e)

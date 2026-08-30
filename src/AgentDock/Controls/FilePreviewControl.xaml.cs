@@ -5,6 +5,8 @@ using System.Windows.Media.Imaging;
 using AgentDock.Models;
 using AgentDock.Services;
 
+using AgentDock.Services.Abstractions;
+
 namespace AgentDock.Controls;
 
 public partial class FilePreviewControl : UserControl
@@ -47,23 +49,31 @@ public partial class FilePreviewControl : UserControl
     public event Action<string>? RevealInExplorerRequested;
 
     // Stored so it can be detached in Cleanup — a lambda subscription to the
-    // static ThemeManager.ThemeChanged would root this control (and the AvalonEdit
+    // static _theme.ThemeChanged would root this control (and the AvalonEdit
     // editor + any cached preview) for the whole app lifetime after project close.
     private readonly Action<ThemeDescriptor> _themeChangedHandler;
 
-    public FilePreviewControl()
+    private readonly IMarkdownRenderer _markdown;
+    private readonly IThemeService _theme;
+
+    public FilePreviewControl(
+        IMarkdownRenderer markdown,
+        IThemeService theme)
     {
+        _markdown = markdown;
+        _theme = theme;
+
         InitializeComponent();
         ApplyLinkColor();
         _themeChangedHandler = _ => OnThemeChanged();
-        ThemeManager.ThemeChanged += _themeChangedHandler;
+        _theme.ThemeChanged += _themeChangedHandler;
     }
 
     /// <summary>Detaches the theme handler so this control can be GC'd after its
     /// project is closed. Call from the project-removal path.</summary>
     public void Cleanup()
     {
-        ThemeManager.ThemeChanged -= _themeChangedHandler;
+        _theme.ThemeChanged -= _themeChangedHandler;
     }
 
     private void OnThemeChanged()
@@ -77,7 +87,7 @@ public partial class FilePreviewControl : UserControl
             && _diffColorizer == null
             && !JsonExtensions.Contains(_currentExtension))
         {
-            TextPreview.SyntaxHighlighting = ThemeManager.GetHighlighting(_currentExtension);
+            TextPreview.SyntaxHighlighting = _theme.GetHighlighting(_currentExtension);
         }
 
         TextPreview.TextArea.TextView.Redraw();
@@ -87,14 +97,14 @@ public partial class FilePreviewControl : UserControl
         {
             var md = MarkdownPreview.Markdown;
             MarkdownPreview.Markdown = "";
-            MarkdownHelper.RenderTo(MarkdownPreview, md);
+            _markdown.RenderTo(MarkdownPreview, md);
         }
     }
 
     private void ApplyLinkColor()
     {
         TextPreview.TextArea.TextView.LinkTextForegroundBrush =
-            ThemeManager.GetBrush("PreviewLinkForeground");
+            _theme.GetBrush("PreviewLinkForeground");
     }
 
     private MarkdownLinkColorizer? _linkColorizer;
@@ -142,6 +152,8 @@ public partial class FilePreviewControl : UserControl
 
     public void ShowFile(string filePath)
     {
+        if (TryShowRemoteFile(filePath)) return;
+
         HideAll();
         ClosePreviewButton.Visibility = Visibility.Visible;
 
@@ -175,6 +187,9 @@ public partial class FilePreviewControl : UserControl
 
     public void ShowDiff(string filePath, string diffContent)
     {
+        // A remote diff is fetched by path; the caller has no content to hand us.
+        if (IsRemote && string.IsNullOrEmpty(diffContent)) { TryShowRemoteDiff(filePath, staged: false); return; }
+
         HideAll();
         ClosePreviewButton.Visibility = Visibility.Visible;
 
@@ -230,7 +245,7 @@ public partial class FilePreviewControl : UserControl
 
             // Load into AvalonEdit for source view
             TextPreview.Load(filePath);
-            TextPreview.SyntaxHighlighting = ThemeManager.GetHighlighting(extension);
+            TextPreview.SyntaxHighlighting = _theme.GetHighlighting(extension);
             ApplyMarkdownLinkColorizer(extension);
             TextPreview.ScrollToHome();
 
@@ -247,7 +262,7 @@ public partial class FilePreviewControl : UserControl
             else
             {
                 // Render markdown preview
-                MarkdownHelper.RenderTo(MarkdownPreview, markdownText);
+                _markdown.RenderTo(MarkdownPreview, markdownText);
                 MarkdownPreview.Visibility = Visibility.Visible;
 
                 _isMarkdownRendered = true;
@@ -277,9 +292,9 @@ public partial class FilePreviewControl : UserControl
         {
             // Switch to rendered view — render on demand if not yet loaded
             if (string.IsNullOrEmpty(MarkdownPreview.Markdown))
-                MarkdownHelper.RenderTo(MarkdownPreview, TextPreview.Text);
+                _markdown.RenderTo(MarkdownPreview, TextPreview.Text);
             else
-                MarkdownHelper.ApplyCodeBlockTheme(MarkdownPreview.Document);
+                _markdown.ApplyCodeBlockTheme(MarkdownPreview.Document);
             TextPreview.Visibility = Visibility.Collapsed;
             MarkdownPreview.Visibility = Visibility.Visible;
             _isMarkdownRendered = true;
@@ -337,7 +352,7 @@ public partial class FilePreviewControl : UserControl
             // so colors stay theme-aware in both dark and light modes.
             TextPreview.SyntaxHighlighting = JsonExtensions.Contains(extension)
                 ? null
-                : ThemeManager.GetHighlighting(extension);
+                : _theme.GetHighlighting(extension);
             ApplyMarkdownLinkColorizer(extension);
             ApplyJsonColorizer(extension);
             TextPreview.ScrollToHome();

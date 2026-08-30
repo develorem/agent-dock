@@ -13,7 +13,8 @@
 
         <!-- Toolbar: settings + font size buttons -->
         <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,6">
-            <Button Click="SettingsButton_Click"
+            <Button x:Name="SettingsButton"
+                    Click="SettingsButton_Click"
                     ToolTip="Edit in Project Settings"
                     Background="Transparent"
                     BorderThickness="0"

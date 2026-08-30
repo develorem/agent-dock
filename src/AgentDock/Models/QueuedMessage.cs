@@ -24,6 +24,16 @@ public sealed class QueuedMessage : INotifyPropertyChanged
 {
     public Guid Id { get; } = Guid.NewGuid();
 
+    /// <summary>
+    /// The chat bubble id to use when this message is eventually dispatched.
+    ///
+    /// Set only for messages that arrived from a remote client: that client already rendered
+    /// the bubble optimistically under an id it generated, and de-duplicates the echo by id.
+    /// Without carrying it through the queue, a message the server had to queue would come
+    /// back under a fresh id and appear twice on the client.
+    /// </summary>
+    public Guid? BubbleId { get; init; }
+
     public required string Text { get; init; }
 
     /// <summary>Image payloads to send with the message; empty for text-only.</summary>

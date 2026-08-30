@@ -9,12 +9,14 @@ using System.Windows.Media;
 using ICSharpCode.AvalonEdit;
 using MdXaml;
 
+using AgentDock.Services.Abstractions;
+
 namespace AgentDock.Services;
 
 /// <summary>
 /// Shared markdown helpers used by both AI chat and file preview.
 /// </summary>
-public static partial class MarkdownHelper
+public sealed partial class MarkdownRenderer(ILogService log, IPerfDiagnostics perf, IThemeService theme) : IMarkdownRenderer
 {
     // **[text](url)** → [**text**](url)
     [GeneratedRegex(@"\*\*\[([^\]]+)\]\(([^)]+)\)\*\*")]
@@ -190,12 +192,12 @@ public static partial class MarkdownHelper
     /// MdXaml renders these as BlockUIContainer containing an AvalonEdit TextEditor
     /// with default (white) colors.
     /// </summary>
-    public static void ApplyCodeBlockTheme(FlowDocument? doc)
+    public void ApplyCodeBlockTheme(FlowDocument? doc)
     {
         if (doc == null) return;
 
-        var codeBg = ThemeManager.GetBrush("MarkdownCodeBackground");
-        var codeFg = ThemeManager.GetBrush("PreviewForeground");
+        var codeBg = theme.GetBrush("MarkdownCodeBackground");
+        var codeFg = theme.GetBrush("PreviewForeground");
 
         foreach (var block in doc.Blocks)
             ApplyCodeBlockStyle(block, codeBg, codeFg);
@@ -205,7 +207,7 @@ public static partial class MarkdownHelper
     /// Convenience method: pre-processes markdown, sets it on the viewer,
     /// then applies code block theming.
     /// </summary>
-    public static void RenderTo(MarkdownScrollViewer viewer, string markdown)
+    public void RenderTo(MarkdownScrollViewer viewer, string markdown)
     {
         viewer.Markdown = PreProcess(markdown);
         ApplyCodeBlockTheme(viewer.Document);
@@ -227,7 +229,7 @@ public static partial class MarkdownHelper
     /// Pass the same style the live viewer uses so the cached document renders identically.</param>
     /// <param name="projectPath">Project root for path-link resolution. Pass empty to skip.</param>
     /// <param name="onFileLinkClicked">Click handler for resolved file references in the rendered document.</param>
-    public static FlowDocument BuildDocument(
+    public FlowDocument BuildDocument(
         string markdown,
         System.Windows.Style? markdownStyle,
         string projectPath,
@@ -237,8 +239,8 @@ public static partial class MarkdownHelper
         // TextEditor per code block + table→Grid conversion) on the UI thread at
         // every turn finalize, for every session including background tabs — a
         // prime source of multi-hundred-ms UI freezes. Time it and count it.
-        PerfDiagnostics.MarkdownBuildDelta(1);
-        using var _ = PerfDiagnostics.Time("MarkdownHelper.BuildDocument", thresholdMs: 80);
+        perf.MarkdownBuildDelta(1);
+        using var _ = perf.Time("MarkdownRenderer.BuildDocument", thresholdMs: 80);
         try
         {
             var linkified = LinkifyPaths(markdown, projectPath);
@@ -264,7 +266,7 @@ public static partial class MarkdownHelper
         }
         finally
         {
-            PerfDiagnostics.MarkdownBuildDelta(-1);
+            perf.MarkdownBuildDelta(-1);
         }
     }
 
@@ -275,7 +277,7 @@ public static partial class MarkdownHelper
     /// (if unformatted) text instead of re-throwing on every realize. Touches no PTS table
     /// code and re-parents no inlines — the two paths that have caused render failures.
     /// </summary>
-    public static FlowDocument BuildPlainTextFallback(string text, System.Windows.Style? markdownStyle)
+    public FlowDocument BuildPlainTextFallback(string text, System.Windows.Style? markdownStyle)
     {
         var doc = new FlowDocument();
         if (markdownStyle != null) doc.Style = markdownStyle;
@@ -296,13 +298,13 @@ public static partial class MarkdownHelper
     /// a <see cref="BlockUIContainer"/> lays out through the normal WPF layout system (the
     /// same path the AvalonEdit code blocks already use) and never touches PTS table code.
     /// </summary>
-    public static void ConvertTablesToGrids(FlowDocument? doc)
+    public void ConvertTablesToGrids(FlowDocument? doc)
     {
         if (doc == null) return;
         ConvertTablesInBlocks(doc.Blocks, doc.Foreground);
     }
 
-    private static void ConvertTablesInBlocks(BlockCollection blocks, Brush foreground)
+    private void ConvertTablesInBlocks(BlockCollection blocks, Brush foreground)
     {
         // Snapshot first: we mutate the collection (insert/remove) while walking it.
         foreach (var block in blocks.ToList())
@@ -325,7 +327,7 @@ public static partial class MarkdownHelper
         }
     }
 
-    private static FrameworkElement BuildTableGrid(Table table, Brush foreground)
+    private FrameworkElement BuildTableGrid(Table table, Brush foreground)
     {
         var rows = table.RowGroups
             .SelectMany(rg => rg.Rows.Select(row => (row, isHeader: (rg.Tag as string) == "TableHeader")))
@@ -389,7 +391,7 @@ public static partial class MarkdownHelper
     // Wraps the table Grid in a vertical stack with a small right-aligned "Copy table"
     // button above it. The outer margin moves from the grid to the wrapper so the button
     // bar and table read as one block.
-    private static FrameworkElement WrapTableWithCopyBar(Grid tableGrid, string[][] textGrid, Brush foreground)
+    private FrameworkElement WrapTableWithCopyBar(Grid tableGrid, string[][] textGrid, Brush foreground)
     {
         var outerMargin = tableGrid.Margin;
         tableGrid.Margin = new Thickness(0);
@@ -414,7 +416,7 @@ public static partial class MarkdownHelper
     // A compact, theme-aware "Copy table" affordance rendered as a bordered Border (rather
     // than a Button, to avoid the default WPF button chrome clashing with the chat surface).
     // Hover highlights it; clicking copies the whole table and flashes a "Copied!" confirmation.
-    private static Border BuildTableCopyButton(string[][] textGrid)
+    private Border BuildTableCopyButton(string[][] textGrid)
     {
         var glyph = new TextBlock
         {
@@ -481,7 +483,7 @@ public static partial class MarkdownHelper
 
     // Briefly swaps the copy button to a checkmark + "Copied!" so the click has visible
     // feedback, then reverts after a short delay.
-    private static void FlashCopied(TextBlock glyph, TextBlock label)
+    private void FlashCopied(TextBlock glyph, TextBlock label)
     {
         var originalGlyph = glyph.Text;
         var originalLabel = label.Text;
@@ -502,7 +504,7 @@ public static partial class MarkdownHelper
     }
 
     // Right-click menu for a rendered table: copies the whole table to the clipboard.
-    private static ContextMenu BuildTableContextMenu(string[][] textGrid)
+    private ContextMenu BuildTableContextMenu(string[][] textGrid)
     {
         var menu = new ContextMenu();
         var copyItem = new MenuItem { Header = "Copy table" };
@@ -514,7 +516,7 @@ public static partial class MarkdownHelper
     // Concatenates a cell's block plain text, joining multiple blocks with a space so
     // the result stays on one logical line (newlines inside a cell would break the
     // TSV row/column grid Excel reconstructs).
-    private static string GetCellPlainText(TableCell cell)
+    private string GetCellPlainText(TableCell cell)
     {
         var sb = new StringBuilder();
         foreach (var block in cell.Blocks)
@@ -531,7 +533,7 @@ public static partial class MarkdownHelper
     /// like Word keep the grid). Tabs / newlines inside a cell are collapsed to spaces
     /// so the column alignment survives.
     /// </summary>
-    private static void CopyTableToClipboard(string[][] textGrid)
+    private void CopyTableToClipboard(string[][] textGrid)
     {
         var tsv = new StringBuilder();
         foreach (var row in textGrid)
@@ -557,18 +559,18 @@ public static partial class MarkdownHelper
         {
             // The clipboard can be transiently locked by another process; a failed copy
             // shouldn't take down the chat.
-            Log.Error("Failed to copy table to clipboard", ex);
+            log.Error("Failed to copy table to clipboard", ex);
         }
     }
 
     // Collapses the characters that define TSV structure (tab / CR / LF) to spaces so a
     // multi-line or tab-containing cell can't shift the grid Excel parses.
-    private static string CleanTsvCell(string cell)
+    private string CleanTsvCell(string cell)
         => cell.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');
 
     // Builds a CF_HTML clipboard payload (the byte-offset header WPF/Windows require)
     // wrapping an HTML <table> of the cell text.
-    private static string BuildHtmlClipboard(string[][] textGrid)
+    private string BuildHtmlClipboard(string[][] textGrid)
     {
         var body = new StringBuilder();
         body.Append("<table border=\"1\" cellspacing=\"0\" cellpadding=\"4\">");
@@ -587,7 +589,7 @@ public static partial class MarkdownHelper
     // offsets of the document and fragment, followed by the markup. Offsets are
     // computed in bytes (UTF-8) per the spec; the header uses fixed-width 8-digit
     // fields so its own length is constant and doesn't perturb the offsets.
-    private static string WrapCfHtml(string fragment)
+    private string WrapCfHtml(string fragment)
     {
         const string header =
             "Version:0.9\r\nStartHTML:{0:00000000}\r\nEndHTML:{1:00000000}\r\n"
@@ -606,7 +608,7 @@ public static partial class MarkdownHelper
             + preFragment + fragment + postFragment;
     }
 
-    private static Border BuildCellBorder(TableCell cell, bool isHeader, bool isEvenRow, string[][] textGrid, Brush foreground)
+    private Border BuildCellBorder(TableCell cell, bool isHeader, bool isEvenRow, string[][] textGrid, Brush foreground)
     {
         var border = new Border
         {
@@ -634,7 +636,7 @@ public static partial class MarkdownHelper
     /// FlowDocument (the document-wide selection can't reach into it), so the cell's
     /// context menu also offers "Copy table" for a whole-table copy.
     /// </summary>
-    private static RichTextBox BuildCellContent(TableCell cell, bool isHeader, string[][] textGrid, Brush foreground)
+    private RichTextBox BuildCellContent(TableCell cell, bool isHeader, string[][] textGrid, Brush foreground)
     {
         var paragraph = new Paragraph { Margin = new Thickness(0) };
         if (isHeader) paragraph.FontWeight = FontWeights.Bold;
@@ -672,7 +674,7 @@ public static partial class MarkdownHelper
 
     // Right-click menu for a table cell: "Copy" (the current selection, via the standard
     // editing command routed to the focused RichTextBox) and "Copy table" (the whole grid).
-    private static ContextMenu BuildCellContextMenu(string[][] textGrid)
+    private ContextMenu BuildCellContextMenu(string[][] textGrid)
     {
         var menu = new ContextMenu();
         menu.Items.Add(new MenuItem { Header = "Copy", Command = ApplicationCommands.Copy });
@@ -688,7 +690,7 @@ public static partial class MarkdownHelper
     /// and wired hyperlink handlers survive the move. Non-paragraph blocks are flattened to
     /// plain text — GFM cells are inline-only, so that path is a defensive fallback.
     /// </summary>
-    private static void PopulateCellParagraph(TableCell cell, Paragraph target)
+    private void PopulateCellParagraph(TableCell cell, Paragraph target)
     {
         var first = true;
         // Snapshot first: moving a paragraph's inlines into the target mutates the source
@@ -723,7 +725,7 @@ public static partial class MarkdownHelper
         }
     }
 
-    private static string GetBlockPlainText(Block block)
+    private string GetBlockPlainText(Block block)
     {
         var sb = new StringBuilder();
         switch (block)
@@ -742,7 +744,7 @@ public static partial class MarkdownHelper
         return sb.ToString();
     }
 
-    private static void AppendInlineText(InlineCollection inlines, StringBuilder sb)
+    private void AppendInlineText(InlineCollection inlines, StringBuilder sb)
     {
         foreach (var inl in inlines)
         {
@@ -755,7 +757,7 @@ public static partial class MarkdownHelper
         }
     }
 
-    private static void ApplyCodeBlockStyle(
+    private void ApplyCodeBlockStyle(
         Block block, System.Windows.Media.Brush bg, System.Windows.Media.Brush fg)
     {
         if (block is BlockUIContainer container && container.Child is TextEditor editor)
@@ -914,7 +916,7 @@ public static partial class MarkdownHelper
     /// <c>mailto</c> links open in the system browser. File links are wired only when
     /// <paramref name="onFileClick"/> is supplied.
     /// </summary>
-    public static void WireLinks(FlowDocument? doc, Action<string>? onFileClick)
+    public void WireLinks(FlowDocument? doc, Action<string>? onFileClick)
     {
         if (doc == null) return;
         foreach (var link in EnumerateHyperlinks(doc))
@@ -966,7 +968,7 @@ public static partial class MarkdownHelper
     // its viewers on container recycling) don't stack duplicate handlers.
     private static readonly DependencyProperty MarkdownCopyHookedProperty =
         DependencyProperty.RegisterAttached(
-            "MarkdownCopyHooked", typeof(bool), typeof(MarkdownHelper), new PropertyMetadata(false));
+            "MarkdownCopyHooked", typeof(bool), typeof(MarkdownRenderer), new PropertyMetadata(false));
 
     /// <summary>
     /// Makes copying from <paramref name="host"/> (a <see cref="FlowDocumentScrollViewer"/>
@@ -981,14 +983,14 @@ public static partial class MarkdownHelper
     /// so a selection this code can't place a link within falls through to the stock copy
     /// rather than being mangled.
     /// </summary>
-    public static void EnableMarkdownLinkCopy(DependencyObject? host)
+    public void EnableMarkdownLinkCopy(DependencyObject? host)
     {
         if (host == null || (bool)host.GetValue(MarkdownCopyHookedProperty)) return;
         host.SetValue(MarkdownCopyHookedProperty, true);
         DataObject.AddCopyingHandler(host, OnCopyingMarkdownText);
     }
 
-    private static void OnCopyingMarkdownText(object sender, DataObjectCopyingEventArgs e)
+    private void OnCopyingMarkdownText(object sender, DataObjectCopyingEventArgs e)
     {
         if (e.IsDragDrop) return;
         try
@@ -1010,7 +1012,7 @@ public static partial class MarkdownHelper
         {
             // A failed rewrite must never block the copy — the stock flavours are already
             // on the DataObject at this point, so bailing out just means plain text.
-            Log.Error("Failed to rewrite copied selection as markdown", ex);
+            log.Error("Failed to rewrite copied selection as markdown", ex);
         }
     }
 
@@ -1024,7 +1026,7 @@ public static partial class MarkdownHelper
     /// selection covers no link whose target is worth writing, or when any offset fails to
     /// line up with the extracted text.
     /// </summary>
-    private static bool TryBuildMarkdownSelection(TextRange selection, out string markdown)
+    private bool TryBuildMarkdownSelection(TextRange selection, out string markdown)
     {
         markdown = "";
 
@@ -1073,7 +1075,7 @@ public static partial class MarkdownHelper
     /// without failing. Returns false only if the measured offset doesn't line up with the
     /// extracted text, which means the caller must not touch the clipboard.
     /// </summary>
-    private static bool TryMeasureLink(
+    private bool TryMeasureLink(
         Hyperlink link, TextPointer start, TextPointer end, string text,
         List<(int Offset, int Length, string Target)> links)
     {
@@ -1098,7 +1100,7 @@ public static partial class MarkdownHelper
     }
 
     // The innermost Hyperlink containing a pointer, or null if it sits in ordinary text.
-    private static Hyperlink? FindAncestorHyperlink(TextPointer pos)
+    private Hyperlink? FindAncestorHyperlink(TextPointer pos)
     {
         for (var element = pos.Parent as TextElement; element != null; element = element.Parent as TextElement)
             if (element is Hyperlink link) return link;
@@ -1110,14 +1112,14 @@ public static partial class MarkdownHelper
     // deliberately excluded: their display text is already the path, and an
     // agentdock-file:// URI means nothing outside this app — copying them as bare text is
     // the useful result.
-    private static string? GetLinkTarget(Hyperlink link)
+    private string? GetLinkTarget(Hyperlink link)
     {
         var url = link.CommandParameter as string ?? link.NavigateUri?.OriginalString;
         if (string.IsNullOrEmpty(url)) return null;
         return FromFileLinkUri(url) != null ? null : url;
     }
 
-    private static void OpenInBrowser(string url)
+    private void OpenInBrowser(string url)
     {
         try
         {
@@ -1126,7 +1128,7 @@ public static partial class MarkdownHelper
         }
         catch (Exception ex)
         {
-            Log.Error($"Failed to open URL in browser: {url}", ex);
+            log.Error($"Failed to open URL in browser: {url}", ex);
         }
     }
 
@@ -1168,7 +1170,7 @@ public static partial class MarkdownHelper
     private static string ToFileLinkUri(string absolutePath)
         => FileLinkPrefix + Uri.EscapeDataString(absolutePath);
 
-    private static string? FromFileLinkUri(string uriString)
+    private string? FromFileLinkUri(string uriString)
     {
         if (!uriString.StartsWith(FileLinkPrefix, StringComparison.Ordinal)) return null;
         return Uri.UnescapeDataString(uriString.Substring(FileLinkPrefix.Length));
@@ -1220,14 +1222,14 @@ public static partial class MarkdownHelper
         return start < s.Length;
     }
 
-    private static IEnumerable<Hyperlink> EnumerateHyperlinks(FlowDocument doc)
+    private IEnumerable<Hyperlink> EnumerateHyperlinks(FlowDocument doc)
     {
         foreach (var b in doc.Blocks)
             foreach (var h in EnumerateHyperlinks(b))
                 yield return h;
     }
 
-    private static IEnumerable<Hyperlink> EnumerateHyperlinks(Block block)
+    private IEnumerable<Hyperlink> EnumerateHyperlinks(Block block)
     {
         switch (block)
         {
@@ -1258,7 +1260,7 @@ public static partial class MarkdownHelper
         }
     }
 
-    private static IEnumerable<Hyperlink> EnumerateHyperlinksInline(Inline inline)
+    private IEnumerable<Hyperlink> EnumerateHyperlinksInline(Inline inline)
     {
         // Hyperlink derives from Span — check it first so we don't recurse into its
         // inner inlines twice.

@@ -1,6 +1,8 @@
 using System.IO;
 using System.Reflection;
 
+using AgentDock.Services.Abstractions;
+
 namespace AgentDock.Services;
 
 /// <summary>
@@ -8,13 +10,13 @@ namespace AgentDock.Services;
 /// Files in <c>docs/release-notes/v*.md</c> are embedded with logical name
 /// <c>ReleaseNotes/v{X.Y.Z}.md</c>.
 /// </summary>
-public static class ReleaseNotesService
+public sealed class ReleaseNotesService(ILogService log) : IReleaseNotesService
 {
     /// <summary>
     /// Loads the markdown body for the given version (e.g. "0.9.0").
     /// Returns null if the resource is not embedded.
     /// </summary>
-    public static string? GetNotesForVersion(string version)
+    public string? GetNotesForVersion(string version)
     {
         var resourceName = $"ReleaseNotes/v{version}.md";
         try
@@ -22,7 +24,7 @@ public static class ReleaseNotesService
             using var stream = typeof(ReleaseNotesService).Assembly.GetManifestResourceStream(resourceName);
             if (stream == null)
             {
-                Log.Info($"ReleaseNotes: no embedded notes for v{version}");
+                log.Info($"ReleaseNotes: no embedded notes for v{version}");
                 return null;
             }
 
@@ -31,7 +33,7 @@ public static class ReleaseNotesService
         }
         catch (Exception ex)
         {
-            Log.Warn($"ReleaseNotes: failed to read v{version} — {ex.Message}");
+            log.Warn($"ReleaseNotes: failed to read v{version} — {ex.Message}");
             return null;
         }
     }

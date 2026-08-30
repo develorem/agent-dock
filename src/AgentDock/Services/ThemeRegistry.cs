@@ -1,4 +1,5 @@
 using AgentDock.Models;
+using AgentDock.Services.Abstractions;
 
 namespace AgentDock.Services;
 
@@ -6,9 +7,9 @@ namespace AgentDock.Services;
 /// Central registry of all available themes. To add a new theme, add an entry here
 /// and create the corresponding XAML resource dictionary in the Themes folder.
 /// </summary>
-public static class ThemeRegistry
+public sealed class ThemeRegistry : IThemeRegistry
 {
-    private static readonly List<ThemeDescriptor> _themes =
+    private static readonly List<ThemeDescriptor> Themes =
     [
         new("Obsidian",   "Obsidian",   ThemeBaseVariant.Dark,  "Themes/ObsidianTheme.xaml"),
         new("Midnight",   "Midnight",   ThemeBaseVariant.Dark,  "Themes/MidnightTheme.xaml"),
@@ -18,18 +19,18 @@ public static class ThemeRegistry
         new("Sakura",     "Sakura",     ThemeBaseVariant.Light, "Themes/SakuraTheme.xaml"),
     ];
 
-    public static IReadOnlyList<ThemeDescriptor> All => _themes;
+    public IReadOnlyList<ThemeDescriptor> All => Themes;
 
-    public static ThemeDescriptor Default => _themes[0]; // Obsidian
+    public ThemeDescriptor Default => Themes[0]; // Obsidian
 
-    public static ThemeDescriptor? FindById(string id)
-        => _themes.FirstOrDefault(t => t.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+    public ThemeDescriptor? FindById(string id)
+        => Themes.FirstOrDefault(t => t.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// Resolves a theme string from settings/workspace, with backward compatibility
     /// for old "Dark"/"Light" values.
     /// </summary>
-    public static ThemeDescriptor Resolve(string? themeString)
+    public ThemeDescriptor Resolve(string? themeString)
     {
         if (string.IsNullOrEmpty(themeString))
             return Default;

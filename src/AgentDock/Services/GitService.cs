@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.IO;
 
+using AgentDock.Services.Abstractions;
+
 namespace AgentDock.Services;
 
 public enum GitFileStatus
@@ -18,9 +20,12 @@ public class GitService
 {
     private readonly string _workingDirectory;
 
-    public GitService(string workingDirectory)
+    private readonly IPerfDiagnostics _perf;
+
+    public GitService(string workingDirectory, IPerfDiagnostics perf)
     {
         _workingDirectory = workingDirectory;
+        _perf = perf;
     }
 
     public bool IsGitRepository()
@@ -236,7 +241,7 @@ public class GitService
         // today run on the UI thread via GitStatusControl.RefreshStatus, so a slow
         // git is a direct UI stall. PerfDiagnostics logs the duration + thread.
         var start = Stopwatch.GetTimestamp();
-        PerfDiagnostics.GitOpStart();
+        _perf.GitOpStart();
         try
         {
             var psi = new ProcessStartInfo
@@ -265,7 +270,7 @@ public class GitService
         }
         finally
         {
-            PerfDiagnostics.GitOpEnd(arguments, Stopwatch.GetElapsedTime(start).TotalMilliseconds,
+            _perf.GitOpEnd(arguments, Stopwatch.GetElapsedTime(start).TotalMilliseconds,
                 System.Threading.Thread.CurrentThread.ManagedThreadId);
         }
     }
@@ -273,7 +278,7 @@ public class GitService
     private (bool Success, string Message) RunGitCommand(string arguments)
     {
         var start = Stopwatch.GetTimestamp();
-        PerfDiagnostics.GitOpStart();
+        _perf.GitOpStart();
         try
         {
             var psi = new ProcessStartInfo
@@ -304,7 +309,7 @@ public class GitService
         }
         finally
         {
-            PerfDiagnostics.GitOpEnd(arguments, Stopwatch.GetElapsedTime(start).TotalMilliseconds,
+            _perf.GitOpEnd(arguments, Stopwatch.GetElapsedTime(start).TotalMilliseconds,
                 System.Threading.Thread.CurrentThread.ManagedThreadId);
         }
     }

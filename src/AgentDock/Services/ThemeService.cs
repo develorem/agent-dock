@@ -3,38 +3,39 @@ using System.Windows.Media;
 using AgentDock.Models;
 using HL.Interfaces;
 using ICSharpCode.AvalonEdit.Highlighting;
+using AgentDock.Services.Abstractions;
 
 namespace AgentDock.Services;
 
-public static class ThemeManager
+public sealed class ThemeService(IThemeRegistry registry, IAppSettingsStore appSettings) : IThemeService
 {
-    private static ResourceDictionary? _currentThemeDictionary;
-    private static bool _sharedStylesLoaded;
-    private static bool _markdownStylesLoaded;
+    private ResourceDictionary? _currentThemeDictionary;
+    private bool _sharedStylesLoaded;
+    private bool _markdownStylesLoaded;
 
-    public static ThemeDescriptor CurrentTheme { get; private set; } = ThemeRegistry.Default;
+    public ThemeDescriptor CurrentTheme { get; private set; } = registry.Default;
 
     /// <summary>
     /// Convenience: returns the base variant (Dark/Light) of the current theme.
     /// Used by AvalonDock, syntax highlighting, and any code that only cares about dark vs light.
     /// </summary>
-    public static ThemeBaseVariant BaseVariant => CurrentTheme.BaseVariant;
+    public ThemeBaseVariant BaseVariant => CurrentTheme.BaseVariant;
 
-    public static event Action<ThemeDescriptor>? ThemeChanged;
+    public event Action<ThemeDescriptor>? ThemeChanged;
 
     /// <summary>
     /// Themed highlighting manager from Dirkster.HL — provides dark-mode-aware syntax colors.
     /// </summary>
-    public static IThemedHighlightingManager HighlightingManager { get; } =
+    public IThemedHighlightingManager HighlightingManager { get; } =
         HL.Manager.ThemedHighlightingManager.Instance;
 
-    public static void Initialize()
+    public void Initialize()
     {
         var saved = LoadThemePreference();
         ApplyTheme(saved, raiseEvent: false);
     }
 
-    public static void ApplyTheme(ThemeDescriptor theme, bool raiseEvent = true)
+    public void ApplyTheme(ThemeDescriptor theme, bool raiseEvent = true)
     {
         CurrentTheme = theme;
 
@@ -79,13 +80,13 @@ public static class ThemeManager
     /// <summary>
     /// Convenience overload: apply by theme Id string.
     /// </summary>
-    public static void ApplyTheme(string themeId)
+    public void ApplyTheme(string themeId)
     {
-        var theme = ThemeRegistry.Resolve(themeId);
+        var theme = registry.Resolve(themeId);
         ApplyTheme(theme);
     }
 
-    public static SolidColorBrush GetBrush(string key)
+    public SolidColorBrush GetBrush(string key)
     {
         if (Application.Current.TryFindResource(key) is SolidColorBrush brush)
             return brush;
@@ -97,7 +98,7 @@ public static class ThemeManager
     /// Falls back to the built-in AvalonEdit manager only in light mode (its colors
     /// assume a white background and are invisible on dark backgrounds).
     /// </summary>
-    public static IHighlightingDefinition? GetHighlighting(string extension)
+    public IHighlightingDefinition? GetHighlighting(string extension)
     {
         var themed = HighlightingManager.GetDefinitionByExtension(extension);
         if (themed != null)
@@ -113,14 +114,14 @@ public static class ThemeManager
         return null;
     }
 
-    private static ThemeDescriptor LoadThemePreference()
+    private ThemeDescriptor LoadThemePreference()
     {
-        var value = AppSettings.GetString("Theme", "Obsidian");
-        return ThemeRegistry.Resolve(value);
+        var value = appSettings.GetString("Theme", "Obsidian");
+        return registry.Resolve(value);
     }
 
-    private static void SaveThemePreference(ThemeDescriptor theme)
+    private void SaveThemePreference(ThemeDescriptor theme)
     {
-        AppSettings.SetString("Theme", theme.Id);
+        appSettings.SetString("Theme", theme.Id);
     }
 }

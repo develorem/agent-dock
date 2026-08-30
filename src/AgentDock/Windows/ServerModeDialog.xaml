@@ -1,0 +1,175 @@
+<Window x:Class="AgentDock.Windows.ServerModeDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Enter Server Mode"
+        Width="560" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Icon="/Assets/agentdock.png"
+        Background="Transparent">
+
+    <Window.Resources>
+        <Style x:Key="DialogButton" TargetType="{x:Type Button}">
+            <Setter Property="MinWidth" Value="76" />
+            <Setter Property="Height" Value="28" />
+            <Setter Property="Padding" Value="12,0" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Foreground" Value="{DynamicResource HelpForeground}" />
+            <Setter Property="Background" Value="{DynamicResource HelpCardBackground}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource HelpCardBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type Button}">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="3"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource MenuHighlightBackground}" />
+                            </Trigger>
+                            <Trigger Property="IsDefault" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush"
+                                        Value="{DynamicResource TabButtonActiveBorderBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SectionHeader" TargetType="{x:Type TextBlock}">
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource HelpForeground}" />
+            <Setter Property="Margin" Value="0,0,0,12" />
+        </Style>
+
+        <Style x:Key="FieldLabel" TargetType="{x:Type TextBlock}">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource HelpForeground}" />
+            <Setter Property="Margin" Value="0,0,0,4" />
+        </Style>
+
+        <Style x:Key="HintText" TargetType="{x:Type TextBlock}">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="{DynamicResource HelpMutedForeground}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Margin" Value="0,0,0,14" />
+        </Style>
+    </Window.Resources>
+
+    <Border Background="{DynamicResource HelpBackground}"
+            BorderBrush="{DynamicResource ToolbarBorderBrush}"
+            BorderThickness="1"
+            CornerRadius="4">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Border Grid.Row="0"
+                    Background="{DynamicResource TitleBarBackground}"
+                    CornerRadius="4,4,0,0"
+                    Padding="12,8"
+                    MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                <TextBlock Text="Enter Server Mode"
+                           FontSize="12"
+                           FontWeight="SemiBold"
+                           Foreground="{DynamicResource TitleBarForeground}" />
+            </Border>
+
+            <StackPanel Grid.Row="1" Margin="20,16,20,8">
+                <TextBlock Text="Host this machine's sessions" Style="{StaticResource SectionHeader}" />
+
+                <TextBlock Style="{StaticResource HintText}"
+                           Text="Another Agent Dock can connect and drive the sessions running here. This machine keeps doing all the work — the remote side is a second screen and keyboard for it." />
+
+                <TextBlock Text="Port" Style="{StaticResource FieldLabel}" />
+                <TextBox x:Name="PortBox"
+                         Height="28"
+                         FontSize="13"
+                         VerticalContentAlignment="Center"
+                         Margin="0,0,0,4"
+                         TextChanged="PortBox_TextChanged" />
+                <TextBlock x:Name="PortHint" Style="{StaticResource HintText}"
+                           Text="The port is checked before the server starts." />
+
+                <CheckBox x:Name="AllInterfacesCheck"
+                          Content="Allow connections from other machines"
+                          FontSize="12"
+                          Foreground="{DynamicResource HelpForeground}"
+                          IsChecked="True"
+                          Margin="0,0,0,4" />
+                <TextBlock Style="{StaticResource HintText}"
+                           Text="Unchecked, the server accepts connections from this machine only — useful for testing two instances on one box. Windows Firewall may prompt the first time you host." />
+
+                <Border Background="{DynamicResource HelpCardBackground}"
+                        BorderBrush="{DynamicResource HelpCardBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="3"
+                        Padding="12"
+                        Margin="0,0,0,12">
+                    <StackPanel>
+                        <TextBlock Text="Before you host"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource HelpForeground}"
+                                   Margin="0,0,0,6" />
+                        <TextBlock FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Foreground="{DynamicResource HelpMutedForeground}"
+                                   Text="A paired client can instruct an agent that reads, writes and runs commands on this machine. If a session is in dangerous mode, the client can do anything your account can do. Only pair with a machine you control, and prefer a VPN over forwarding the port on your router." />
+                        <CheckBox x:Name="AcknowledgeCheck"
+                                  Content="I understand what hosting allows"
+                                  FontSize="12"
+                                  Foreground="{DynamicResource HelpForeground}"
+                                  Margin="0,10,0,0"
+                                  Checked="Acknowledge_Changed"
+                                  Unchecked="Acknowledge_Changed" />
+                    </StackPanel>
+                </Border>
+
+                <TextBlock x:Name="ErrorText"
+                           FontSize="12"
+                           TextWrapping="Wrap"
+                           Foreground="{DynamicResource GitUnstagedForeground}"
+                           Visibility="Collapsed"
+                           Margin="0,0,0,8" />
+            </StackPanel>
+
+            <Border Grid.Row="2"
+                    BorderBrush="{DynamicResource ToolbarBorderBrush}"
+                    BorderThickness="0,1,0,0"
+                    Padding="20,12">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button x:Name="StartButton"
+                            Content="Start Server"
+                            Style="{StaticResource DialogButton}"
+                            IsDefault="True"
+                            Margin="0,0,8,0"
+                            Click="Start_Click" />
+                    <Button Content="Cancel"
+                            Style="{StaticResource DialogButton}"
+                            IsCancel="True"
+                            Click="Cancel_Click" />
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Border>
+</Window>

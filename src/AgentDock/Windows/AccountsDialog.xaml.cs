@@ -2,6 +2,8 @@ using System.Windows;
 using System.Windows.Input;
 using AgentDock.Services;
 
+using AgentDock.Services.Abstractions;
+
 namespace AgentDock.Windows;
 
 public partial class AccountsDialog : Window
@@ -20,30 +22,33 @@ public partial class AccountsDialog : Window
     // running — the user may still be mid-flow in the browser.
     private readonly CancellationTokenSource _closing = new();
 
-    private AccountsDialog()
+    private readonly IAccountManager _accounts;
+
+    private AccountsDialog(IAccountManager accountManager)
     {
+        _accounts = accountManager;
         InitializeComponent();
         Populate();
         Closed += (_, _) => _closing.Cancel();
     }
 
     /// <summary>Opens the accounts manager. Changes are persisted by AccountManager directly.</summary>
-    public static void Show(Window owner)
+    public static void Show(Window owner, IAccountManager accounts)
     {
-        var dlg = new AccountsDialog { Owner = owner };
+        var dlg = new AccountsDialog(accounts) { Owner = owner };
         dlg.ShowDialog();
     }
 
     private void Populate()
     {
-        var rows = AccountManager.Load().Select(a =>
+        var rows = _accounts.Load().Select(a =>
         {
             // Login state decides the wording; the email is only a label. A revoked
             // account keeps its email in .claude.json, so reading the email first (as
             // this used to) rendered dead accounts as perfectly signed in — leaving no
             // hint that Log In was the thing to click.
-            var email = AccountManager.ReadEmail(a.Id);
-            var status = AccountManager.IsLoggedIn(a.Id)
+            var email = _accounts.ReadEmail(a.Id);
+            var status = _accounts.IsLoggedIn(a.Id)
                 ? email != null ? $"— {email}" : "— signed in"
                 : email != null
                     ? $"— {email} · signed out (click Log In)"
@@ -54,7 +59,7 @@ public partial class AccountsDialog : Window
                 Id = a.Id,
                 Name = a.Name,
                 StatusText = status,
-                ConfigDir = AccountManager.ConfigDirFor(a.Id)
+                ConfigDir = _accounts.ConfigDirFor(a.Id)
             };
         }).ToList();
 
@@ -71,7 +76,7 @@ public partial class AccountsDialog : Window
             return;
         }
 
-        var account = AccountManager.Add(name);
+        var account = _accounts.Add(name);
         NewAccountName.Text = "";
         Populate();
         await RunLoginAsync(account.Id, account.Name);
@@ -94,7 +99,7 @@ public partial class AccountsDialog : Window
         bool signedIn;
         try
         {
-            signedIn = await AccountManager.RunLoginAsync(accountId, _closing.Token);
+            signedIn = await _accounts.RunLoginAsync(accountId, _closing.Token);
         }
         finally
         {
@@ -145,7 +150,7 @@ public partial class AccountsDialog : Window
         if (result != MessageBoxResult.Yes)
             return;
 
-        AccountManager.Remove(row.Id, deleteFiles: true);
+        _accounts.Remove(row.Id, deleteFiles: true);
         Populate();
     }
 

@@ -6,6 +6,8 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using AgentDock.Models;
 
+using AgentDock.Services.Abstractions;
+
 namespace AgentDock.Services;
 
 /// <summary>
@@ -21,43 +23,30 @@ namespace AgentDock.Services;
 /// revoked the whole token family — silently logging the account out of Agent
 /// Dock entirely. A stale usage number costs nothing; that did.
 ///
-/// So a lapsed access token is reported as <see cref="FetchStatus.TokenStale"/> —
+/// So a lapsed access token is reported as <see cref="UsageFetchStatus.TokenStale"/> —
 /// explicitly not an auth error — and the usage line keeps showing its last known
 /// figure until the CLI refreshes the token itself on next use. Don't "fix" this
 /// by adding a refresh back.
 /// </summary>
-public static class UsageService
+public sealed class UsageService : IUsageService
 {
     private const string UsageEndpoint = "https://api.anthropic.com/api/oauth/usage";
     private const string OAuthBeta = "oauth-2025-04-20";
 
     // Treat a token as spent slightly before its hard expiry, so we don't burn a
     // request on one that will lapse in flight.
-    private static readonly TimeSpan ExpirySkew = TimeSpan.FromMinutes(5);
+    private readonly TimeSpan ExpirySkew = TimeSpan.FromMinutes(5);
 
-    private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(15) };
-
-    public enum FetchStatus
-    {
-        Success,
-        AuthMissing,    // credentials file not found / malformed / tokens blanked out
-        AuthExpired,    // HTTP 401 — the token was rejected outright
-        TokenStale,     // stored token lapsed; the account is fine, we just can't read usage
-        NetworkError,   // DNS / connection / timeout
-        RateLimited,    // HTTP 429 — back off (honours Retry-After if present)
-        ServerError,    // HTTP 5xx or unexpected response
-    }
-
-    public record FetchResult(FetchStatus Status, UsageSummary? Summary, string? ErrorMessage, TimeSpan? RetryAfter = null);
+    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(15) };
 
     /// <summary>
     /// Fetches plan usage for one login. <paramref name="configDir"/> is that account's
     /// <c>CLAUDE_CONFIG_DIR</c> (holding its <c>.credentials.json</c>); null reads the
     /// machine default <c>~/.claude</c>. The usage endpoint rate-limits by source, so
     /// callers should fetch accounts sequentially (not concurrently) and honour the
-    /// <see cref="FetchStatus.RateLimited"/> Retry-After to avoid tripping HTTP 429.
+    /// <see cref="UsageFetchStatus.RateLimited"/> Retry-After to avoid tripping HTTP 429.
     /// </summary>
-    public static async Task<FetchResult> FetchAsync(string? configDir = null, CancellationToken ct = default)
+    public async Task<UsageFetchResult> FetchAsync(string? configDir = null, CancellationToken ct = default)
     {
         Creds creds;
         try
@@ -66,11 +55,11 @@ public static class UsageService
         }
         catch (Exception ex)
         {
-            return new FetchResult(FetchStatus.AuthMissing, null, ex.Message);
+            return new UsageFetchResult(UsageFetchStatus.AuthMissing, null, ex.Message);
         }
 
         if (string.IsNullOrEmpty(creds.AccessToken))
-            return new FetchResult(FetchStatus.AuthMissing, null, "Access token not found in credentials file");
+            return new UsageFetchResult(UsageFetchStatus.AuthMissing, null, "Access token not found in credentials file");
 
         // A lapsed token is reported, not renewed — see the class remarks. Skipping the
         // call also avoids a guaranteed-401 round trip against a rate-limited endpoint.
@@ -80,13 +69,13 @@ public static class UsageService
         // Reporting it as an auth error would cry wolf about a healthy login roughly once
         // an hour, which is what pushed us into refreshing tokens here in the first place.
         if (IsExpired(creds))
-            return new FetchResult(FetchStatus.TokenStale, null, "Stored access token has lapsed");
+            return new UsageFetchResult(UsageFetchStatus.TokenStale, null, "Stored access token has lapsed");
 
         return await CallUsageAsync(creds.AccessToken, ct);
     }
 
     /// <summary>Calls the usage endpoint with the given bearer token and maps the response.</summary>
-    private static async Task<FetchResult> CallUsageAsync(string token, CancellationToken ct)
+    private async Task<UsageFetchResult> CallUsageAsync(string token, CancellationToken ct)
     {
         try
         {
@@ -97,7 +86,7 @@ public static class UsageService
             using var response = await _http.SendAsync(request, ct);
 
             if (response.StatusCode == HttpStatusCode.Unauthorized)
-                return new FetchResult(FetchStatus.AuthExpired, null, "OAuth token expired");
+                return new UsageFetchResult(UsageFetchStatus.AuthExpired, null, "OAuth token expired");
 
             if (response.StatusCode == HttpStatusCode.TooManyRequests)
             {
@@ -105,30 +94,30 @@ public static class UsageService
                 var ra = response.Headers.RetryAfter;
                 var retryAfter = ra?.Delta
                     ?? (ra?.Date is { } date ? date - DateTimeOffset.UtcNow : (TimeSpan?)null);
-                return new FetchResult(FetchStatus.RateLimited, null, "HTTP 429", retryAfter);
+                return new UsageFetchResult(UsageFetchStatus.RateLimited, null, "HTTP 429", retryAfter);
             }
 
             if (!response.IsSuccessStatusCode)
-                return new FetchResult(FetchStatus.ServerError, null, $"HTTP {(int)response.StatusCode}");
+                return new UsageFetchResult(UsageFetchStatus.ServerError, null, $"HTTP {(int)response.StatusCode}");
 
             var summary = await response.Content.ReadFromJsonAsync<UsageSummary>(cancellationToken: ct);
-            return new FetchResult(FetchStatus.Success, summary, null);
+            return new UsageFetchResult(UsageFetchStatus.Success, summary, null);
         }
         catch (HttpRequestException ex)
         {
-            return new FetchResult(FetchStatus.NetworkError, null, ex.Message);
+            return new UsageFetchResult(UsageFetchStatus.NetworkError, null, ex.Message);
         }
         catch (TaskCanceledException ex)
         {
-            return new FetchResult(FetchStatus.NetworkError, null, "Request timed out: " + ex.Message);
+            return new UsageFetchResult(UsageFetchStatus.NetworkError, null, "Request timed out: " + ex.Message);
         }
     }
 
-    private static bool IsExpired(Creds creds) =>
+    private bool IsExpired(Creds creds) =>
         creds.ExpiresAtMs > 0 &&
         DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() >= creds.ExpiresAtMs - (long)ExpirySkew.TotalMilliseconds;
 
-    private static string CredentialsPath(string? configDir)
+    private string CredentialsPath(string? configDir)
     {
         var dir = string.IsNullOrWhiteSpace(configDir)
             ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude")
@@ -136,7 +125,7 @@ public static class UsageService
         return Path.Combine(dir, ".credentials.json");
     }
 
-    private static Creds ReadCredentials(string? configDir)
+    private Creds ReadCredentials(string? configDir)
     {
         var path = CredentialsPath(configDir);
 

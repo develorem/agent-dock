@@ -1,13 +1,16 @@
 using System.IO;
 using System.Text.Json;
 using AgentDock.Models;
+using AgentDock.Services.Abstractions;
 
 namespace AgentDock.Services;
 
 /// <summary>
-/// Reads and writes per-project settings from .agentdock/settings.json.
+/// Reads and writes per-project settings from .agentdock/settings.json on the local disk.
+/// The <see cref="IProjectSettingsStore"/> seam lets a remote project host serve the same
+/// state from the machine the project actually lives on.
 /// </summary>
-public static class ProjectSettingsManager
+public sealed class ProjectSettingsStore(ILogService log) : IProjectSettingsStore
 {
     private const string SettingsFolder = ".agentdock";
     private const string SettingsFile = "settings.json";
@@ -24,15 +27,16 @@ public static class ProjectSettingsManager
     };
 
     /// <summary>
-    /// Returns the path to the .agentdock/settings.json for a project.
+    /// Returns the path to the .agentdock/settings.json for a project. Internal: callers go
+    /// through Load/Save/Update so a remote implementation never has to expose a local path.
     /// </summary>
-    public static string GetSettingsPath(string projectFolder)
+    private static string GetSettingsPath(string projectFolder)
         => Path.Combine(projectFolder, SettingsFolder, SettingsFile);
 
     /// <summary>
     /// Loads project settings. Returns default settings if the file doesn't exist.
     /// </summary>
-    public static ProjectSettings Load(string projectFolder)
+    public ProjectSettings Load(string projectFolder)
     {
         var path = GetSettingsPath(projectFolder);
 
@@ -47,7 +51,7 @@ public static class ProjectSettingsManager
         }
         catch (Exception ex)
         {
-            Log.Warn($"ProjectSettings: failed to read {path} — {ex.Message}");
+            log.Warn($"ProjectSettings: failed to read {path} — {ex.Message}");
             return new ProjectSettings();
         }
     }
@@ -55,7 +59,7 @@ public static class ProjectSettingsManager
     /// <summary>
     /// Saves project settings, creating the .agentdock folder if needed.
     /// </summary>
-    public static void Save(string projectFolder, ProjectSettings settings)
+    public void Save(string projectFolder, ProjectSettings settings)
     {
         var dir = Path.Combine(projectFolder, SettingsFolder);
         var path = Path.Combine(dir, SettingsFile);
@@ -68,7 +72,7 @@ public static class ProjectSettingsManager
         }
         catch (Exception ex)
         {
-            Log.Warn($"ProjectSettings: failed to write {path} — {ex.Message}");
+            log.Warn($"ProjectSettings: failed to write {path} — {ex.Message}");
         }
     }
 
@@ -76,7 +80,7 @@ public static class ProjectSettingsManager
     /// Updates a single setting without overwriting others.
     /// Loads existing settings, applies the update, and saves.
     /// </summary>
-    public static void Update(string projectFolder, Action<ProjectSettings> update)
+    public void Update(string projectFolder, Action<ProjectSettings> update)
     {
         var settings = Load(projectFolder);
         update(settings);

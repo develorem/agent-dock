@@ -1,16 +1,17 @@
 using System.Media;
 using Microsoft.Win32;
+using AgentDock.Services.Abstractions;
 
 namespace AgentDock.Services;
 
 /// <summary>
 /// Plays Windows system sounds by their registry event name.
 /// </summary>
-public static class SoundService
+public sealed class SoundService : ISoundService
 {
-    public static void PlayDeviceConnect() => PlayRegistrySound("DeviceConnect");
-    public static void PlayDeviceDisconnect() => PlayRegistrySound("DeviceDisconnect");
-    public static void PlayMessageNudge() => PlayRegistrySound("MessageNudge");
+    public void PlayDeviceConnect() => PlayRegistrySound("DeviceConnect");
+    public void PlayDeviceDisconnect() => PlayRegistrySound("DeviceDisconnect");
+    public void PlayMessageNudge() => PlayRegistrySound("MessageNudge");
 
     /// <summary>
     /// Sound for the agent stopping to ask something (a question or a permission prompt),
@@ -20,7 +21,7 @@ public static class SoundService
     /// exists in the registry but ships with no .wav assigned on Windows 10/11 — it would
     /// silently play nothing.
     /// </summary>
-    public static void PlayQuestionPrompt() => PlayRegistrySound("Notification.IM");
+    public void PlayQuestionPrompt() => PlayRegistrySound("Notification.IM");
 
     private static void PlayRegistrySound(string eventName)
     {

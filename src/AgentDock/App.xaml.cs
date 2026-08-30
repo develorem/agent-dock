@@ -4,11 +4,16 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Threading;
 using AgentDock.Services;
+using AgentDock.Services.Abstractions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace AgentDock;
 
 public partial class App : Application
 {
+    private ServiceProvider? _services;
+    private ILogService? _log;
+
     public static string? StartupWorkspacePath { get; private set; }
     public static List<string> StartupProjectFolders { get; } = [];
     public static string? StartupLogsFolder { get; private set; }
@@ -57,21 +62,27 @@ public partial class App : Application
         else if (StartupProjectFolders.Count > 0)
             sessionContext = Path.GetFileName(StartupProjectFolders[0]);
 
-        Log.Init(StartupLogsFolder, sessionContext);
-        Log.Info("Application starting");
+        // Composition root: build the container, then resolve the services startup needs.
+        // Nothing below reaches for a service statically.
+        _services = ServiceRegistration.BuildServiceProvider();
+
+        _log = _services.GetRequiredService<ILogService>();
+        _log.Init(StartupLogsFolder, sessionContext);
+        _log.Info("Application starting");
 
         // Performance instrumentation: log the rendering/machine environment once
         // (catches software-rendering fallback) and start the UI-thread stall +
         // health monitors. See PerfDiagnostics.
-        PerfDiagnostics.LogEnvironment();
-        PerfDiagnostics.Start();
+        var perf = _services.GetRequiredService<IPerfDiagnostics>();
+        perf.LogEnvironment();
+        perf.Start();
 
         if (StartupWorkspacePath != null)
-            Log.Info($"Startup workspace: {StartupWorkspacePath}");
+            _log.Info($"Startup workspace: {StartupWorkspacePath}");
         foreach (var folder in StartupProjectFolders)
-            Log.Info($"Startup project folder: {folder}");
+            _log.Info($"Startup project folder: {folder}");
 
-        ThemeManager.Initialize();
+        _services.GetRequiredService<IThemeService>().Initialize();
 
         // Catch unhandled exceptions on the UI thread
         DispatcherUnhandledException += OnDispatcherUnhandledException;
@@ -95,6 +106,13 @@ public partial class App : Application
         // Log normal process exit so we can distinguish clean shutdown from
         // crashes in the log file.
         AppDomain.CurrentDomain.ProcessExit += OnProcessExit;
+
+        // MainWindow is constructed here rather than by StartupUri so its dependencies
+        // are injected. ActivatorUtilities resolves the constructor from the container,
+        // so the window declares what it needs instead of reaching for globals.
+        var mainWindow = ActivatorUtilities.CreateInstance<MainWindow>(_services);
+        MainWindow = mainWindow;
+        mainWindow.Show();
     }
 
     private enum ParseResult { Continue, Exit, Error }
@@ -270,11 +288,11 @@ public partial class App : Application
 
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
-        Log.Error("UNHANDLED UI EXCEPTION", e.Exception);
+        _log?.Error("UNHANDLED UI EXCEPTION", e.Exception);
         e.Handled = true; // Prevent crash so we can read the log
 
-        var logRef = Log.LogFilePath != null
-            ? $"\n\nSee {Log.LogFilePath} for details."
+        var logRef = _log?.LogFilePath != null
+            ? $"\n\nSee {_log?.LogFilePath} for details."
             : "";
 
         MessageBox.Show(
@@ -284,30 +302,30 @@ public partial class App : Application
             MessageBoxImage.Error);
     }
 
-    private static void OnUnhandledException(object sender, UnhandledExceptionEventArgs e)
+    private void OnUnhandledException(object sender, UnhandledExceptionEventArgs e)
     {
         if (e.ExceptionObject is Exception ex)
-            Log.Error("UNHANDLED BACKGROUND EXCEPTION", ex);
+            _log?.Error("UNHANDLED BACKGROUND EXCEPTION", ex);
         else
-            Log.Error($"UNHANDLED BACKGROUND EXCEPTION: {e.ExceptionObject}");
+            _log?.Error($"UNHANDLED BACKGROUND EXCEPTION: {e.ExceptionObject}");
     }
 
-    private static void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
+    private void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
     {
-        Log.Error("UNOBSERVED TASK EXCEPTION", e.Exception);
+        _log?.Error("UNOBSERVED TASK EXCEPTION", e.Exception);
         e.SetObserved();
     }
 
-    private static void OnDispatcherUnhandledExceptionFilter(object sender, DispatcherUnhandledExceptionFilterEventArgs e)
+    private void OnDispatcherUnhandledExceptionFilter(object sender, DispatcherUnhandledExceptionFilterEventArgs e)
     {
         // Logs before DispatcherUnhandledException runs, so we still capture
         // the throw if the main handler is somehow bypassed.
-        Log.Error("DISPATCHER EXCEPTION (pre-filter)", e.Exception);
+        _log?.Error("DISPATCHER EXCEPTION (pre-filter)", e.Exception);
     }
 
-    private static void OnFirstChanceException(object? sender, System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs e)
+    private void OnFirstChanceException(object? sender, System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs e)
     {
-        // Avoid recursive logging if Log.Write itself throws.
+        // Avoid recursive logging if the logger itself throws.
         if (_inFirstChanceHandler) return;
 
         var ex = e.Exception;
@@ -324,7 +342,7 @@ public partial class App : Application
             // type + message + first stack frame only, to keep noise down.
             // The full stack will be in the unhandled handler if it escapes.
             var firstFrame = ex.StackTrace?.Split('\n', 2)[0]?.Trim() ?? "(no stack)";
-            Log.Warn($"FIRST-CHANCE {ex.GetType().Name}: {ex.Message} | {firstFrame}");
+            _log?.Warn($"FIRST-CHANCE {ex.GetType().Name}: {ex.Message} | {firstFrame}");
         }
         catch
         {
@@ -339,8 +357,8 @@ public partial class App : Application
     [ThreadStatic]
     private static bool _inFirstChanceHandler;
 
-    private static void OnProcessExit(object? sender, EventArgs e)
+    private void OnProcessExit(object? sender, EventArgs e)
     {
-        Log.Info("Process exiting (clean shutdown)");
+        _log?.Info("Process exiting (clean shutdown)");
     }
 }

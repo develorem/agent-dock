@@ -23,6 +23,51 @@
 
     <DockPanel x:Name="RootPanel" LastChildFill="True">
 
+        <!-- Remote status strip. Docked before the filling child so it takes the bottom edge.
+             Always visible while hosting or connected: the server's owner must be able to see
+             that someone is attached and sever it in one click, and the client must be able to
+             tell at a glance that it is driving another machine. -->
+        <Border x:Name="RemoteStrip" DockPanel.Dock="Bottom"
+                Background="{DynamicResource TitleBarBackground}"
+                BorderBrush="{DynamicResource ToolbarBorderBrush}"
+                BorderThickness="0,1,0,0"
+                Padding="12,6"
+                Visibility="Collapsed">
+            <Grid>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock x:Name="RemoteStripGlyph" Text="&#xE968;"
+                               FontFamily="Segoe MDL2 Assets" FontSize="13"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource TabButtonActiveBorderBrush}"
+                               Margin="0,0,8,0" />
+                    <TextBlock x:Name="RemoteStripText" VerticalAlignment="Center"
+                               FontSize="12"
+                               Foreground="{DynamicResource TitleBarForeground}" />
+                    <TextBlock x:Name="RemoteStripCode" VerticalAlignment="Center"
+                               FontSize="14" FontWeight="SemiBold"
+                               FontFamily="Cascadia Code, Consolas, Courier New"
+                               Foreground="{DynamicResource TabButtonActiveBorderBrush}"
+                               Margin="12,0,0,0" />
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button x:Name="RemoteStripCopyButton" Content="Copy code"
+                            Margin="0,0,8,0" Padding="10,2" FontSize="11" Cursor="Hand"
+                            Click="RemoteCopyCode_Click" />
+                    <Button x:Name="RemoteStripKickButton" Content="Take back control"
+                            Margin="0,0,8,0" Padding="10,2" FontSize="11" Cursor="Hand"
+                            Click="KickClient_Click" />
+                    <Button x:Name="RemoteStripStopButton" Content="Stop server"
+                            Padding="10,2" FontSize="11" Cursor="Hand"
+                            Click="StopServer_Click" />
+                    <Button x:Name="RemoteStripDisconnectButton" Content="Disconnect"
+                            Padding="10,2" FontSize="11" Cursor="Hand"
+                            Visibility="Collapsed"
+                            Click="DisconnectRemote_Click" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
         <!-- ===== Custom Title Bar ===== -->
         <Border DockPanel.Dock="Top"
                 Background="{DynamicResource TitleBarBackground}"
@@ -95,6 +140,32 @@
                         <Separator x:Name="RecentWorkspacesSeparator" Visibility="Collapsed" />
                         <MenuItem x:Name="RecentWorkspacesHeader" Header="Recent Workspaces"
                                   IsEnabled="False" Visibility="Collapsed" />
+                        <Separator />
+                        <MenuItem Header="_Remote">
+                            <MenuItem x:Name="StartServerMenuItem" Header="_Enter Server Mode..."
+                                      Click="StartServer_Click">
+                                <MenuItem.Icon>
+                                    <TextBlock Text="&#xE968;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                               Foreground="{DynamicResource MenuIconForeground}" />
+                                </MenuItem.Icon>
+                            </MenuItem>
+                            <MenuItem x:Name="StopServerMenuItem" Header="S_top Server"
+                                      IsEnabled="False" Click="StopServer_Click" />
+                            <MenuItem x:Name="RegenerateCodeMenuItem" Header="_Regenerate Pairing Code"
+                                      IsEnabled="False" Click="RegenerateCode_Click" />
+                            <MenuItem x:Name="KickClientMenuItem" Header="Take _Back Control"
+                                      IsEnabled="False" Click="KickClient_Click" />
+                            <Separator />
+                            <MenuItem x:Name="ConnectRemoteMenuItem" Header="_Connect to Server..."
+                                      Click="ConnectRemote_Click">
+                                <MenuItem.Icon>
+                                    <TextBlock Text="&#xE703;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                               Foreground="{DynamicResource MenuIconForeground}" />
+                                </MenuItem.Icon>
+                            </MenuItem>
+                            <MenuItem x:Name="DisconnectRemoteMenuItem" Header="_Disconnect"
+                                      IsEnabled="False" Click="DisconnectRemote_Click" />
+                        </MenuItem>
                         <Separator x:Name="ExitSeparator" />
                         <MenuItem Header="E_xit" InputGestureText="Alt+F4" Click="Exit_Click">
                             <MenuItem.Icon>

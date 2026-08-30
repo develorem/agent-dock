@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using AgentDock.Services.Abstractions;
 
 namespace AgentDock.Services;
 
@@ -8,14 +9,14 @@ namespace AgentDock.Services;
 /// Generates a runtime taskbar icon by compositing the app logo with a
 /// theme-colored accent bar at the bottom.
 /// </summary>
-public static class TaskbarIconHelper
+public sealed class TaskbarIconService : ITaskbarIconService
 {
-    private static BitmapImage? _logoBitmap;
+    private BitmapImage? _logoBitmap;
 
     /// <summary>
     /// Creates a BitmapSource of the app logo with a colored bar at the bottom.
     /// </summary>
-    public static ImageSource CreateThemedIcon(Color barColor)
+    public ImageSource CreateThemedIcon(Color barColor)
     {
         _logoBitmap ??= LoadLogoBitmap();
 

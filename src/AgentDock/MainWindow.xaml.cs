@@ -13,6 +13,7 @@ using System.Windows.Threading;
 using AgentDock.Controls;
 using AgentDock.Models;
 using AgentDock.Services;
+using AgentDock.Services.Abstractions;
 using AgentDock.Windows;
 using AvalonDock;
 using AvalonDock.Layout;
@@ -44,6 +45,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<ProjectInfo, AiChatControl> _projectChatControls = [];
     private readonly Dictionary<ProjectInfo, GitStatusControl> _projectGitControls = [];
     private readonly Dictionary<ProjectInfo, FilePreviewControl> _projectPreviewControls = [];
+    private readonly Dictionary<ProjectInfo, FileExplorerControl> _projectExplorerControls = [];
     private readonly Dictionary<ProjectInfo, Grid> _projectTabIcons = [];
     private readonly Dictionary<ProjectInfo, DispatcherTimer> _tabIconTimers = [];
     private readonly Dictionary<ProjectInfo, ClaudeSessionState> _previousTabStates = [];
@@ -112,9 +114,71 @@ public partial class MainWindow : Window
     private const string ProjectDescriptionId = "projectDescription";
     private const string TodoListId = "todoList";
 
-    public MainWindow()
+    // The length of this dependency list is itself the finding: MainWindow does far too
+    // much. Phase B extracts these into view-models; for now they are honest, declared
+    // dependencies rather than hidden static reach-throughs.
+    private readonly ILogService _log;
+    private readonly IPerfDiagnostics _perf;
+    private readonly IThemeService _theme;
+    private readonly IThemeRegistry _themeRegistry;
+    private readonly IAppSettingsStore _appSettings;
+    private readonly IProjectSettingsStore _projectSettings;
+    private readonly IWorkspaceStore _workspaceStore;
+    private readonly IAccountManager _accounts;
+    private readonly IUsageService _usage;
+    private readonly ISoundService _sound;
+    private readonly ITaskbarIconService _taskbarIcon;
+    private readonly IClaudeEnvironment _claudeEnvironment;
+    private readonly IClaudeSessionFactory _sessionFactory;
+    private readonly IMarkdownRenderer _markdown;
+    private readonly IImageAttachmentService _images;
+    private readonly IUpdateCheckService _updateCheck;
+    private readonly IReleaseNotesService _releaseNotes;
+    private readonly Services.Remote.RemoteServerService _remoteServer;
+    private readonly Services.Remote.RemoteClientService _remoteClient;
+
+    public MainWindow(
+        ILogService log,
+        IPerfDiagnostics perf,
+        IThemeService theme,
+        IThemeRegistry themeRegistry,
+        IAppSettingsStore appSettings,
+        IProjectSettingsStore projectSettings,
+        IWorkspaceStore workspaceStore,
+        IAccountManager accounts,
+        IUsageService usage,
+        ISoundService sound,
+        ITaskbarIconService taskbarIcon,
+        IClaudeEnvironment claudeEnvironment,
+        IClaudeSessionFactory sessionFactory,
+        IMarkdownRenderer markdown,
+        IImageAttachmentService images,
+        IUpdateCheckService updateCheck,
+        IReleaseNotesService releaseNotes,
+        Services.Remote.RemoteServerService remoteServer,
+        Services.Remote.RemoteClientService remoteClient)
     {
-        Log.Info("MainWindow constructor starting");
+        _log = log;
+        _perf = perf;
+        _theme = theme;
+        _themeRegistry = themeRegistry;
+        _appSettings = appSettings;
+        _projectSettings = projectSettings;
+        _workspaceStore = workspaceStore;
+        _accounts = accounts;
+        _usage = usage;
+        _sound = sound;
+        _taskbarIcon = taskbarIcon;
+        _claudeEnvironment = claudeEnvironment;
+        _sessionFactory = sessionFactory;
+        _markdown = markdown;
+        _images = images;
+        _updateCheck = updateCheck;
+        _releaseNotes = releaseNotes;
+        _remoteServer = remoteServer;
+        _remoteClient = remoteClient;
+
+        _log.Info("MainWindow constructor starting");
         InitializeComponent();
 
         ProductNameText.Text = $"Agent Dock v{App.Version}";
@@ -142,7 +206,7 @@ public partial class MainWindow : Window
         CommandBindings.Add(new CommandBinding(CloseProjectCommand, (_, _) => CloseActiveProject()));
 
         // Subscribe to theme changes
-        ThemeManager.ThemeChanged += OnThemeChanged;
+        _theme.ThemeChanged += OnThemeChanged;
         UpdateTaskbarIcon();
 
         // Sync maximize/restore icon whenever window state changes (button click, double-click, aero snap, etc.).
@@ -158,14 +222,14 @@ public partial class MainWindow : Window
         UpdateMaximizeIcon();
 
         // Restore saved toolbar position
-        var savedPosition = AppSettings.GetString("ToolbarPosition", "Top");
+        var savedPosition = _appSettings.GetString("ToolbarPosition", "Top");
         if (savedPosition != "Top")
             SetToolbarPosition(savedPosition);
 
         // Restore saved Claude path override
-        var savedClaudePath = AppSettings.GetString("ClaudePath", "");
+        var savedClaudePath = _appSettings.GetString("ClaudePath", "");
         if (!string.IsNullOrEmpty(savedClaudePath))
-            ClaudeSession.ClaudeBinaryPath = savedClaudePath;
+            _claudeEnvironment.BinaryPath = savedClaudePath;
 
         // Populate recent workspaces menu
         PopulateRecentWorkspacesMenu();
@@ -197,7 +261,11 @@ public partial class MainWindow : Window
         // Start fetching Claude Code plan usage for the title bar indicator
         Loaded += (_, _) => InitializeUsageIndicator();
 
-        Log.Info("MainWindow constructor complete");
+        // Remote roles are wired last so the status strip and menu reflect any state the
+        // services already hold.
+        InitializeRemote();
+
+        _log.Info("MainWindow constructor complete");
     }
 
     // --- Maximized window sizing (prevent overflow beyond screen) ---
@@ -219,16 +287,16 @@ public partial class MainWindow : Window
         if (source != null)
         {
             source.AddHook(WndProc);
-            Log.Info($"OnSourceInitialized: WndProc hook installed (hwnd=0x{hwnd:X})");
+            _log.Info($"OnSourceInitialized: WndProc hook installed (hwnd=0x{hwnd:X})");
         }
         else
         {
-            Log.Warn($"OnSourceInitialized: HwndSource.FromHwnd returned null (hwnd=0x{hwnd:X}) — WndProc hook NOT installed");
+            _log.Warn($"OnSourceInitialized: HwndSource.FromHwnd returned null (hwnd=0x{hwnd:X}) — WndProc hook NOT installed");
         }
     }
 
-    private static int _wmGetMinMaxInfoCount;
-    private static int _wndProcExceptionCount;
+    private int _wmGetMinMaxInfoCount;
+    private int _wndProcExceptionCount;
 
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
@@ -244,11 +312,11 @@ public partial class MainWindow : Window
             {
                 var n = System.Threading.Interlocked.Increment(ref _wmGetMinMaxInfoCount);
                 if (n == 1)
-                    Log.Info($"WndProc: first WM_GETMINMAXINFO (hwnd=0x{hwnd:X}, lParam=0x{lParam:X})");
+                    _log.Info($"WndProc: first WM_GETMINMAXINFO (hwnd=0x{hwnd:X}, lParam=0x{lParam:X})");
 
                 if (lParam == IntPtr.Zero)
                 {
-                    Log.Warn($"WndProc: WM_GETMINMAXINFO with null lParam (count={n}) — skipping");
+                    _log.Warn($"WndProc: WM_GETMINMAXINFO with null lParam (count={n}) — skipping");
                     return IntPtr.Zero;
                 }
 
@@ -265,7 +333,7 @@ public partial class MainWindow : Window
                 }
                 else
                 {
-                    Log.Warn($"WndProc: MonitorFromWindow returned 0 for hwnd=0x{hwnd:X} (count={n}) — using OS defaults");
+                    _log.Warn($"WndProc: MonitorFromWindow returned 0 for hwnd=0x{hwnd:X} (count={n}) — using OS defaults");
                 }
                 // fDeleteOld:false — MINMAXINFO is pure POD (POINTs and ints).
                 // No managed pointers in the destination buffer to release.
@@ -275,7 +343,7 @@ public partial class MainWindow : Window
             catch (Exception ex)
             {
                 var n = System.Threading.Interlocked.Increment(ref _wndProcExceptionCount);
-                Log.Error($"WndProc: managed exception handling WM_GETMINMAXINFO (count={n}, lParam=0x{lParam:X})", ex);
+                _log.Error($"WndProc: managed exception handling WM_GETMINMAXINFO (count={n}, lParam=0x{lParam:X})", ex);
                 handled = false;
             }
         }
@@ -363,6 +431,17 @@ public partial class MainWindow : Window
 
     private async void OpenWorkspace_Click(object sender, RoutedEventArgs e)
     {
+        // Swapping the workspace would replace the very sessions a connected client is
+        // driving. Blocked rather than resynced: nobody is at this machine while hosting, so
+        // the ability buys nothing and costs a whole resync path.
+        if (_remoteServer.IsRunning)
+        {
+            ThemedMessageBox.Show(this,
+                "Stop server mode before opening a different workspace.",
+                "Server Mode Active");
+            return;
+        }
+
         // Prompt to save if dirty
         if (!PromptSaveIfDirty())
             return; // user cancelled
@@ -392,21 +471,22 @@ public partial class MainWindow : Window
     private void WorkspaceSettings_Click(object sender, RoutedEventArgs e)
     {
         var result = Windows.WorkspaceSettingsDialog.Show(
+            _themeRegistry,
             this,
-            ThemeManager.CurrentTheme.Id,
+            _theme.CurrentTheme.Id,
             _currentToolbarPosition,
             _showActiveProjectsGroup,
             _activeProjectsLimit);
 
         if (result == null) return;
 
-        if (result.ThemeId != ThemeManager.CurrentTheme.Id)
-            ThemeManager.ApplyTheme(result.ThemeId);
+        if (result.ThemeId != _theme.CurrentTheme.Id)
+            _theme.ApplyTheme(result.ThemeId);
 
         if (result.ToolbarPosition != _currentToolbarPosition)
         {
             SetToolbarPosition(result.ToolbarPosition);
-            AppSettings.SetString("ToolbarPosition", result.ToolbarPosition);
+            _appSettings.SetString("ToolbarPosition", result.ToolbarPosition);
         }
 
         if (result.ShowActiveProjectsGroup != _showActiveProjectsGroup
@@ -435,48 +515,50 @@ public partial class MainWindow : Window
 
     private void AppSettings_Click(object sender, RoutedEventArgs e)
     {
-        var currentClaudePath = AppSettings.GetString("ClaudePath");
-        var currentChannelStr = AppSettings.GetString("UpdateChannel", "Stable");
+        var currentClaudePath = _appSettings.GetString("ClaudePath");
+        var currentChannelStr = _appSettings.GetString("UpdateChannel", "Stable");
         var currentChannel = Enum.TryParse<UpdateChannel>(currentChannelStr, ignoreCase: true, out var c)
             ? c
             : UpdateChannel.Stable;
 
         var result = Windows.AppSettingsDialog.Show(
+            _themeRegistry,
+            _log,
             this,
-            ThemeManager.CurrentTheme.Id,
+            _theme.CurrentTheme.Id,
             _currentToolbarPosition,
             currentClaudePath,
             currentChannel);
 
         if (result == null) return;
 
-        if (result.ThemeId != ThemeManager.CurrentTheme.Id)
-            ThemeManager.ApplyTheme(result.ThemeId);
+        if (result.ThemeId != _theme.CurrentTheme.Id)
+            _theme.ApplyTheme(result.ThemeId);
 
         if (result.ToolbarPosition != _currentToolbarPosition)
         {
             SetToolbarPosition(result.ToolbarPosition);
-            AppSettings.SetString("ToolbarPosition", result.ToolbarPosition);
+            _appSettings.SetString("ToolbarPosition", result.ToolbarPosition);
         }
 
         var newClaudePath = string.IsNullOrEmpty(result.ClaudePath) ? "claude" : result.ClaudePath;
-        if (newClaudePath != ClaudeSession.ClaudeBinaryPath)
+        if (newClaudePath != _claudeEnvironment.BinaryPath)
         {
-            ClaudeSession.ClaudeBinaryPath = newClaudePath;
-            AppSettings.SetString("ClaudePath", string.IsNullOrEmpty(result.ClaudePath) ? "" : result.ClaudePath);
-            Log.Info($"AppSettings: ClaudePath set to '{newClaudePath}'");
+            _claudeEnvironment.BinaryPath = newClaudePath;
+            _appSettings.SetString("ClaudePath", string.IsNullOrEmpty(result.ClaudePath) ? "" : result.ClaudePath);
+            _log.Info($"AppSettings: ClaudePath set to '{newClaudePath}'");
         }
 
         if (result.UpdateChannel != currentChannel)
         {
-            AppSettings.SetString("UpdateChannel", result.UpdateChannel.ToString());
-            Log.Info($"AppSettings: UpdateChannel set to '{result.UpdateChannel}'");
+            _appSettings.SetString("UpdateChannel", result.UpdateChannel.ToString());
+            _log.Info($"AppSettings: UpdateChannel set to '{result.UpdateChannel}'");
         }
     }
 
     private void Accounts_Click(object sender, RoutedEventArgs e)
     {
-        Windows.AccountsDialog.Show(this);
+        Windows.AccountsDialog.Show(this, _accounts);
     }
 
     // --- Help Menu ---
@@ -523,21 +605,21 @@ public partial class MainWindow : Window
             icon);
     }
 
-    private static List<(string Name, bool Found, string Detail)> RunPrerequisiteChecks()
+    private List<(string Name, bool Found, string Detail)> RunPrerequisiteChecks()
     {
         // Log environment info for diagnostics
-        Log.Info($"Prereq: OS={Environment.OSVersion}, .NET={Environment.Version}, 64-bit={Environment.Is64BitProcess}");
-        Log.Info($"Prereq: OSDescription='{System.Runtime.InteropServices.RuntimeInformation.OSDescription}', " +
+        _log.Info($"Prereq: OS={Environment.OSVersion}, .NET={Environment.Version}, 64-bit={Environment.Is64BitProcess}");
+        _log.Info($"Prereq: OSDescription='{System.Runtime.InteropServices.RuntimeInformation.OSDescription}', " +
                  $"Framework='{System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}', " +
                  $"Arch={System.Runtime.InteropServices.RuntimeInformation.OSArchitecture}");
-        Log.Info($"Prereq: User={Environment.UserName}, Machine={Environment.MachineName}");
+        _log.Info($"Prereq: User={Environment.UserName}, Machine={Environment.MachineName}");
 
         var results = new List<(string Name, bool Found, string Detail)>();
 
         // Command-line tools — each gets: name, found/not-found, resolved path, version
         var cliChecks = new (string Name, string Command, string Args)[]
         {
-            ("Claude Code CLI", ClaudeSession.ClaudeBinaryPath, "--version"),
+            ("Claude Code CLI", _claudeEnvironment.BinaryPath, "--version"),
             ("Git", "git", "--version"),
             ("VS Code", "code", "--version"),
             ("Cursor", "cursor", "--version"),
@@ -548,9 +630,9 @@ public partial class MainWindow : Window
             var (found, version) = CheckCommandVersion(command, args);
             var resolvedPath = ResolveCommandPath(command);
             if (found)
-                Log.Info($"Prereq: {name} — FOUND, path='{resolvedPath}', version='{version}'");
+                _log.Info($"Prereq: {name} — FOUND, path='{resolvedPath}', version='{version}'");
             else
-                Log.Info($"Prereq: {name} — NOT FOUND (searched PATH for '{command}')");
+                _log.Info($"Prereq: {name} — NOT FOUND (searched PATH for '{command}')");
             results.Add((name, found, version));
         }
 
@@ -560,9 +642,9 @@ public partial class MainWindow : Window
         // Visual Studio — check install directories
         var vsResult = FindVisualStudio();
         if (vsResult.Found)
-            Log.Info($"Prereq: {vsResult.Name} — FOUND, {vsResult.Detail}");
+            _log.Info($"Prereq: {vsResult.Name} — FOUND, {vsResult.Detail}");
         else
-            Log.Info($"Prereq: {vsResult.Name} — NOT FOUND");
+            _log.Info($"Prereq: {vsResult.Name} — NOT FOUND");
         results.Add(vsResult);
 
         return results;
@@ -572,7 +654,7 @@ public partial class MainWindow : Window
     /// Resolves a command name to its full path on the system PATH.
     /// Returns the first match (preferring .cmd/.bat for npm wrappers), or the bare name if not found.
     /// </summary>
-    private static string ResolveCommandPath(string command)
+    private string ResolveCommandPath(string command)
     {
         if (Path.IsPathRooted(command) && File.Exists(command))
             return command;
@@ -599,7 +681,7 @@ public partial class MainWindow : Window
     /// Logs all claude binaries found on PATH and any custom path override.
     /// This helps diagnose cases where the wrong binary is picked up.
     /// </summary>
-    private static void LogClaudePathDetails()
+    private void LogClaudePathDetails()
     {
         var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? "";
         var extensions = new[] { ".cmd", ".bat", "", ".exe" };
@@ -618,17 +700,17 @@ public partial class MainWindow : Window
         }
 
         if (found.Count > 1)
-            Log.Info($"Prereq: Claude — all matches on PATH ({found.Count}): {string.Join(", ", found)}");
+            _log.Info($"Prereq: Claude — all matches on PATH ({found.Count}): {string.Join(", ", found)}");
 
-        if (ClaudeSession.ClaudeBinaryPath != "claude")
-            Log.Info($"Prereq: Claude — custom path override = '{ClaudeSession.ClaudeBinaryPath}'");
+        if (_claudeEnvironment.BinaryPath != "claude")
+            _log.Info($"Prereq: Claude — custom path override = '{_claudeEnvironment.BinaryPath}'");
     }
 
     /// <summary>
     /// Runs a command via cmd.exe /c to get its version output.
     /// Returns (found, version-string).
     /// </summary>
-    private static (bool Found, string Version) CheckCommandVersion(string command, string args)
+    private (bool Found, string Version) CheckCommandVersion(string command, string args)
     {
         try
         {
@@ -663,7 +745,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private static (string Name, bool Found, string Detail) FindVisualStudio()
+    private (string Name, bool Found, string Detail) FindVisualStudio()
     {
         // Try vswhere.exe first (official VS detection tool)
         var vswhere = Path.Combine(
@@ -734,7 +816,7 @@ public partial class MainWindow : Window
 
     private async System.Threading.Tasks.Task RunStartupPrerequisiteChecks()
     {
-        Log.Info("Startup prerequisite check: starting");
+        _log.Info("Startup prerequisite check: starting");
         TitleBarText.Text = "Checking prerequisites...";
 
         _prerequisiteResults = await System.Threading.Tasks.Task.Run(RunPrerequisiteChecks);
@@ -748,7 +830,7 @@ public partial class MainWindow : Window
         }
 
         UpdateTitleBar(); // restore normal title
-        Log.Info("Startup prerequisite check: complete");
+        _log.Info("Startup prerequisite check: complete");
     }
 
     private const string LastWhatsNewVersionKey = "LastWhatsNewVersionShown";
@@ -763,54 +845,54 @@ public partial class MainWindow : Window
         try
         {
             var currentVersion = App.Version;
-            var lastShown = AppSettings.GetString(LastWhatsNewVersionKey, "");
+            var lastShown = _appSettings.GetString(LastWhatsNewVersionKey, "");
 
             if (string.IsNullOrEmpty(lastShown))
             {
-                Log.Info($"WhatsNew: first install, recording v{currentVersion} silently");
-                AppSettings.SetString(LastWhatsNewVersionKey, currentVersion);
+                _log.Info($"WhatsNew: first install, recording v{currentVersion} silently");
+                _appSettings.SetString(LastWhatsNewVersionKey, currentVersion);
                 return;
             }
 
             if (lastShown == currentVersion)
                 return;
 
-            var notes = ReleaseNotesService.GetNotesForVersion(currentVersion);
+            var notes = _releaseNotes.GetNotesForVersion(currentVersion);
             if (string.IsNullOrWhiteSpace(notes))
             {
-                Log.Info($"WhatsNew: no embedded notes for v{currentVersion}, skipping popup");
-                AppSettings.SetString(LastWhatsNewVersionKey, currentVersion);
+                _log.Info($"WhatsNew: no embedded notes for v{currentVersion}, skipping popup");
+                _appSettings.SetString(LastWhatsNewVersionKey, currentVersion);
                 return;
             }
 
-            Log.Info($"WhatsNew: showing release notes for v{currentVersion} (was v{lastShown})");
-            var window = new WhatsNewWindow(this, currentVersion, notes);
+            _log.Info($"WhatsNew: showing release notes for v{currentVersion} (was v{lastShown})");
+            var window = new WhatsNewWindow(this, currentVersion, notes, _markdown);
             window.ShowDialog();
 
-            AppSettings.SetString(LastWhatsNewVersionKey, currentVersion);
+            _appSettings.SetString(LastWhatsNewVersionKey, currentVersion);
         }
         catch (Exception ex)
         {
-            Log.Warn($"WhatsNew: failed to show popup — {ex.Message}");
+            _log.Warn($"WhatsNew: failed to show popup — {ex.Message}");
         }
     }
 
     private async System.Threading.Tasks.Task CheckForAppUpdateAsync()
     {
 #if DEBUG
-        Log.Info("UpdateCheck: skipping update check in Debug build");
+        _log.Info("UpdateCheck: skipping update check in Debug build");
         return;
 #else
-        var channelStr = AppSettings.GetString("UpdateChannel", "Stable");
+        var channelStr = _appSettings.GetString("UpdateChannel", "Stable");
         var channel = Enum.TryParse<UpdateChannel>(channelStr, ignoreCase: true, out var c)
             ? c
             : UpdateChannel.Stable;
-        var updateInfo = await System.Threading.Tasks.Task.Run(() => UpdateCheckService.CheckForUpdateAsync(channel));
+        var updateInfo = await System.Threading.Tasks.Task.Run(() => _updateCheck.CheckForUpdateAsync(channel));
         if (updateInfo == null)
             return;
 
-        Log.Info($"Update available: v{updateInfo.Version}");
-        var dialog = new UpdateDialog(this, updateInfo);
+        _log.Info($"Update available: v{updateInfo.Version}");
+        var dialog = new UpdateDialog(this, updateInfo, _markdown, _updateCheck);
         dialog.ShowDialog();
 #endif
     }
@@ -819,7 +901,7 @@ public partial class MainWindow : Window
 
     private void AddProject()
     {
-        Log.Info("AddProject: opening folder dialog");
+        _log.Info("AddProject: opening folder dialog");
         var dialog = new OpenFolderDialog
         {
             Title = "Select Project Folder"
@@ -827,7 +909,7 @@ public partial class MainWindow : Window
 
         if (dialog.ShowDialog() != true)
         {
-            Log.Info("AddProject: dialog cancelled");
+            _log.Info("AddProject: dialog cancelled");
             return;
         }
 
@@ -842,12 +924,12 @@ public partial class MainWindow : Window
     /// <returns>The ProjectInfo if added, or null if duplicate/invalid.</returns>
     private ProjectInfo? AddProjectFromPath(string folderPath, string? layoutXml = null)
     {
-        Log.Info($"AddProjectFromPath: '{folderPath}'");
+        _log.Info($"AddProjectFromPath: '{folderPath}'");
 
         // Prevent duplicates
         if (_projects.Any(p => string.Equals(p.FolderPath, folderPath, StringComparison.OrdinalIgnoreCase)))
         {
-            Log.Warn($"AddProjectFromPath: duplicate folder '{folderPath}'");
+            _log.Warn($"AddProjectFromPath: duplicate folder '{folderPath}'");
             var existing = _projects.First(p =>
                 string.Equals(p.FolderPath, folderPath, StringComparison.OrdinalIgnoreCase));
             SwitchToProject(existing);
@@ -856,7 +938,7 @@ public partial class MainWindow : Window
 
         if (!Directory.Exists(folderPath))
         {
-            Log.Warn($"AddProjectFromPath: folder does not exist '{folderPath}'");
+            _log.Warn($"AddProjectFromPath: folder does not exist '{folderPath}'");
             ThemedMessageBox.Show(
                 this,
                 $"The folder '{folderPath}' does not exist.",
@@ -867,7 +949,7 @@ public partial class MainWindow : Window
         }
 
         var project = new ProjectInfo { FolderPath = folderPath };
-        project.CustomName = ProjectSettingsManager.Load(folderPath).Name;
+        project.CustomName = _projectSettings.Load(folderPath).Name;
 
         // If groups are active, the new project joins whichever group is currently visible.
         // The Active Projects tab is a virtual view over live sessions, not a real group, so
@@ -878,8 +960,19 @@ public partial class MainWindow : Window
                 ? GroupBehindActiveProjectsTab()
                 : _activeGroupId;
 
+        return AddProjectCore(project, layoutXml);
+    }
+
+    /// <summary>
+    /// Registers a project that already exists as a <see cref="ProjectInfo"/> and builds its tab
+    /// and panels. Split out of <see cref="AddProjectFromPath"/> so a remote project — whose
+    /// folder is on another machine and therefore fails every local existence check — can reuse
+    /// the same tab construction rather than duplicating it.
+    /// </summary>
+    private ProjectInfo? AddProjectCore(ProjectInfo project, string? layoutXml)
+    {
         _projects.Add(project);
-        Log.Info($"AddProjectFromPath: created ProjectInfo for '{project.FolderName}'");
+        _log.Info($"AddProjectFromPath: created ProjectInfo for '{project.FolderName}'");
 
         // Create the tab button
         var tabButton = CreateProjectTabButton(project);
@@ -903,6 +996,8 @@ public partial class MainWindow : Window
         _projectDescriptionControls[project] = descControl;
         _projectTodoListControls[project] = todoControl;
         chatControl.SessionStateChanged += state => UpdateTabIcon(project, state);
+        // A session starting or ending changes which tabs a connected client should see.
+        chatControl.SessionStateChanged += _ => ActiveProjectsChanged?.Invoke();
         // A scheduled message changes the tab's icon/tooltip even when the session
         // state itself doesn't move (e.g. Idle → Idle-with-schedule), so refresh on it.
         chatControl.ScheduleChanged += () => UpdateTabIcon(project, chatControl.CurrentState);
@@ -915,7 +1010,7 @@ public partial class MainWindow : Window
         SwitchToProject(project);
 
         SetWorkspaceDirty();
-        Log.Info("AddProjectFromPath: complete");
+        _log.Info("AddProjectFromPath: complete");
         return project;
     }
 
@@ -949,16 +1044,16 @@ public partial class MainWindow : Window
         return results;
     }
 
-    private static string? FindProjectLogo(string folderPath)
+    private string? FindProjectLogo(string folderPath)
         => FindAllProjectLogos(folderPath).FirstOrDefault();
 
     /// <summary>
     /// Resolves the project icon: reads from .agentdock/settings.json,
     /// auto-discovers if not set, persists the result, and creates the UI element.
     /// </summary>
-    private static UIElement ResolveProjectIcon(string folderPath)
+    private UIElement ResolveProjectIcon(string folderPath)
     {
-        var settings = ProjectSettingsManager.Load(folderPath);
+        var settings = _projectSettings.Load(folderPath);
 
         if (settings.Icon == null)
         {
@@ -976,7 +1071,7 @@ public partial class MainWindow : Window
                 settings.Icon = "folder"; // default built-in
             }
 
-            ProjectSettingsManager.Save(folderPath, settings);
+            _projectSettings.Save(folderPath, settings);
         }
 
         return CreateIconElement(settings.Icon, folderPath, settings.IconColor);
@@ -985,7 +1080,7 @@ public partial class MainWindow : Window
     /// <summary>
     /// Creates a UIElement for the given icon value (built-in name or file path).
     /// </summary>
-    private static UIElement CreateIconElement(string icon, string folderPath,
+    private UIElement CreateIconElement(string icon, string folderPath,
         string? iconColor = null)
     {
         // Check if it's a built-in icon name
@@ -993,8 +1088,8 @@ public partial class MainWindow : Window
         if (builtIn != null)
         {
             var foreground = iconColor != null
-                ? ParseHexBrush(iconColor) ?? ThemeManager.GetBrush("TabIconNoSessionForeground")
-                : ThemeManager.GetBrush("TabIconNoSessionForeground");
+                ? ParseHexBrush(iconColor) ?? _theme.GetBrush("TabIconNoSessionForeground")
+                : _theme.GetBrush("TabIconNoSessionForeground");
 
             return new TextBlock
             {
@@ -1027,7 +1122,7 @@ public partial class MainWindow : Window
             }
             catch (Exception ex)
             {
-                Log.Warn($"Failed to load project icon '{filePath}': {ex.Message}");
+                _log.Warn($"Failed to load project icon '{filePath}': {ex.Message}");
             }
         }
 
@@ -1038,7 +1133,7 @@ public partial class MainWindow : Window
             Text = fallback.Glyph,
             FontFamily = new FontFamily(fallback.FontFamily),
             FontSize = 14,
-            Foreground = ThemeManager.GetBrush("TabIconNoSessionForeground"),
+            Foreground = _theme.GetBrush("TabIconNoSessionForeground"),
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 5, 0)
         };
@@ -1047,7 +1142,7 @@ public partial class MainWindow : Window
     /// <summary>
     /// Parses a hex colour string (#RRGGBB) into a SolidColorBrush, or null if invalid.
     /// </summary>
-    private static SolidColorBrush? ParseHexBrush(string hex)
+    private SolidColorBrush? ParseHexBrush(string hex)
     {
         try
         {
@@ -1101,7 +1196,7 @@ public partial class MainWindow : Window
     /// "TabRail": the tab's own slice of the strip's accent rail, which the tab paints
     /// only while it isn't the current one.
     /// </summary>
-    private static ControlTemplate CreateTabControlTemplate()
+    private ControlTemplate CreateTabControlTemplate()
     {
         var template = new ControlTemplate(typeof(Button));
 
@@ -1147,23 +1242,23 @@ public partial class MainWindow : Window
     /// accent outline closes into a box, while inactive tabs keep the same thickness in
     /// the divider brush and separate from their neighbours.
     /// </summary>
-    private static readonly Thickness TabOutlineThickness = new(1, 1, 1, 0);
+    private readonly Thickness TabOutlineThickness = new(1, 1, 1, 0);
 
     /// <summary>Outline brush for a tab that isn't the current one, in either strip.</summary>
-    private static Brush InactiveTabOutlineBrush() => ThemeManager.GetBrush("ToolbarBorderBrush");
+    private Brush InactiveTabOutlineBrush() => _theme.GetBrush("ToolbarBorderBrush");
 
     /// <summary>
     /// The current project tab takes the strip's own background, so tab and strip read as
     /// one surface carrying the project accent — the same relationship the group strip has
     /// with the project strip below it.
     /// </summary>
-    private static Brush ActiveProjectTabBrush() => ThemeManager.GetBrush("ToolbarBackground");
+    private Brush ActiveProjectTabBrush() => _theme.GetBrush("ToolbarBackground");
 
     /// <summary>
     /// Project tabs that aren't current sit a shade darker than the strip, so they read as
     /// recessed rather than bleeding into the strip (and the content area) around them.
     /// </summary>
-    private static Brush InactiveProjectTabBrush() => ThemeManager.GetBrush("ProjectTabInactiveBackground");
+    private Brush InactiveProjectTabBrush() => _theme.GetBrush("ProjectTabInactiveBackground");
 
     private Button CreateProjectTabButton(ProjectInfo project)
     {
@@ -1184,7 +1279,7 @@ public partial class MainWindow : Window
             Text = "\u25C7", // ◇ outline diamond — no session
             FontFamily = new FontFamily("Segoe UI Symbol"),
             FontSize = 14,
-            Foreground = ThemeManager.GetBrush("TabIconInactiveDiamondForeground"),
+            Foreground = _theme.GetBrush("TabIconInactiveDiamondForeground"),
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center
         };
@@ -1233,7 +1328,7 @@ public partial class MainWindow : Window
                         Text = project.DisplayName,
                         FontSize = 12,
                         VerticalAlignment = VerticalAlignment.Center,
-                        Foreground = ThemeManager.GetBrush("TabButtonForeground")
+                        Foreground = _theme.GetBrush("TabButtonForeground")
                     },
                     statusGrid
                 }
@@ -1242,7 +1337,7 @@ public partial class MainWindow : Window
 
         // Carries the strip's accent rail across its own content-facing edge while it
         // isn't the current tab; SetTabButtonActive drops it when it becomes current.
-        SetTabRailBrush(button, ThemeManager.GetBrush("ProjectTabActiveBorderBrush"));
+        SetTabRailBrush(button, _theme.GetBrush("ProjectTabActiveBorderBrush"));
         SetTabRailThickness(button, ProjectTabRailThickness());
 
         button.Click += (_, _) =>
@@ -1331,7 +1426,7 @@ public partial class MainWindow : Window
             Margin = new Thickness(6, 3, 3, 3),
             VerticalAlignment = VerticalAlignment.Center,
             Background = Brushes.Transparent,
-            BorderBrush = ThemeManager.GetBrush("AddButtonBorderBrush"),
+            BorderBrush = _theme.GetBrush("AddButtonBorderBrush"),
             BorderThickness = new Thickness(1),
             Cursor = Cursors.Hand,
             ToolTip = "Add Project (Ctrl+N)",
@@ -1341,7 +1436,7 @@ public partial class MainWindow : Window
                 Text = "+",
                 FontSize = 18,
                 FontWeight = FontWeights.Light,
-                Foreground = ThemeManager.GetBrush("AddButtonForeground"),
+                Foreground = _theme.GetBrush("AddButtonForeground"),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
             }
@@ -1351,11 +1446,11 @@ public partial class MainWindow : Window
 
         button.MouseEnter += (_, _) =>
         {
-            button.BorderBrush = ThemeManager.GetBrush("TabButtonHoverBorderBrush");
+            button.BorderBrush = _theme.GetBrush("TabButtonHoverBorderBrush");
         };
         button.MouseLeave += (_, _) =>
         {
-            button.BorderBrush = ThemeManager.GetBrush("AddButtonBorderBrush");
+            button.BorderBrush = _theme.GetBrush("AddButtonBorderBrush");
         };
 
         return button;
@@ -1460,7 +1555,7 @@ public partial class MainWindow : Window
         {
             _tabDragIndicator = new Border
             {
-                Background = ThemeManager.GetBrush("TabButtonActiveBorderBrush"),
+                Background = _theme.GetBrush("TabButtonActiveBorderBrush"),
                 IsHitTestVisible = false
             };
         }
@@ -1571,7 +1666,7 @@ public partial class MainWindow : Window
     {
         _groupDragIndicator ??= new Border
         {
-            Background = ThemeManager.GetBrush("TabButtonActiveBorderBrush"),
+            Background = _theme.GetBrush("TabButtonActiveBorderBrush"),
             IsHitTestVisible = false,
             Width = 3,
             Height = 28,
@@ -1592,7 +1687,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private static MenuItem CreateMenuItem(string header, Action action)
+    private MenuItem CreateMenuItem(string header, Action action)
     {
         var item = new MenuItem { Header = header };
         item.Click += (_, _) => action();
@@ -1670,7 +1765,10 @@ public partial class MainWindow : Window
         _groupIconTimers.Clear();
         _groupTabIcons.Clear();
 
-        if (_groups.Count < 2)
+        // A remote session always shows its group tab, even though it is the only group: the
+        // name is how the user knows which machine they are driving, which matters more here
+        // than the tidiness of hiding a single-group bar.
+        if (_groups.Count < 2 && !IsRemoteSession)
         {
             ActiveGroupHost.Content = null;
             _activeGroupButton = null;
@@ -1701,7 +1799,7 @@ public partial class MainWindow : Window
     /// </summary>
     private void UpdateGroupStripVisibility()
     {
-        MetaTabBorder.Visibility = _groups.Count >= 2 && _projects.Count > 0
+        MetaTabBorder.Visibility = (_groups.Count >= 2 || IsRemoteSession) && _projects.Count > 0
             ? Visibility.Visible
             : Visibility.Collapsed;
         UpdateGroupFrame();
@@ -1891,7 +1989,7 @@ public partial class MainWindow : Window
     private Button CreateActiveGroupElement()
     {
         var template = CreateTabControlTemplate();
-        var accent = ThemeManager.GetBrush("ActiveGroupAccentForeground");
+        var accent = _theme.GetBrush("ActiveGroupAccentForeground");
 
         var builtIn = BuiltInIcons.Find("bolt") ?? BuiltInIcons.Default;
         var iconElement = new TextBlock
@@ -1926,7 +2024,7 @@ public partial class MainWindow : Window
             Text = "◇",
             FontFamily = new FontFamily("Segoe UI Symbol"),
             FontSize = 14,
-            Foreground = ThemeManager.GetBrush("TabIconInactiveDiamondForeground"),
+            Foreground = _theme.GetBrush("TabIconInactiveDiamondForeground"),
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center
         };
@@ -1957,13 +2055,13 @@ public partial class MainWindow : Window
             Margin = new Thickness(0),
             Padding = new Thickness(12, 0, 12, 0),
             Background = isActive
-                ? ThemeManager.GetBrush("GroupTabActiveBackground")
-                : ThemeManager.GetBrush("TabButtonInactiveBackground"),
+                ? _theme.GetBrush("GroupTabActiveBackground")
+                : _theme.GetBrush("TabButtonInactiveBackground"),
             // Same three-sided outline as the real group tabs. Its magenta bolt/label
             // are what set it apart; an underline here would break the accent rail that
             // runs along the strip.
             BorderBrush = isActive
-                ? ThemeManager.GetBrush("TabButtonActiveBorderBrush")
+                ? _theme.GetBrush("TabButtonActiveBorderBrush")
                 : InactiveTabOutlineBrush(),
             BorderThickness = TabOutlineThickness,
             Cursor = Cursors.Hand,
@@ -1973,7 +2071,7 @@ public partial class MainWindow : Window
             ToolTip = "Active Projects — projects with a live agent session, most recent first"
         };
 
-        SetTabRailBrush(button, isActive ? null : ThemeManager.GetBrush("TabButtonActiveBorderBrush"));
+        SetTabRailBrush(button, isActive ? null : _theme.GetBrush("TabButtonActiveBorderBrush"));
 
         button.Click += (_, _) =>
         {
@@ -1995,7 +2093,7 @@ public partial class MainWindow : Window
         button.MouseLeave += (_, _) =>
         {
             if (_activeGroupId != ActiveProjectsGroupId)
-                button.Background = ThemeManager.GetBrush("TabButtonInactiveBackground");
+                button.Background = _theme.GetBrush("TabButtonInactiveBackground");
         };
 
         return button;
@@ -2017,13 +2115,13 @@ public partial class MainWindow : Window
         _activeGroupButton.IsEnabled = active.Count > 0 || isSelected;
         _activeGroupButton.Opacity = _activeGroupButton.IsEnabled ? 1.0 : 0.5;
         _activeGroupButton.Background = isSelected
-            ? ThemeManager.GetBrush("GroupTabActiveBackground")
-            : ThemeManager.GetBrush("TabButtonInactiveBackground");
+            ? _theme.GetBrush("GroupTabActiveBackground")
+            : _theme.GetBrush("TabButtonInactiveBackground");
         _activeGroupButton.BorderBrush = isSelected
-            ? ThemeManager.GetBrush("TabButtonActiveBorderBrush")
+            ? _theme.GetBrush("TabButtonActiveBorderBrush")
             : InactiveTabOutlineBrush();
         SetTabRailBrush(_activeGroupButton,
-            isSelected ? null : ThemeManager.GetBrush("TabButtonActiveBorderBrush"));
+            isSelected ? null : _theme.GetBrush("TabButtonActiveBorderBrush"));
 
         if (_groupTabIcons.TryGetValue(ActiveProjectsGroupId, out var grid))
         {
@@ -2051,7 +2149,7 @@ public partial class MainWindow : Window
             Text = group.Name,
             FontSize = 12,
             VerticalAlignment = VerticalAlignment.Center,
-            Foreground = ThemeManager.GetBrush("TabButtonForeground"),
+            Foreground = _theme.GetBrush("TabButtonForeground"),
         };
 
         // Group status diamond (aggregate of the group's child projects), built like
@@ -2068,7 +2166,7 @@ public partial class MainWindow : Window
             Text = "◇", // ◇ outline diamond — no active session in the group
             FontFamily = new FontFamily("Segoe UI Symbol"),
             FontSize = 14,
-            Foreground = ThemeManager.GetBrush("TabIconInactiveDiamondForeground"),
+            Foreground = _theme.GetBrush("TabIconInactiveDiamondForeground"),
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center
         };
@@ -2098,10 +2196,10 @@ public partial class MainWindow : Window
             Margin = new Thickness(0),
             Padding = new Thickness(12, 0, 12, 0),
             Background = isActive
-                ? ThemeManager.GetBrush("GroupTabActiveBackground")
-                : ThemeManager.GetBrush("TabButtonInactiveBackground"),
+                ? _theme.GetBrush("GroupTabActiveBackground")
+                : _theme.GetBrush("TabButtonInactiveBackground"),
             BorderBrush = isActive
-                ? ThemeManager.GetBrush("TabButtonActiveBorderBrush")
+                ? _theme.GetBrush("TabButtonActiveBorderBrush")
                 : InactiveTabOutlineBrush(),
             BorderThickness = TabOutlineThickness,
             Cursor = Cursors.Hand,
@@ -2114,7 +2212,7 @@ public partial class MainWindow : Window
 
         // Only the tabs that aren't current carry the strip's rail across their bottom
         // edge; the current one leaves the gap, so it reads as holding the workspace.
-        SetTabRailBrush(button, isActive ? null : ThemeManager.GetBrush("TabButtonActiveBorderBrush"));
+        SetTabRailBrush(button, isActive ? null : _theme.GetBrush("TabButtonActiveBorderBrush"));
 
         bool IsRenaming() => contentPanel.Children.OfType<TextBox>().Any();
 
@@ -2137,7 +2235,7 @@ public partial class MainWindow : Window
         button.MouseLeave += (_, _) =>
         {
             if (group.Id != _activeGroupId && !IsRenaming())
-                button.Background = ThemeManager.GetBrush("TabButtonInactiveBackground");
+                button.Background = _theme.GetBrush("TabButtonInactiveBackground");
         };
 
         // Drag initiation for reordering groups (DragOver/Drop handled at MetaTabPanel level)
@@ -2197,16 +2295,16 @@ public partial class MainWindow : Window
         button.DragLeave += (_, _) =>
         {
             if (group.Id == _activeGroupId)
-                button.Background = ThemeManager.GetBrush("GroupTabActiveBackground");
+                button.Background = _theme.GetBrush("GroupTabActiveBackground");
             else
-                button.Background = ThemeManager.GetBrush("TabButtonInactiveBackground");
+                button.Background = _theme.GetBrush("TabButtonInactiveBackground");
         };
         button.Drop += (_, e) =>
         {
             // Reset hover-tinted background regardless of outcome
             button.Background = group.Id == _activeGroupId
-                ? ThemeManager.GetBrush("GroupTabActiveBackground")
-                : ThemeManager.GetBrush("TabButtonInactiveBackground");
+                ? _theme.GetBrush("GroupTabActiveBackground")
+                : _theme.GetBrush("TabButtonInactiveBackground");
 
             if (e.Data.GetData("ProjectTab") is ProjectInfo dropped)
             {
@@ -2249,7 +2347,7 @@ public partial class MainWindow : Window
             Margin = new Thickness(6, 3, 0, 3),
             VerticalAlignment = VerticalAlignment.Center,
             Background = Brushes.Transparent,
-            BorderBrush = ThemeManager.GetBrush("AddButtonBorderBrush"),
+            BorderBrush = _theme.GetBrush("AddButtonBorderBrush"),
             BorderThickness = new Thickness(1),
             Cursor = Cursors.Hand,
             ToolTip = "Add Group",
@@ -2259,7 +2357,7 @@ public partial class MainWindow : Window
                 Text = "+",
                 FontSize = 18,
                 FontWeight = FontWeights.Light,
-                Foreground = ThemeManager.GetBrush("AddButtonForeground"),
+                Foreground = _theme.GetBrush("AddButtonForeground"),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
             }
@@ -2269,11 +2367,11 @@ public partial class MainWindow : Window
 
         button.MouseEnter += (_, _) =>
         {
-            button.BorderBrush = ThemeManager.GetBrush("TabButtonHoverBorderBrush");
+            button.BorderBrush = _theme.GetBrush("TabButtonHoverBorderBrush");
         };
         button.MouseLeave += (_, _) =>
         {
-            button.BorderBrush = ThemeManager.GetBrush("AddButtonBorderBrush");
+            button.BorderBrush = _theme.GetBrush("AddButtonBorderBrush");
         };
 
         return button;
@@ -2283,12 +2381,12 @@ public partial class MainWindow : Window
     /// Creates the icon element for a group. Groups have no folder, so only built-in
     /// icons are supported (defaulting to the folder glyph).
     /// </summary>
-    private static UIElement CreateGroupIconElement(ProjectGroup group)
+    private UIElement CreateGroupIconElement(ProjectGroup group)
     {
         var builtIn = BuiltInIcons.Find(group.Icon ?? "folder") ?? BuiltInIcons.Default;
         var foreground = group.IconColor != null
-            ? ParseHexBrush(group.IconColor) ?? ThemeManager.GetBrush("TabIconNoSessionForeground")
-            : ThemeManager.GetBrush("TabIconNoSessionForeground");
+            ? ParseHexBrush(group.IconColor) ?? _theme.GetBrush("TabIconNoSessionForeground")
+            : _theme.GetBrush("TabIconNoSessionForeground");
 
         return new TextBlock
         {
@@ -2316,10 +2414,10 @@ public partial class MainWindow : Window
             VerticalContentAlignment = VerticalAlignment.Center,
             Margin = new Thickness(-4, 0, -4, 0),
             Padding = new Thickness(2, 0, 2, 0),
-            Background = ThemeManager.GetBrush("ContentBackground"),
-            Foreground = ThemeManager.GetBrush("TabButtonForeground"),
+            Background = _theme.GetBrush("ContentBackground"),
+            Foreground = _theme.GetBrush("TabButtonForeground"),
             BorderThickness = new Thickness(1),
-            BorderBrush = ThemeManager.GetBrush("TabButtonActiveBorderBrush")
+            BorderBrush = _theme.GetBrush("TabButtonActiveBorderBrush")
         };
 
         var committed = false;
@@ -2545,29 +2643,50 @@ public partial class MainWindow : Window
 
     private (DockingManager, AiChatControl, GitStatusControl, ProjectDescriptionControl, TodoListControl) CreateProjectDockingLayout(ProjectInfo project, string? layoutXml = null)
     {
-        Log.Info("CreateDockingLayout: starting");
+        _log.Info("CreateDockingLayout: starting");
         var dockingManager = new DockingManager
         {
-            Theme = ThemeManager.BaseVariant == ThemeBaseVariant.Dark
+            Theme = _theme.BaseVariant == ThemeBaseVariant.Dark
                 ? new Vs2013DarkTheme()
                 : new Vs2013LightTheme()
         };
 
+        // A remote project's files, git and settings all live on the other machine, so the
+        // panels are switched into remote mode instead of being pointed at a local path that
+        // does not exist here.
+        var remoteId = GetRemoteProjectId(project);
+        var isRemote = remoteId != null;
+
         // Create controls
-        var fileExplorerControl = new FileExplorerControl();
-        fileExplorerControl.LoadDirectory(project.FolderPath);
+        var fileExplorerControl = new FileExplorerControl(_projectSettings, _theme);
+        if (isRemote)
+            fileExplorerControl.EnterRemoteMode(_remoteClient, remoteId!, project.FolderPath);
+        else
+            fileExplorerControl.LoadDirectory(project.FolderPath);
 
-        var gitStatusControl = new GitStatusControl();
-        gitStatusControl.LoadRepository(project.FolderPath);
+        var gitStatusControl = new GitStatusControl(_log, _perf, _theme);
+        if (isRemote)
+            gitStatusControl.EnterRemoteMode();
+        else
+            gitStatusControl.LoadRepository(project.FolderPath);
 
-        var filePreviewControl = new FilePreviewControl();
+        var filePreviewControl = new FilePreviewControl(_markdown, _theme);
         _projectPreviewControls[project] = filePreviewControl;
+        _projectExplorerControls[project] = fileExplorerControl;
+        if (isRemote)
+            filePreviewControl.EnterRemoteMode(_remoteClient, remoteId!, project.FolderPath);
 
-        var descriptionControl = new ProjectDescriptionControl();
-        descriptionControl.LoadProject(project.FolderPath);
+        var descriptionControl = new ProjectDescriptionControl(_projectSettings);
+        if (isRemote)
+            descriptionControl.EnterRemoteMode();
+        else
+            descriptionControl.LoadProject(project.FolderPath);
 
-        var todoListControl = new TodoListControl();
-        todoListControl.LoadProject(project.FolderPath);
+        var todoListControl = new TodoListControl(_projectSettings);
+        if (isRemote)
+            todoListControl.EnterRemoteMode(_remoteClient, remoteId!);
+        else
+            todoListControl.LoadProject(project.FolderPath);
 
         // Open settings dialog from description panel's settings icon
         descriptionControl.OpenSettingsRequested += () => OpenProjectSettings(project);
@@ -2578,14 +2697,14 @@ public partial class MainWindow : Window
         // Wire file explorer clicks to preview panel
         fileExplorerControl.FileSelected += filePath =>
         {
-            Log.Info($"FileSelected: {filePath}");
+            _log.Info($"FileSelected: {filePath}");
             filePreviewControl.ShowFile(filePath);
         };
 
         // Wire git status diff clicks to preview panel
         gitStatusControl.DiffRequested += (filePath, diffContent) =>
         {
-            Log.Info($"DiffRequested: {filePath}");
+            _log.Info($"DiffRequested: {filePath}");
             var absolutePath = Path.IsPathRooted(filePath)
                 ? filePath
                 : Path.Combine(project.FolderPath, filePath);
@@ -2596,15 +2715,25 @@ public partial class MainWindow : Window
         // existing FileSelected wiring then swaps the preview from diff to full file.
         filePreviewControl.RevealInExplorerRequested += path =>
         {
-            Log.Info($"RevealInExplorerRequested: {path}");
+            _log.Info($"RevealInExplorerRequested: {path}");
             fileExplorerControl.RevealAndSelect(path);
         };
 
         // Refresh file explorer when file system changes (reuses git status watcher)
         gitStatusControl.FileSystemChanged += () => fileExplorerControl.Refresh();
 
-        var aiChatControl = new AiChatControl();
-        aiChatControl.Initialize(project.FolderPath);
+        var aiChatControl = new AiChatControl(
+            _log, _perf, _theme, _projectSettings, _accounts,
+            _sessionFactory, _claudeEnvironment, _markdown, _images);
+        if (isRemote)
+        {
+            aiChatControl.EnterRemoteMode(_remoteClient, remoteId!, project.FolderPath);
+            aiChatControl.SetRemoteDisplayRoot(project.FolderPath);
+        }
+        else
+        {
+            aiChatControl.Initialize(project.FolderPath);
+        }
 
         // Refresh git status when Claude finishes working (transitions to Idle)
         aiChatControl.SessionStateChanged += state =>
@@ -2617,7 +2746,7 @@ public partial class MainWindow : Window
         // in the explorer; the existing FileSelected handler shows the preview.
         aiChatControl.FileReferenceClicked += path =>
         {
-            Log.Info($"FileReferenceClicked: {path}");
+            _log.Info($"FileReferenceClicked: {path}");
             fileExplorerControl.RevealAndSelect(path);
         };
 
@@ -2660,7 +2789,7 @@ public partial class MainWindow : Window
         if (layoutXml != null)
         {
             // Restore layout from saved XML
-            Log.Info("CreateDockingLayout: restoring saved layout");
+            _log.Info("CreateDockingLayout: restoring saved layout");
             try
             {
                 var serializer = new XmlLayoutSerializer(dockingManager);
@@ -2729,7 +2858,7 @@ public partial class MainWindow : Window
             }
             catch (Exception ex)
             {
-                Log.Warn($"CreateDockingLayout: failed to restore layout, falling back to default — {ex.Message}");
+                _log.Warn($"CreateDockingLayout: failed to restore layout, falling back to default — {ex.Message}");
                 // Fall through to build default layout
                 BuildDefaultLayout(dockingManager, project, fileExplorerControl, gitStatusControl, filePreviewControl, aiChatControl, descriptionControl, todoListControl);
             }
@@ -2765,7 +2894,7 @@ public partial class MainWindow : Window
             SetWorkspaceDirty();
         };
 
-        Log.Info("CreateDockingLayout: complete");
+        _log.Info("CreateDockingLayout: complete");
         return (dockingManager, aiChatControl, gitStatusControl, descriptionControl, todoListControl);
     }
 
@@ -2886,11 +3015,11 @@ public partial class MainWindow : Window
         layoutRoot.RightSide.Children.Add(todoAnchorGroup);
     }
 
-    private static UIElement CreatePanelPlaceholder(string title, string subtitle)
+    private UIElement CreatePanelPlaceholder(string title, string subtitle)
     {
         return new Border
         {
-            Background = ThemeManager.GetBrush("PlaceholderBackground"),
+            Background = _theme.GetBrush("PlaceholderBackground"),
             Child = new StackPanel
             {
                 HorizontalAlignment = HorizontalAlignment.Center,
@@ -2902,7 +3031,7 @@ public partial class MainWindow : Window
                         Text = title,
                         FontSize = 16,
                         FontWeight = FontWeights.SemiBold,
-                        Foreground = ThemeManager.GetBrush("PlaceholderTitleForeground"),
+                        Foreground = _theme.GetBrush("PlaceholderTitleForeground"),
                         HorizontalAlignment = HorizontalAlignment.Center,
                         Margin = new Thickness(0, 0, 0, 4)
                     },
@@ -2910,7 +3039,7 @@ public partial class MainWindow : Window
                     {
                         Text = subtitle,
                         FontSize = 12,
-                        Foreground = ThemeManager.GetBrush("PlaceholderSubtitleForeground"),
+                        Foreground = _theme.GetBrush("PlaceholderSubtitleForeground"),
                         HorizontalAlignment = HorizontalAlignment.Center
                     }
                 }
@@ -2920,11 +3049,11 @@ public partial class MainWindow : Window
 
     private void SwitchToProject(ProjectInfo project)
     {
-        using var _perf = PerfDiagnostics.Time("SwitchToProject");
-        Log.Info($"SwitchToProject: '{project.FolderName}' — entry (prev='{_activeProject?.FolderName ?? "(none)"}', projects={_projects.Count}, groups={_groups.Count})");
+        using var perfScope = _perf.Time("SwitchToProject");
+        _log.Info($"SwitchToProject: '{project.FolderName}' — entry (prev='{_activeProject?.FolderName ?? "(none)"}', projects={_projects.Count}, groups={_groups.Count})");
         if (_activeProject == project)
         {
-            Log.Info("SwitchToProject: already active — no-op");
+            _log.Info("SwitchToProject: already active — no-op");
             return;
         }
 
@@ -2937,7 +3066,7 @@ public partial class MainWindow : Window
             var stayInActiveGroup = _activeGroupId == ActiveProjectsGroupId && GetActiveProjects().Contains(project);
             if (!stayInActiveGroup)
             {
-                Log.Info($"SwitchToProject: switching active group '{_activeGroupId}' -> '{project.GroupId}'");
+                _log.Info($"SwitchToProject: switching active group '{_activeGroupId}' -> '{project.GroupId}'");
                 _activeGroupId = project.GroupId;
                 RefreshMetaTabBar();
                 RefreshProjectTabVisibility();
@@ -2968,15 +3097,15 @@ public partial class MainWindow : Window
         // Show the project's content
         if (_projectContents.TryGetValue(project, out var content))
         {
-            Log.Info($"SwitchToProject: swapping ProjectContentHost.Content -> '{project.FolderName}'");
+            _log.Info($"SwitchToProject: swapping ProjectContentHost.Content -> '{project.FolderName}'");
             ProjectContentHost.Content = content;
             ProjectContentHost.Visibility = Visibility.Visible;
             EmptyStatePanel.Visibility = Visibility.Collapsed;
-            Log.Info("SwitchToProject: content swap returned");
+            _log.Info("SwitchToProject: content swap returned");
         }
         else
         {
-            Log.Warn($"SwitchToProject: no content registered for '{project.FolderName}' — skipping content swap");
+            _log.Warn($"SwitchToProject: no content registered for '{project.FolderName}' — skipping content swap");
         }
 
         // Update title bar
@@ -2992,7 +3121,7 @@ public partial class MainWindow : Window
         if (_activeGroupId == ActiveProjectsGroupId)
             RefreshProjectTabVisibility();
 
-        Log.Info($"SwitchToProject: '{project.FolderName}' — complete");
+        _log.Info($"SwitchToProject: '{project.FolderName}' — complete");
     }
 
     private void UpdateTitleBar()
@@ -3024,8 +3153,8 @@ public partial class MainWindow : Window
 
     private void UpdateTaskbarIcon()
     {
-        var accentBrush = ThemeManager.GetBrush("TaskbarAccentColor");
-        Icon = TaskbarIconHelper.CreateThemedIcon(accentBrush.Color);
+        var accentBrush = _theme.GetBrush("TaskbarAccentColor");
+        Icon = _taskbarIcon.CreateThemedIcon(accentBrush.Color);
     }
 
     private void UpdateTotalCost()
@@ -3079,7 +3208,7 @@ public partial class MainWindow : Window
     /// Pretty-prints a raw Claude model id (e.g. "claude-sonnet-4-5-20250929") as "Sonnet 4.5".
     /// Returns null if <paramref name="model"/> is null/empty.
     /// </summary>
-    private static string? FormatModelName(string? model)
+    private string? FormatModelName(string? model)
     {
         if (string.IsNullOrWhiteSpace(model))
             return null;
@@ -3112,19 +3241,19 @@ public partial class MainWindow : Window
     /// rail so the outline opens straight into the content area it owns; the rest sit a
     /// shade darker and keep their slice, so the rail reads as unbroken around them.
     /// </summary>
-    private static void SetTabButtonActive(Button button, bool active)
+    private void SetTabButtonActive(Button button, bool active)
     {
         if (active)
         {
             button.Background = ActiveProjectTabBrush();
-            button.BorderBrush = ThemeManager.GetBrush("ProjectTabActiveBorderBrush");
+            button.BorderBrush = _theme.GetBrush("ProjectTabActiveBorderBrush");
             SetTabRailBrush(button, null);
         }
         else
         {
             button.Background = InactiveProjectTabBrush();
             button.BorderBrush = InactiveTabOutlineBrush();
-            SetTabRailBrush(button, ThemeManager.GetBrush("ProjectTabActiveBorderBrush"));
+            SetTabRailBrush(button, _theme.GetBrush("ProjectTabActiveBorderBrush"));
         }
     }
 
@@ -3132,9 +3261,9 @@ public partial class MainWindow : Window
     /// Subtle hover background for inactive tabs, derived from the active background
     /// so it matches every theme without requiring per-theme brush additions.
     /// </summary>
-    private static SolidColorBrush MakeTabHoverBrush()
+    private SolidColorBrush MakeTabHoverBrush()
     {
-        var activeBrush = ThemeManager.GetBrush("TabButtonActiveBackground");
+        var activeBrush = _theme.GetBrush("TabButtonActiveBackground");
         var c = activeBrush.Color;
         return new SolidColorBrush(Color.FromArgb(96, c.R, c.G, c.B));
     }
@@ -3157,7 +3286,7 @@ public partial class MainWindow : Window
         }
 
         // Stop git watcher AND detach its theme handler (Cleanup), else the static
-        // ThemeManager.ThemeChanged event keeps the control + its visuals alive.
+        // _theme.ThemeChanged event keeps the control + its visuals alive.
         if (_projectGitControls.TryGetValue(project, out var gitControl))
         {
             gitControl.Cleanup();
@@ -3306,7 +3435,7 @@ public partial class MainWindow : Window
         UpdateProjectStripVisibility();
     }
 
-    private static void OpenInExplorer(ProjectInfo project)
+    private void OpenInExplorer(ProjectInfo project)
     {
         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
         {
@@ -3315,7 +3444,7 @@ public partial class MainWindow : Window
         });
     }
 
-    private static void OpenInConsole(ProjectInfo project)
+    private void OpenInConsole(ProjectInfo project)
     {
         try
         {
@@ -3330,7 +3459,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>Launches an external editor (e.g. "code", "cursor") on the project folder.</summary>
-    private static void LaunchEditor(string command, ProjectInfo project)
+    private void LaunchEditor(string command, ProjectInfo project)
     {
         try
         {
@@ -3350,11 +3479,11 @@ public partial class MainWindow : Window
     /// </summary>
     private void OpenProjectSettings(ProjectInfo project)
     {
-        var result = ProjectSettingsDialog.Show(this, project.FolderPath);
+        var result = ProjectSettingsDialog.Show(this, project.FolderPath, _projectSettings);
         if (result == null)
             return;
 
-        ProjectSettingsManager.Update(project.FolderPath, s =>
+        _projectSettings.Update(project.FolderPath, s =>
         {
             s.Name = result.Name;
             s.Icon = result.Icon;
@@ -3373,7 +3502,7 @@ public partial class MainWindow : Window
     /// </summary>
     private void ApplyProjectSettingsChanged(ProjectInfo project)
     {
-        var settings = ProjectSettingsManager.Load(project.FolderPath);
+        var settings = _projectSettings.Load(project.FolderPath);
 
         // Update in-memory display name and refresh every UI surface that shows it
         project.CustomName = settings.Name;
@@ -3422,26 +3551,26 @@ public partial class MainWindow : Window
         _previousTabStates.TryGetValue(project, out var prevState);
         _previousTabStates[project] = state;
 
-        var soundSettings = ProjectSettingsManager.Load(project.FolderPath);
+        var soundSettings = _projectSettings.Load(project.FolderPath);
         switch (state)
         {
             case ClaudeSessionState.Initializing when soundSettings.SoundOnSessionStart:
-                SoundService.PlayDeviceConnect();
+                _sound.PlayDeviceConnect();
                 break;
             case ClaudeSessionState.Idle
                 when soundSettings.SoundOnAgentWaiting
                      && prevState is ClaudeSessionState.Working or ClaudeSessionState.WaitingForPermission:
-                SoundService.PlayMessageNudge();
+                _sound.PlayMessageNudge();
                 break;
             // A question (AskUserQuestion) or tool-permission prompt parks the turn here,
             // which is just as much "waiting for input" as returning to Idle — without this
             // the prompt appears silently and only chimes once the whole turn finishes.
             // Its own sound, so a blocked turn is audibly distinct from a finished one.
             case ClaudeSessionState.WaitingForPermission when soundSettings.SoundOnAgentWaiting:
-                SoundService.PlayQuestionPrompt();
+                _sound.PlayQuestionPrompt();
                 break;
             case ClaudeSessionState.Exited when soundSettings.SoundOnSessionEnd:
-                SoundService.PlayDeviceDisconnect();
+                _sound.PlayDeviceDisconnect();
                 break;
         }
 
@@ -3477,17 +3606,17 @@ public partial class MainWindow : Window
                     break;
                 }
                 diamondIcon.Text = "\u25C7"; //◇ outline diamond
-                diamondIcon.Foreground = ThemeManager.GetBrush("TabIconInactiveDiamondForeground");
+                diamondIcon.Foreground = _theme.GetBrush("TabIconInactiveDiamondForeground");
                 break;
 
             case ClaudeSessionState.Initializing:
                 diamondIcon.Text = "\u25C6"; // ◆ filled diamond
-                diamondIcon.Foreground = ThemeManager.GetBrush("TabIconWaitingForeground");
+                diamondIcon.Foreground = _theme.GetBrush("TabIconWaitingForeground");
                 break;
 
             case ClaudeSessionState.Idle:
                 diamondIcon.Text = "\u25C6"; // ◆
-                diamondIcon.Foreground = ThemeManager.GetBrush("TabIconIdleForeground");
+                diamondIcon.Foreground = _theme.GetBrush("TabIconIdleForeground");
                 // Flash the green diamond for either of two reasons: a background tab
                 // just finished a turn (an unseen completion, cleared on switch-to, see
                 // SwitchToProject), or the session is still doing background work after
@@ -3511,21 +3640,21 @@ public partial class MainWindow : Window
 
             case ClaudeSessionState.Working:
                 diamondIcon.Text = "\u25C6"; // ◆
-                diamondIcon.Foreground = ThemeManager.GetBrush("TabIconWorkingForeground");
+                diamondIcon.Foreground = _theme.GetBrush("TabIconWorkingForeground");
                 StartDiamondPulse(project, diamondIcon);
                 break;
 
             case ClaudeSessionState.WaitingForPermission:
                 diamondIcon.Text = "\u25C6"; // ◆
-                diamondIcon.Foreground = ThemeManager.GetBrush("TabIconWaitingForeground");
+                diamondIcon.Foreground = _theme.GetBrush("TabIconWaitingForeground");
                 break;
 
             case ClaudeSessionState.Error:
                 diamondIcon.Text = "\u25C6"; // ◆
-                diamondIcon.Foreground = ThemeManager.GetBrush("TabIconErrorForeground");
+                diamondIcon.Foreground = _theme.GetBrush("TabIconErrorForeground");
                 statusBadge.Text = "!";
                 statusBadge.FontWeight = FontWeights.Bold;
-                statusBadge.Foreground = ThemeManager.GetBrush("TabIconErrorForeground");
+                statusBadge.Foreground = _theme.GetBrush("TabIconErrorForeground");
                 statusBadge.Visibility = Visibility.Visible;
                 break;
         }
@@ -3543,10 +3672,10 @@ public partial class MainWindow : Window
     /// Renders the "message scheduled" indicator: a clock glyph in the scheduled
     /// accent colour, replacing the diamond. Used on both project and group tabs.
     /// </summary>
-    private static void ApplyScheduledVisual(TextBlock icon)
+    private void ApplyScheduledVisual(TextBlock icon)
     {
         icon.Text = "◷"; // ◷ circle-with-quadrant — reads as a clock/timer face
-        icon.Foreground = ThemeManager.GetBrush("TabIconScheduledForeground");
+        icon.Foreground = _theme.GetBrush("TabIconScheduledForeground");
     }
 
     /// <summary>
@@ -3759,7 +3888,7 @@ public partial class MainWindow : Window
         {
             case TabIndicator.Inactive:
                 diamond.Text = "◇";
-                diamond.Foreground = ThemeManager.GetBrush("TabIconInactiveDiamondForeground");
+                diamond.Foreground = _theme.GetBrush("TabIconInactiveDiamondForeground");
                 break;
 
             case TabIndicator.Scheduled:
@@ -3768,38 +3897,38 @@ public partial class MainWindow : Window
 
             case TabIndicator.Working:
                 diamond.Text = "◆";
-                diamond.Foreground = ThemeManager.GetBrush("TabIconWorkingForeground");
+                diamond.Foreground = _theme.GetBrush("TabIconWorkingForeground");
                 StartGroupPulse(groupId, diamond, 500); // flashing blue
                 break;
 
             case TabIndicator.Idle:
                 diamond.Text = "◆";
-                diamond.Foreground = ThemeManager.GetBrush("TabIconIdleForeground");
+                diamond.Foreground = _theme.GetBrush("TabIconIdleForeground");
                 break;
 
             case TabIndicator.BackgroundWorking:
                 diamond.Text = "◆";
-                diamond.Foreground = ThemeManager.GetBrush("TabIconIdleForeground");
+                diamond.Foreground = _theme.GetBrush("TabIconIdleForeground");
                 StartGroupPulse(groupId, diamond, 700); // flashing green — still busy in the background
                 break;
 
             case TabIndicator.NewResponse:
                 diamond.Text = "◆";
-                diamond.Foreground = ThemeManager.GetBrush("TabIconIdleForeground");
+                diamond.Foreground = _theme.GetBrush("TabIconIdleForeground");
                 StartGroupPulse(groupId, diamond, 700); // flashing green
                 break;
 
             case TabIndicator.Question:
                 diamond.Text = "◆";
-                diamond.Foreground = ThemeManager.GetBrush("TabIconWaitingForeground");
+                diamond.Foreground = _theme.GetBrush("TabIconWaitingForeground");
                 break;
 
             case TabIndicator.Error:
                 diamond.Text = "◆";
-                diamond.Foreground = ThemeManager.GetBrush("TabIconErrorForeground");
+                diamond.Foreground = _theme.GetBrush("TabIconErrorForeground");
                 badge.Text = "!";
                 badge.FontWeight = FontWeights.Bold;
-                badge.Foreground = ThemeManager.GetBrush("TabIconErrorForeground");
+                badge.Foreground = _theme.GetBrush("TabIconErrorForeground");
                 badge.Visibility = Visibility.Visible;
                 break;
         }
@@ -3825,7 +3954,7 @@ public partial class MainWindow : Window
         // Counts every call, including the early-return no-ops below. A climbing
         // per-interval count in the PERF health log means Layout.Updated handlers
         // are accumulating (the per-project subscription leak in CreateDockingLayout).
-        PerfDiagnostics.NoteWorkspaceDirty();
+        _perf.NoteWorkspaceDirty();
         if (_suppressDirty || _workspaceDirty)
             return;
         _workspaceDirty = true;
@@ -3850,11 +3979,11 @@ public partial class MainWindow : Window
             _currentWorkspacePath = dialog.FileName;
         }
 
-        Log.Info($"SaveWorkspace: saving to '{_currentWorkspacePath}'");
+        _log.Info($"SaveWorkspace: saving to '{_currentWorkspacePath}'");
 
         var workspace = new WorkspaceFile
         {
-            Theme = ThemeManager.CurrentTheme.Id,
+            Theme = _theme.CurrentTheme.Id,
             ToolbarPosition = _currentToolbarPosition,
             ActiveProjectPath = _activeProject?.FolderPath,
             // The dynamic group's sentinel isn't a real group — don't persist it as the
@@ -3892,7 +4021,7 @@ public partial class MainWindow : Window
                 }
                 catch (Exception ex)
                 {
-                    Log.Warn($"SaveWorkspace: failed to serialize layout for '{project.FolderName}' — {ex.Message}");
+                    _log.Warn($"SaveWorkspace: failed to serialize layout for '{project.FolderName}' — {ex.Message}");
                 }
             }
 
@@ -3901,15 +4030,15 @@ public partial class MainWindow : Window
 
         try
         {
-            WorkspaceManager.Save(_currentWorkspacePath, workspace);
+            _workspaceStore.Save(_currentWorkspacePath, workspace);
             _workspaceDirty = false;
             UpdateTitleBar();
             PopulateRecentWorkspacesMenu();
-            Log.Info("SaveWorkspace: complete");
+            _log.Info("SaveWorkspace: complete");
         }
         catch (Exception ex)
         {
-            Log.Error($"SaveWorkspace: failed — {ex.Message}");
+            _log.Error($"SaveWorkspace: failed — {ex.Message}");
             ThemedMessageBox.Show(
                 this,
                 $"Failed to save workspace:\n\n{ex.Message}",
@@ -3921,24 +4050,24 @@ public partial class MainWindow : Window
 
     private async Task OpenWorkspaceFile(string filePath)
     {
-        Log.Info($"OpenWorkspaceFile: '{filePath}'");
+        _log.Info($"OpenWorkspaceFile: '{filePath}'");
 
         // A workspace open runs across dispatcher yields, so guard against a second
         // one starting (double-click, menu item during the spinner) mid-restore.
         if (_workspaceLoading)
         {
-            Log.Warn("OpenWorkspaceFile: another workspace open is already in progress");
+            _log.Warn("OpenWorkspaceFile: another workspace open is already in progress");
             return;
         }
 
         WorkspaceFile? workspace;
         try
         {
-            workspace = WorkspaceManager.Load(filePath);
+            workspace = _workspaceStore.Load(filePath);
         }
         catch (Exception ex)
         {
-            Log.Error($"OpenWorkspaceFile: failed to load — {ex.Message}");
+            _log.Error($"OpenWorkspaceFile: failed to load — {ex.Message}");
             ThemedMessageBox.Show(
                 this,
                 $"Failed to open workspace:\n\n{ex.Message}",
@@ -3992,13 +4121,13 @@ public partial class MainWindow : Window
         _suppressDirty = true;
 
         // Apply theme
-        ThemeManager.ApplyTheme(ThemeRegistry.Resolve(workspace.Theme));
+        _theme.ApplyTheme(_themeRegistry.Resolve(workspace.Theme));
 
         // Apply toolbar position
         if (!string.IsNullOrEmpty(workspace.ToolbarPosition))
         {
             SetToolbarPosition(workspace.ToolbarPosition);
-            AppSettings.SetString("ToolbarPosition", workspace.ToolbarPosition);
+            _appSettings.SetString("ToolbarPosition", workspace.ToolbarPosition);
         }
 
         // Restore groups before adding projects so AddProjectFromPath doesn't auto-assign GroupId
@@ -4087,7 +4216,7 @@ public partial class MainWindow : Window
         _workspaceDirty = false;
         UpdateTitleBar();
         PopulateRecentWorkspacesMenu();
-        Log.Info("OpenWorkspaceFile: complete");
+        _log.Info("OpenWorkspaceFile: complete");
     }
 
     // --- Busy Overlay ---
@@ -4192,7 +4321,7 @@ public partial class MainWindow : Window
             FileMenu.Items.Remove(old);
         _recentWorkspaceMenuItems.Clear();
 
-        var recent = WorkspaceManager.GetRecentWorkspaces();
+        var recent = _workspaceStore.GetRecentWorkspaces();
         var shown = recent.Take(5).ToList();
 
         if (shown.Count == 0)
@@ -4235,7 +4364,7 @@ public partial class MainWindow : Window
     {
         EmptyStateRecentList.Children.Clear();
 
-        var recent = WorkspaceManager.GetRecentWorkspaces();
+        var recent = _workspaceStore.GetRecentWorkspaces();
         var shown = recent.Take(5).ToList();
 
         if (shown.Count == 0)
@@ -4353,7 +4482,7 @@ public partial class MainWindow : Window
             }
         }
 
-        ThemeManager.ThemeChanged -= OnThemeChanged;
+        _theme.ThemeChanged -= OnThemeChanged;
 
         // Stop all icon animation timers
         foreach (var timer in _tabIconTimers.Values)
@@ -4381,7 +4510,7 @@ public partial class MainWindow : Window
 
     private void OnThemeChanged(ThemeDescriptor theme)
     {
-        using var _perf = PerfDiagnostics.Time("OnThemeChanged");
+        using var perfScope = _perf.Time("OnThemeChanged");
         // Update AvalonDock theme on all DockingManagers
         var dockTheme = theme.BaseVariant == ThemeBaseVariant.Dark
             ? (Theme)new Vs2013DarkTheme()
@@ -4401,7 +4530,7 @@ public partial class MainWindow : Window
                 // Re-create icon element from settings (handles custom colours + theme default)
                 if (sp.Children.Count > 0)
                 {
-                    var settings = ProjectSettingsManager.Load(project.FolderPath);
+                    var settings = _projectSettings.Load(project.FolderPath);
                     sp.Children.RemoveAt(0);
                     sp.Children.Insert(0, CreateIconElement(
                         settings.Icon ?? "folder", project.FolderPath,
@@ -4410,7 +4539,7 @@ public partial class MainWindow : Window
 
                 // Update tab text foreground (child 1)
                 if (sp.Children.Count > 1 && sp.Children[1] is TextBlock tb)
-                    tb.Foreground = ThemeManager.GetBrush("TabButtonForeground");
+                    tb.Foreground = _theme.GetBrush("TabButtonForeground");
             }
         }
 
@@ -4422,7 +4551,7 @@ public partial class MainWindow : Window
         }
 
         // Update toolbar + button accent
-        _toolbarAddButton.BorderBrush = ThemeManager.GetBrush("AddButtonBorderBrush");
+        _toolbarAddButton.BorderBrush = _theme.GetBrush("AddButtonBorderBrush");
 
         // Rebuild meta tab strip so its colors pick up the new theme
         RefreshMetaTabBar();
@@ -4447,7 +4576,7 @@ public partial class MainWindow : Window
         public string? Id;                          // null = machine default
         public string Label = "";                   // "Default" or the account's name
         public string? ConfigDir;                   // null = ~/.claude
-        public UsageService.FetchResult? LastResult;
+        public UsageFetchResult? LastResult;
         public UsageSummary? LastSuccess;
         public DateTime? RetryAfterUtc;             // set on HTTP 429 — don't re-fetch until this passes
     }
@@ -4502,7 +4631,7 @@ public partial class MainWindow : Window
             return new UsageAccount { Id = id, Label = label, ConfigDir = configDir };
         }
 
-        var named = AccountManager.Load();
+        var named = _accounts.Load();
 
         var updated = new List<UsageAccount>();
 
@@ -4517,9 +4646,9 @@ public partial class MainWindow : Window
 
         foreach (var a in named)
         {
-            if (!AccountManager.IsLoggedIn(a.Id))
+            if (!_accounts.IsLoggedIn(a.Id))
                 continue;
-            updated.Add(Carry(a.Id, a.Name, AccountManager.ConfigDirFor(a.Id)));
+            updated.Add(Carry(a.Id, a.Name, _accounts.ConfigDirFor(a.Id)));
         }
 
         _usageAccounts = updated;
@@ -4548,15 +4677,15 @@ public partial class MainWindow : Window
                 await Task.Delay(TimeSpan.FromMilliseconds(250));
             firstFetch = false;
 
-            var result = await UsageService.FetchAsync(acct.ConfigDir);
+            var result = await _usage.FetchAsync(acct.ConfigDir);
             acct.LastResult = result;
 
-            if (result.Status == UsageService.FetchStatus.Success && result.Summary != null)
+            if (result.Status == UsageFetchStatus.Success && result.Summary != null)
             {
                 acct.LastSuccess = result.Summary;
                 acct.RetryAfterUtc = null;
             }
-            else if (result.Status == UsageService.FetchStatus.RateLimited)
+            else if (result.Status == UsageFetchStatus.RateLimited)
             {
                 // Back off this account until the server's Retry-After (default 60s).
                 acct.RetryAfterUtc = DateTime.UtcNow + (result.RetryAfter ?? TimeSpan.FromSeconds(60));
@@ -4585,15 +4714,15 @@ public partial class MainWindow : Window
             var result = accts[0].LastResult;
             UsageText.Text = result == null ? "Session: —" : result.Status switch
             {
-                UsageService.FetchStatus.AuthMissing => "Session: sign in to Claude",
-                UsageService.FetchStatus.AuthExpired => "Session: auth expired",
-                UsageService.FetchStatus.NetworkError => "Session: offline",
-                UsageService.FetchStatus.RateLimited => "Session: rate limited",
-                UsageService.FetchStatus.ServerError => "Session: error",
-                UsageService.FetchStatus.Success => FormatSessionHeader(result.Summary),
+                UsageFetchStatus.AuthMissing => "Session: sign in to Claude",
+                UsageFetchStatus.AuthExpired => "Session: auth expired",
+                UsageFetchStatus.NetworkError => "Session: offline",
+                UsageFetchStatus.RateLimited => "Session: rate limited",
+                UsageFetchStatus.ServerError => "Session: error",
+                UsageFetchStatus.Success => FormatSessionHeader(result.Summary),
                 // Stale token: nothing is wrong with the login, we just can't read a
                 // fresh figure. Keep showing the last one rather than raising an alarm.
-                UsageService.FetchStatus.TokenStale => FormatSessionHeader(accts[0].LastSuccess),
+                UsageFetchStatus.TokenStale => FormatSessionHeader(accts[0].LastSuccess),
                 _ => "Session: —",
             };
             return;
@@ -4617,7 +4746,7 @@ public partial class MainWindow : Window
     // Distinct accent colours assigned to accounts by position so each account's
     // group box, progress bars and title-bar bracket share one easy-to-spot colour.
     // Mid-saturation hues chosen to stay legible on both the light and dark themes.
-    private static readonly Color[] AccountAccentColors =
+    private readonly Color[] AccountAccentColors =
     {
         Color.FromRgb(0x4C, 0x9A, 0xFF), // blue
         Color.FromRgb(0x36, 0xB3, 0x7E), // green
@@ -4629,11 +4758,11 @@ public partial class MainWindow : Window
         Color.FromRgb(0xC9, 0x8A, 0x3B), // bronze
     };
 
-    private static Color AccountAccentColor(int index) =>
+    private Color AccountAccentColor(int index) =>
         AccountAccentColors[index % AccountAccentColors.Length];
 
     /// <summary>Solid accent brush for the account at <paramref name="index"/> (frozen, reusable).</summary>
-    private static Brush AccountAccentBrush(int index)
+    private Brush AccountAccentBrush(int index)
     {
         var brush = new SolidColorBrush(AccountAccentColor(index));
         brush.Freeze();
@@ -4641,7 +4770,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>Faint wash of the account's accent colour, for the group-box fill.</summary>
-    private static Brush AccountTintBrush(int index)
+    private Brush AccountTintBrush(int index)
     {
         var c = AccountAccentColor(index);
         var brush = new SolidColorBrush(Color.FromArgb(0x22, c.R, c.G, c.B));
@@ -4651,9 +4780,9 @@ public partial class MainWindow : Window
 
     /// <summary>Compact 5-hour figure for one login: its percentage, cached value on a
     /// transient failure, or a short status word when there's nothing to show.</summary>
-    private static string FormatCompactPct(UsageAccount acct)
+    private string FormatCompactPct(UsageAccount acct)
     {
-        var summary = acct.LastResult?.Status == UsageService.FetchStatus.Success
+        var summary = acct.LastResult?.Status == UsageFetchStatus.Success
             ? acct.LastResult.Summary
             : acct.LastSuccess;
 
@@ -4663,17 +4792,17 @@ public partial class MainWindow : Window
 
         return acct.LastResult?.Status switch
         {
-            UsageService.FetchStatus.AuthMissing => "sign in",
-            UsageService.FetchStatus.AuthExpired => "auth",
-            UsageService.FetchStatus.NetworkError => "offline",
-            UsageService.FetchStatus.RateLimited => "wait",
+            UsageFetchStatus.AuthMissing => "sign in",
+            UsageFetchStatus.AuthExpired => "auth",
+            UsageFetchStatus.NetworkError => "offline",
+            UsageFetchStatus.RateLimited => "wait",
             // TokenStale falls through to "—": the cached percentage above is preferred
             // when there is one, and a healthy account shouldn't be flagged when there isn't.
             _ => "—",
         };
     }
 
-    private static string FormatSessionHeader(UsageSummary? summary)
+    private string FormatSessionHeader(UsageSummary? summary)
     {
         var fh = summary?.FiveHour;
         if (fh?.Utilization == null || fh.ResetsAt == null)
@@ -4684,7 +4813,7 @@ public partial class MainWindow : Window
         return $"5h: {pct:0}% · resets in {reset}";
     }
 
-    private static string FormatTimeUntilReset(DateTimeOffset resetsAt)
+    private string FormatTimeUntilReset(DateTimeOffset resetsAt)
     {
         var delta = resetsAt - DateTimeOffset.Now;
         if (delta <= TimeSpan.Zero)
@@ -4808,7 +4937,7 @@ public partial class MainWindow : Window
 
         // On failure, fall back to this login's last successful summary (if any),
         // shown beneath an error banner.
-        var isError = result.Status != UsageService.FetchStatus.Success || result.Summary == null;
+        var isError = result.Status != UsageFetchStatus.Success || result.Summary == null;
         var summary = isError ? acct.LastSuccess : result.Summary;
         var usedCache = isError && summary != null;
 
@@ -4816,12 +4945,12 @@ public partial class MainWindow : Window
         {
             var msg = result.Status switch
             {
-                UsageService.FetchStatus.AuthMissing => "Not signed in. Log in to this account from Claude Accounts.",
-                UsageService.FetchStatus.AuthExpired => "OAuth token was rejected. Log in to this account again.",
-                UsageService.FetchStatus.NetworkError => "Could not reach api.anthropic.com. Check your connection.",
-                UsageService.FetchStatus.RateLimited => "Usage rate-limited (HTTP 429). Showing cached data; will retry shortly.",
+                UsageFetchStatus.AuthMissing => "Not signed in. Log in to this account from Claude Accounts.",
+                UsageFetchStatus.AuthExpired => "OAuth token was rejected. Log in to this account again.",
+                UsageFetchStatus.NetworkError => "Could not reach api.anthropic.com. Check your connection.",
+                UsageFetchStatus.RateLimited => "Usage rate-limited (HTTP 429). Showing cached data; will retry shortly.",
                 // Not a fault: the CLI renews this token the next time you send a message.
-                UsageService.FetchStatus.TokenStale =>
+                UsageFetchStatus.TokenStale =>
                     "Usage figure is stale — the stored token has lapsed and refreshes on next use. This account still works.",
                 _ => $"Could not fetch usage ({result.ErrorMessage})",
             };

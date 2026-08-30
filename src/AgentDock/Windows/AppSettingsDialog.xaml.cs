@@ -7,6 +7,8 @@ using AgentDock.Models;
 using AgentDock.Services;
 using Microsoft.Win32;
 
+using AgentDock.Services.Abstractions;
+
 namespace AgentDock.Windows;
 
 public partial class AppSettingsDialog : Window
@@ -25,18 +27,25 @@ public partial class AppSettingsDialog : Window
     // XAML, so NavList_SelectionChanged fires mid-load, before this is assigned.
     private readonly StackPanel[]? _sections;
 
+    private readonly IThemeRegistry _themeRegistry;
+    private readonly ILogService _log;
+
     private AppSettingsDialog(
+        IThemeRegistry themeRegistry,
+        ILogService log,
         string currentThemeId,
         string currentToolbarPosition,
         string currentClaudePath,
         UpdateChannel currentChannel)
     {
+        _themeRegistry = themeRegistry;
+        _log = log;
         InitializeComponent();
         _sections = [AppearanceSection, IntegrationsSection, UpdatesSection, DiagnosticsSection];
 
-        ThemeCombo.ItemsSource = ThemeRegistry.All;
+        ThemeCombo.ItemsSource = _themeRegistry.All;
         ThemeCombo.SelectedItem =
-            ThemeRegistry.FindById(currentThemeId) ?? ThemeRegistry.Default;
+            _themeRegistry.FindById(currentThemeId) ?? _themeRegistry.Default;
 
         foreach (ComboBoxItem item in ToolbarPositionCombo.Items)
         {
@@ -64,20 +73,24 @@ public partial class AppSettingsDialog : Window
         if (UpdateChannelCombo.SelectedItem == null)
             UpdateChannelCombo.SelectedIndex = 0;
 
-        var logFile = Log.LogFilePath;
+        var logFile = _log.LogFilePath;
         LogsPathText.Text = !string.IsNullOrEmpty(logFile) && Path.GetDirectoryName(logFile) is { } dir
             ? $"Folder: {dir}"
             : "Log folder not yet created.";
     }
 
     public static Result? Show(
+        IThemeRegistry themeRegistry,
+        ILogService log,
         Window owner,
         string currentThemeId,
         string currentToolbarPosition,
         string currentClaudePath,
         UpdateChannel currentChannel)
     {
-        var dlg = new AppSettingsDialog(currentThemeId, currentToolbarPosition, currentClaudePath, currentChannel) { Owner = owner };
+        var dlg = new AppSettingsDialog(
+            themeRegistry, log, currentThemeId, currentToolbarPosition, currentClaudePath, currentChannel)
+        { Owner = owner };
         return dlg.ShowDialog() == true ? dlg.Outcome : null;
     }
 
@@ -126,7 +139,7 @@ public partial class AppSettingsDialog : Window
 
     private void OpenLogsFolder_Click(object sender, RoutedEventArgs e)
     {
-        var logPath = Log.LogFilePath;
+        var logPath = _log.LogFilePath;
         var folder = !string.IsNullOrEmpty(logPath) ? Path.GetDirectoryName(logPath) : null;
         if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder))
         {
@@ -144,7 +157,7 @@ public partial class AppSettingsDialog : Window
 
     private void OkButton_Click(object sender, RoutedEventArgs e)
     {
-        var theme = ThemeCombo.SelectedItem as ThemeDescriptor ?? ThemeRegistry.Default;
+        var theme = ThemeCombo.SelectedItem as ThemeDescriptor ?? _themeRegistry.Default;
         var toolbar = (ToolbarPositionCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "Top";
         var channelTag = (UpdateChannelCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "Stable";
         var channel = Enum.TryParse<UpdateChannel>(channelTag, ignoreCase: true, out var c)

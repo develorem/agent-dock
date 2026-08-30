@@ -2,6 +2,8 @@ using System.Windows;
 using System.Windows.Controls;
 using AgentDock.Services;
 
+using AgentDock.Services.Abstractions;
+
 namespace AgentDock.Controls;
 
 public partial class ProjectDescriptionControl : UserControl
@@ -19,8 +21,13 @@ public partial class ProjectDescriptionControl : UserControl
 
     private string _projectPath = "";
 
-    public ProjectDescriptionControl()
+    private readonly IProjectSettingsStore _projectSettings;
+
+    public ProjectDescriptionControl(
+        IProjectSettingsStore projectSettings)
     {
+        _projectSettings = projectSettings;
+
         InitializeComponent();
     }
 
@@ -30,7 +37,7 @@ public partial class ProjectDescriptionControl : UserControl
     public void LoadProject(string projectPath)
     {
         _projectPath = projectPath;
-        var settings = ProjectSettingsManager.Load(projectPath);
+        var settings = _projectSettings.Load(projectPath);
         SetDescription(settings.Description);
         ApplyFontSize(settings.DescriptionFontSize ?? DefaultFontSize);
     }
@@ -82,6 +89,6 @@ public partial class ProjectDescriptionControl : UserControl
     private void SaveFontSize(double size)
     {
         var valueToStore = Math.Abs(size - DefaultFontSize) < 0.01 ? (double?)null : size;
-        ProjectSettingsManager.Update(_projectPath, s => s.DescriptionFontSize = valueToStore);
+        _projectSettings.Update(_projectPath, s => s.DescriptionFontSize = valueToStore);
     }
 }

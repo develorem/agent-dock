@@ -8,6 +8,8 @@ using System.Windows.Shapes;
 using AgentDock.Models;
 using AgentDock.Services;
 
+using AgentDock.Services.Abstractions;
+
 namespace AgentDock.Windows;
 
 public partial class ProjectSettingsDialog : Window
@@ -40,8 +42,14 @@ public partial class ProjectSettingsDialog : Window
         "#BDC3C7",   // light
     ];
 
-    private ProjectSettingsDialog(string projectFolder, ProjectSettings settings)
+    private readonly IProjectSettingsStore _projectSettings;
+
+    private ProjectSettingsDialog(
+        string projectFolder,
+        ProjectSettings settings,
+        IProjectSettingsStore projectSettingsStore)
     {
+        _projectSettings = projectSettingsStore;
         _projectFolder = projectFolder;
         _selectedIcon = settings.Icon ?? "folder";
         _selectedIconColor = settings.IconColor;
@@ -99,10 +107,10 @@ public partial class ProjectSettingsDialog : Window
     /// <summary>
     /// Shows the Project Settings dialog. Returns the updated ProjectSettings if OK, or null if cancelled.
     /// </summary>
-    public static ProjectSettings? Show(Window owner, string projectFolder)
+    public static ProjectSettings? Show(Window owner, string projectFolder, IProjectSettingsStore projectSettings)
     {
-        var settings = ProjectSettingsManager.Load(projectFolder);
-        var dialog = new ProjectSettingsDialog(projectFolder, settings) { Owner = owner };
+        var settings = projectSettings.Load(projectFolder);
+        var dialog = new ProjectSettingsDialog(projectFolder, settings, projectSettings) { Owner = owner };
         return dialog.ShowDialog() == true ? dialog.Result : null;
     }
 

@@ -1,20 +1,21 @@
 using System.IO;
+using AgentDock.Services.Abstractions;
 
 namespace AgentDock.Services;
 
 /// <summary>
 /// Simple file logger. Creates a per-session log file in the logs folder.
-/// Call Log.Init() once at app startup after parsing arguments.
+/// <see cref="Init"/> is called once at app startup, after arguments are parsed.
 /// </summary>
-public static class Log
+public sealed class LogService : ILogService
 {
-    private static string? _logFilePath;
-    private static readonly object Lock = new();
+    private string? _logFilePath;
+    private readonly object _lock = new();
 
     /// <summary>
     /// The full path to the current session's log file.
     /// </summary>
-    public static string? LogFilePath => _logFilePath;
+    public string? LogFilePath => _logFilePath;
 
     /// <summary>
     /// Initializes the logger with a per-session log file.
@@ -25,7 +26,7 @@ public static class Log
     /// <param name="sessionContext">
     /// Optional context string (folder name or workspace name) included in the file name.
     /// </param>
-    public static void Init(string? logsFolder = null, string? sessionContext = null)
+    public void Init(string? logsFolder = null, string? sessionContext = null)
     {
         try
         {
@@ -50,12 +51,12 @@ public static class Log
         }
     }
 
-    public static void Info(string message) => Write("INFO", message);
-    public static void Warn(string message) => Write("WARN", message);
-    public static void Error(string message) => Write("ERROR", message);
-    public static void Error(string message, Exception ex) => Write("ERROR", $"{message}: {ex}");
+    public void Info(string message) => Write("INFO", message);
+    public void Warn(string message) => Write("WARN", message);
+    public void Error(string message) => Write("ERROR", message);
+    public void Error(string message, Exception ex) => Write("ERROR", $"{message}: {ex}");
 
-    private static void Write(string level, string message)
+    private void Write(string level, string message)
     {
         if (_logFilePath == null) return;
 
@@ -66,7 +67,7 @@ public static class Log
         var tid = System.Threading.Thread.CurrentThread.ManagedThreadId;
         var line = $"[{DateTime.Now:HH:mm:ss.fff}] [T{tid:D2}] [{level}] {message}\n";
         var bytes = System.Text.Encoding.UTF8.GetBytes(line);
-        lock (Lock)
+        lock (_lock)
         {
             try
             {

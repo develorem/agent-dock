@@ -3,6 +3,8 @@ using System.Threading;
 using System.Windows.Media;
 using System.Windows.Threading;
 
+using AgentDock.Services.Abstractions;
+
 namespace AgentDock.Services;
 
 /// <summary>
@@ -25,50 +27,50 @@ namespace AgentDock.Services;
 /// All counters are updated with interlocked ops so background threads (the git
 /// caller, the session read loop) can poke them safely.
 /// </summary>
-public static class PerfDiagnostics
+public sealed class PerfDiagnostics(ILogService log) : IPerfDiagnostics
 {
     /// <summary>Master switch. Defaults on; set false to silence all PERF output.</summary>
-    public static bool Enabled { get; set; } = true;
+    public bool Enabled { get; set; } = true;
 
     // --- Cross-thread live counters ---
-    private static int _liveSessions;
-    private static int _workingSessions;
-    private static int _gitOpsInFlight;
-    private static int _markdownBuildsInFlight;
-    private static long _workspaceDirtyCalls;
-    private static string _lastGit = "(none)";
+    private int _liveSessions;
+    private int _workingSessions;
+    private int _gitOpsInFlight;
+    private int _markdownBuildsInFlight;
+    private long _workspaceDirtyCalls;
+    private string _lastGit = "(none)";
 
-    public static int LiveSessions => Volatile.Read(ref _liveSessions);
-    public static int WorkingSessions => Volatile.Read(ref _workingSessions);
+    public int LiveSessions => Volatile.Read(ref _liveSessions);
+    public int WorkingSessions => Volatile.Read(ref _workingSessions);
 
-    public static void SessionCreated() => Interlocked.Increment(ref _liveSessions);
-    public static void SessionDisposed() => Interlocked.Decrement(ref _liveSessions);
+    public void SessionCreated() => Interlocked.Increment(ref _liveSessions);
+    public void SessionDisposed() => Interlocked.Decrement(ref _liveSessions);
 
     /// <summary>Adjusts the global "sessions currently Working" count (across all tabs).</summary>
-    public static void WorkingSessionDelta(int delta) => Interlocked.Add(ref _workingSessions, delta);
+    public void WorkingSessionDelta(int delta) => Interlocked.Add(ref _workingSessions, delta);
 
     /// <summary>Counts every SetWorkspaceDirty invocation, including no-op early
     /// returns — a climbing per-interval count means Layout.Updated handlers are
     /// accumulating (the known per-project subscription leak).</summary>
-    public static void NoteWorkspaceDirty() => Interlocked.Increment(ref _workspaceDirtyCalls);
+    public void NoteWorkspaceDirty() => Interlocked.Increment(ref _workspaceDirtyCalls);
 
-    public static void MarkdownBuildDelta(int delta) => Interlocked.Add(ref _markdownBuildsInFlight, delta);
+    public void MarkdownBuildDelta(int delta) => Interlocked.Add(ref _markdownBuildsInFlight, delta);
 
     // --- Git op instrumentation (called from GitService, often off the UI thread) ---
-    public static void GitOpStart() => Interlocked.Increment(ref _gitOpsInFlight);
+    public void GitOpStart() => Interlocked.Increment(ref _gitOpsInFlight);
 
-    public static void GitOpEnd(string command, double ms, int threadId)
+    public void GitOpEnd(string command, double ms, int threadId)
     {
         Interlocked.Decrement(ref _gitOpsInFlight);
         Volatile.Write(ref _lastGit, $"'{command}' {ms:F0}ms@T{threadId:D2}");
         if (Enabled && ms >= GitSlowThresholdMs)
-            Log.Warn($"PERF git-slow {ms:F0}ms onThread=T{threadId:D2} cmd='{command}' | {Snapshot()}");
+            log.Warn($"PERF git-slow {ms:F0}ms onThread=T{threadId:D2} cmd='{command}' | {Snapshot()}");
     }
 
     // --- Timers (UI thread) ---
-    private static DispatcherTimer? _stallTimer;
-    private static DispatcherTimer? _healthTimer;
-    private static readonly Stopwatch StallStopwatch = new();
+    private DispatcherTimer? _stallTimer;
+    private DispatcherTimer? _healthTimer;
+    private readonly Stopwatch StallStopwatch = new();
 
     private const int StallIntervalMs = 250;
     private const int StallThresholdMs = 150;   // overrun beyond the interval that counts as a stall
@@ -79,7 +81,7 @@ public static class PerfDiagnostics
     /// Starts the UI-thread stall monitor and the periodic health sampler. Call
     /// once from the UI thread after the Dispatcher is running. Safe to call twice.
     /// </summary>
-    public static void Start()
+    public void Start()
     {
         if (!Enabled || _stallTimer != null) return;
 
@@ -100,7 +102,7 @@ public static class PerfDiagnostics
             StallStopwatch.Restart();
             var overrun = elapsed - StallIntervalMs;
             if (overrun >= StallThresholdMs)
-                Log.Warn($"PERF ui-stall {overrun:F0}ms (gap {elapsed:F0}ms) | {Snapshot()}");
+                log.Warn($"PERF ui-stall {overrun:F0}ms (gap {elapsed:F0}ms) | {Snapshot()}");
         };
         _stallTimer.Start();
 
@@ -111,10 +113,10 @@ public static class PerfDiagnostics
         _healthTimer.Tick += (_, _) => LogHealth();
         _healthTimer.Start();
 
-        Log.Info($"PERF monitor started — stall>{StallThresholdMs}ms, health every {HealthIntervalSec}s");
+        log.Info($"PERF monitor started — stall>{StallThresholdMs}ms, health every {HealthIntervalSec}s");
     }
 
-    public static void Stop()
+    public void Stop()
     {
         _stallTimer?.Stop();
         _stallTimer = null;
@@ -123,7 +125,7 @@ public static class PerfDiagnostics
     }
 
     /// <summary>One-time startup snapshot of the rendering + machine environment.</summary>
-    public static void LogEnvironment()
+    public void LogEnvironment()
     {
         if (!Enabled) return;
         try
@@ -132,28 +134,28 @@ public static class PerfDiagnostics
             // (pure software — makes ALL of WPF sluggish), 1 = partial, 2 = full.
             var tier = RenderCapability.Tier >> 16;
             var maxTex = RenderCapability.MaxHardwareTextureSize;
-            Log.Info($"PERF env render | tier={tier} (0=software 1=partial 2=full-hw) " +
+            log.Info($"PERF env render | tier={tier} (0=software 1=partial 2=full-hw) " +
                      $"maxTexture={maxTex.Width}x{maxTex.Height} " +
                      $"ps3.0={RenderCapability.IsPixelShaderVersionSupported(3, 0)} " +
                      $"ps2.0={RenderCapability.IsPixelShaderVersionSupported(2, 0)}");
 
             var sessionName = Environment.GetEnvironmentVariable("SESSIONNAME") ?? "(unset)";
-            Log.Info($"PERF env machine | os={Environment.OSVersion.VersionString} cpu={Environment.ProcessorCount} " +
+            log.Info($"PERF env machine | os={Environment.OSVersion.VersionString} cpu={Environment.ProcessorCount} " +
                      $"64bit={Environment.Is64BitProcess} clr={Environment.Version} session={sessionName}");
             if (sessionName.StartsWith("RDP", StringComparison.OrdinalIgnoreCase))
-                Log.Warn("PERF env — running in an RDP session; WPF may be using software rendering (tier 0).");
+                log.Warn("PERF env — running in an RDP session; WPF may be using software rendering (tier 0).");
 
             // Tier can change at runtime (GPU reset, RDP connect/disconnect).
             RenderCapability.TierChanged += (_, _) =>
-                Log.Warn($"PERF env render tier CHANGED -> {RenderCapability.Tier >> 16}");
+                log.Warn($"PERF env render tier CHANGED -> {RenderCapability.Tier >> 16}");
         }
         catch (Exception ex)
         {
-            Log.Warn($"PERF env probe failed: {ex.Message}");
+            log.Warn($"PERF env probe failed: {ex.Message}");
         }
     }
 
-    public static void LogHealth()
+    public void LogHealth()
     {
         if (!Enabled) return;
         try
@@ -162,16 +164,16 @@ public static class PerfDiagnostics
             var wkset = p.WorkingSet64 / (1024 * 1024);
             var gcHeap = GC.GetTotalMemory(false) / (1024 * 1024);
             var dirty = Interlocked.Exchange(ref _workspaceDirtyCalls, 0);
-            Log.Info($"PERF health | wkset={wkset}MB gcHeap={gcHeap}MB handles={p.HandleCount} " +
+            log.Info($"PERF health | wkset={wkset}MB gcHeap={gcHeap}MB handles={p.HandleCount} " +
                      $"threads={p.Threads.Count} | {Snapshot()} | dirtyCalls/{HealthIntervalSec}s={dirty}");
         }
         catch (Exception ex)
         {
-            Log.Warn($"PERF health sample failed: {ex.Message}");
+            log.Warn($"PERF health sample failed: {ex.Message}");
         }
     }
 
-    private static string Snapshot()
+    private string Snapshot()
         => $"sessions={LiveSessions} working={WorkingSessions} " +
            $"gitInFlight={Volatile.Read(ref _gitOpsInFlight)} " +
            $"mdBuilds={Volatile.Read(ref _markdownBuildsInFlight)} lastGit={Volatile.Read(ref _lastGit)}";
@@ -182,19 +184,23 @@ public static class PerfDiagnostics
     /// (including early returns) are covered:
     /// <code>using var _ = PerfDiagnostics.Time("SwitchToProject");</code>
     /// </summary>
-    public static OperationTimer Time(string name, double thresholdMs = 50)
-        => new(name, thresholdMs);
+    /// <summary>Bridge for <see cref="OperationTimer"/>: a nested type cannot reach a primary
+    /// constructor parameter by name, so the log call is routed through the enclosing instance.</summary>
+    internal void WarnPerf(string message) => log.Warn(message);
 
-    public readonly struct OperationTimer(string name, double thresholdMs) : IDisposable
+    public IDisposable Time(string name, double thresholdMs = 50)
+        => new OperationTimer(this, name, thresholdMs);
+
+    public readonly struct OperationTimer(PerfDiagnostics owner, string name, double thresholdMs) : IDisposable
     {
         private readonly long _start = Stopwatch.GetTimestamp();
 
         public void Dispose()
         {
-            if (!Enabled) return;
+            if (!owner.Enabled) return;
             var ms = Stopwatch.GetElapsedTime(_start).TotalMilliseconds;
             if (ms >= thresholdMs)
-                Log.Warn($"PERF op '{name}' {ms:F0}ms onThread=T{Thread.CurrentThread.ManagedThreadId:D2} | {Snapshot()}");
+                owner.WarnPerf($"PERF op '{name}' {ms:F0}ms onThread=T{Thread.CurrentThread.ManagedThreadId:D2} | {owner.Snapshot()}");
         }
     }
 }

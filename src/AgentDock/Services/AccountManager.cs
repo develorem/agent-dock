@@ -4,6 +4,8 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using AgentDock.Models;
 
+using AgentDock.Services.Abstractions;
+
 namespace AgentDock.Services;
 
 /// <summary>
@@ -14,27 +16,30 @@ namespace AgentDock.Services;
 /// (id + friendly name) is persisted in settings.json; the authoritative
 /// identity (email/org) and login state live in each account's own config dir.
 /// </summary>
-public static class AccountManager
+public sealed class AccountManager(
+    ILogService log,
+    IAppSettingsStore appSettings,
+    IClaudeEnvironment claudeEnvironment) : IAccountManager
 {
     private const string SettingsKey = "Accounts";
 
     /// <summary>Root folder holding one config directory per account.</summary>
-    public static readonly string AccountsRoot =
-        Path.Combine(AppSettings.SettingsDir, "accounts");
+    public string AccountsRoot { get; } =
+        Path.Combine(appSettings.SettingsDir, "accounts");
 
     /// <summary>The <c>CLAUDE_CONFIG_DIR</c> path for a given account id.</summary>
-    public static string ConfigDirFor(string accountId) =>
+    public string ConfigDirFor(string accountId) =>
         Path.Combine(AccountsRoot, accountId);
 
-    private static readonly JsonSerializerOptions JsonOpts = new()
+    private readonly JsonSerializerOptions JsonOpts = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
     /// <summary>Loads the configured accounts, or an empty list if none/parse error.</summary>
-    public static List<ClaudeAccount> Load()
+    public List<ClaudeAccount> Load()
     {
-        var json = AppSettings.GetString(SettingsKey);
+        var json = appSettings.GetString(SettingsKey);
         if (string.IsNullOrWhiteSpace(json))
             return [];
 
@@ -44,20 +49,20 @@ public static class AccountManager
         }
         catch (Exception ex)
         {
-            Log.Warn($"AccountManager: failed to parse accounts — {ex.Message}");
+            log.Warn($"AccountManager: failed to parse accounts — {ex.Message}");
             return [];
         }
     }
 
     /// <summary>Persists the accounts registry to settings.json.</summary>
-    public static void Save(List<ClaudeAccount> accounts) =>
-        AppSettings.SetString(SettingsKey, JsonSerializer.Serialize(accounts, JsonOpts));
+    public void Save(List<ClaudeAccount> accounts) =>
+        appSettings.SetString(SettingsKey, JsonSerializer.Serialize(accounts, JsonOpts));
 
     /// <summary>
     /// Creates a new account entry with its own config directory, persists it,
     /// and returns it. The account has no credentials until a login completes.
     /// </summary>
-    public static ClaudeAccount Add(string name)
+    public ClaudeAccount Add(string name)
     {
         var accounts = Load();
         var id = Guid.NewGuid().ToString("N")[..8];
@@ -70,12 +75,12 @@ public static class AccountManager
         Directory.CreateDirectory(ConfigDirFor(id));
         accounts.Add(account);
         Save(accounts);
-        Log.Info($"AccountManager: added account '{account.Name}' (id={id})");
+        log.Info($"AccountManager: added account '{account.Name}' (id={id})");
         return account;
     }
 
     /// <summary>Removes an account from the registry, optionally deleting its config dir.</summary>
-    public static void Remove(string accountId, bool deleteFiles)
+    public void Remove(string accountId, bool deleteFiles)
     {
         var accounts = Load();
         accounts.RemoveAll(a => a.Id == accountId);
@@ -91,11 +96,11 @@ public static class AccountManager
             }
             catch (Exception ex)
             {
-                Log.Warn($"AccountManager: failed to delete config dir for {accountId} — {ex.Message}");
+                log.Warn($"AccountManager: failed to delete config dir for {accountId} — {ex.Message}");
             }
         }
 
-        Log.Info($"AccountManager: removed account id={accountId} (deleteFiles={deleteFiles})");
+        log.Info($"AccountManager: removed account id={accountId} (deleteFiles={deleteFiles})");
     }
 
     /// <summary>
@@ -108,7 +113,7 @@ public static class AccountManager
     /// alone. Always pair it with <see cref="IsLoggedIn"/> before presenting an account
     /// as usable; showing the email on its own made revoked accounts look healthy.
     /// </remarks>
-    public static string? ReadEmail(string accountId)
+    public string? ReadEmail(string accountId)
     {
         try
         {
@@ -139,7 +144,7 @@ public static class AccountManager
     /// An empty access token with a live refresh token still counts: the access token
     /// lapses hourly and the CLI renews it on next use.
     /// </remarks>
-    public static bool IsLoggedIn(string accountId)
+    public bool IsLoggedIn(string accountId)
     {
         try
         {
@@ -178,7 +183,7 @@ public static class AccountManager
     /// <c>claude auth login</c> is the CLI's dedicated sign-in command and goes straight
     /// into the browser flow regardless of what's on disk.
     /// </remarks>
-    public static Process? LaunchLogin(string accountId)
+    public Process? LaunchLogin(string accountId)
     {
         var dir = ConfigDirFor(accountId);
         Directory.CreateDirectory(dir);
@@ -196,7 +201,7 @@ public static class AccountManager
             args.Add(email);
         }
 
-        Log.Info($"AccountManager: launching login for id={accountId} at {dir}");
+        log.Info($"AccountManager: launching login for id={accountId} at {dir}");
 
         // UseShellExecute=false does two things for us: it allows setting Environment
         // through the API (no `set` command built into a command line, so nothing to
@@ -206,7 +211,7 @@ public static class AccountManager
         // isn't, and believing that forced the whole shell-string approach.
         var psi = new ProcessStartInfo
         {
-            FileName = ClaudeSession.ClaudeBinaryPath,
+            FileName = claudeEnvironment.BinaryPath,
             UseShellExecute = false,
             CreateNoWindow = false
         };
@@ -222,21 +227,21 @@ public static class AccountManager
         {
             // A shim install (npm's claude.cmd) isn't a PE image, so CreateProcess
             // rejects it. Those have to go through cmd.
-            Log.Warn($"AccountManager: direct login launch failed ({ex.Message}) — retrying via cmd");
+            log.Warn($"AccountManager: direct login launch failed ({ex.Message}) — retrying via cmd");
             return LaunchLoginViaShell(args, dir, accountId);
         }
     }
 
     // How long the login process may keep running after credentials have appeared on
     // disk before we close its window for it.
-    private static readonly TimeSpan LingerGrace = TimeSpan.FromSeconds(2);
+    private readonly TimeSpan LingerGrace = TimeSpan.FromSeconds(2);
 
     /// <summary>
     /// When the account's credentials file was last written, or
     /// <see cref="DateTime.MinValue"/> if there isn't one. Used to tell a freshly
     /// completed login apart from credentials that were already sitting there.
     /// </summary>
-    private static DateTime CredentialsWrittenAtUtc(string accountId)
+    private DateTime CredentialsWrittenAtUtc(string accountId)
     {
         try
         {
@@ -265,7 +270,7 @@ public static class AccountManager
     /// (the file appearing and the process exiting), a browser login is human-paced so
     /// one-second granularity is ample, and there's no watcher lifetime to get wrong.
     /// </remarks>
-    public static async Task<bool> RunLoginAsync(string accountId, CancellationToken ct = default)
+    public async Task<bool> RunLoginAsync(string accountId, CancellationToken ct = default)
     {
         // Baseline the credentials file BEFORE launching. On the re-authenticate path the
         // account is already signed in, so "IsLoggedIn is true" says nothing about this
@@ -290,7 +295,7 @@ public static class AccountManager
                     credentialsSeenAt ??= DateTime.UtcNow;
                     if (DateTime.UtcNow - credentialsSeenAt > LingerGrace)
                     {
-                        Log.Info(
+                        log.Info(
                             $"AccountManager: login id={accountId} wrote credentials but is still " +
                             "running — closing its window");
 
@@ -315,7 +320,7 @@ public static class AccountManager
         }
 
         var signedIn = IsLoggedIn(accountId);
-        Log.Info($"AccountManager: login finished for id={accountId} — signedIn={signedIn}");
+        log.Info($"AccountManager: login finished for id={accountId} — signedIn={signedIn}");
         return signedIn;
     }
 
@@ -325,14 +330,14 @@ public static class AccountManager
     /// left a stray command prompt behind every time — with <c>pause</c> holding it
     /// open only when the login actually failed and there's an error worth reading.
     /// </summary>
-    private static Process? LaunchLoginViaShell(List<string> args, string dir, string accountId)
+    private Process? LaunchLoginViaShell(List<string> args, string dir, string accountId)
     {
         var quoted = new List<string>();
         foreach (var a in args)
             quoted.Add(a.Contains(' ') ? $"\"{a}\"" : a);
 
         // /s + outer quotes makes cmd treat everything between them verbatim.
-        var inner = $"\"{ClaudeSession.ClaudeBinaryPath}\" {string.Join(" ", quoted)} || pause";
+        var inner = $"\"{claudeEnvironment.BinaryPath}\" {string.Join(" ", quoted)} || pause";
 
         var psi = new ProcessStartInfo
         {
@@ -349,7 +354,7 @@ public static class AccountManager
         }
         catch (Exception ex)
         {
-            Log.Warn($"AccountManager: login launch failed for id={accountId} — {ex.Message}");
+            log.Warn($"AccountManager: login launch failed for id={accountId} — {ex.Message}");
             return null;
         }
     }

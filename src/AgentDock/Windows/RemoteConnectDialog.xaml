@@ -1,0 +1,208 @@
+<Window x:Class="AgentDock.Windows.RemoteConnectDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Connect to Agent Dock"
+        Width="560" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Icon="/Assets/agentdock.png"
+        Background="Transparent">
+
+    <Window.Resources>
+        <Style x:Key="DialogButton" TargetType="{x:Type Button}">
+            <Setter Property="MinWidth" Value="76" />
+            <Setter Property="Height" Value="28" />
+            <Setter Property="Padding" Value="12,0" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Foreground" Value="{DynamicResource HelpForeground}" />
+            <Setter Property="Background" Value="{DynamicResource HelpCardBackground}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource HelpCardBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type Button}">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="3"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource MenuHighlightBackground}" />
+                            </Trigger>
+                            <Trigger Property="IsDefault" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush"
+                                        Value="{DynamicResource TabButtonActiveBorderBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SectionHeader" TargetType="{x:Type TextBlock}">
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource HelpForeground}" />
+            <Setter Property="Margin" Value="0,0,0,12" />
+        </Style>
+
+        <Style x:Key="FieldLabel" TargetType="{x:Type TextBlock}">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource HelpForeground}" />
+            <Setter Property="Margin" Value="0,0,0,4" />
+        </Style>
+
+        <Style x:Key="HintText" TargetType="{x:Type TextBlock}">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="{DynamicResource HelpMutedForeground}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Margin" Value="0,0,0,14" />
+        </Style>
+    </Window.Resources>
+
+    <Border Background="{DynamicResource HelpBackground}"
+            BorderBrush="{DynamicResource ToolbarBorderBrush}"
+            BorderThickness="1"
+            CornerRadius="4">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Border Grid.Row="0"
+                    Background="{DynamicResource TitleBarBackground}"
+                    CornerRadius="4,4,0,0"
+                    Padding="12,8"
+                    MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                <TextBlock Text="Connect to Agent Dock"
+                           FontSize="12"
+                           FontWeight="SemiBold"
+                           Foreground="{DynamicResource TitleBarForeground}" />
+            </Border>
+
+            <Grid Grid.Row="1" Margin="20,16,20,8">
+
+                <!-- Phase one: where is the server? -->
+                <StackPanel x:Name="AddressPanel">
+                    <TextBlock Text="Where is the server?" Style="{StaticResource SectionHeader}" />
+                    <TextBlock Style="{StaticResource HintText}"
+                               Text="Enter the other machine's name, IP address or domain. Connecting replaces the current workspace with the sessions running there." />
+
+                    <TextBlock Text="Host" Style="{StaticResource FieldLabel}" />
+                    <TextBox x:Name="HostBox"
+                             Height="28"
+                             FontSize="13"
+                             VerticalContentAlignment="Center"
+                             Margin="0,0,0,12"
+                             TextChanged="Address_Changed" />
+
+                    <TextBlock Text="Port" Style="{StaticResource FieldLabel}" />
+                    <TextBox x:Name="PortBox"
+                             Height="28"
+                             Width="120"
+                             HorizontalAlignment="Left"
+                             FontSize="13"
+                             VerticalContentAlignment="Center"
+                             Margin="0,0,0,12"
+                             TextChanged="Address_Changed" />
+                </StackPanel>
+
+                <!-- Phase two: prove who you are -->
+                <StackPanel x:Name="CodePanel" Visibility="Collapsed">
+                    <TextBlock x:Name="FoundServerText"
+                               Style="{StaticResource SectionHeader}"
+                               Text="Enter the pairing code" />
+
+                    <Border Background="{DynamicResource HelpCardBackground}"
+                            BorderBrush="{DynamicResource HelpCardBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="3"
+                            Padding="12"
+                            Margin="0,0,0,14">
+                        <StackPanel>
+                            <TextBlock x:Name="IdentityText"
+                                       FontSize="12"
+                                       TextWrapping="Wrap"
+                                       Foreground="{DynamicResource HelpForeground}" />
+                            <TextBlock x:Name="FingerprintText"
+                                       FontSize="10"
+                                       FontFamily="Cascadia Code, Consolas, Courier New"
+                                       TextWrapping="Wrap"
+                                       Foreground="{DynamicResource HelpMutedForeground}"
+                                       Margin="0,6,0,0" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border x:Name="FingerprintWarning"
+                            Background="{DynamicResource HelpCardBackground}"
+                            BorderBrush="{DynamicResource GitUnstagedForeground}"
+                            BorderThickness="1"
+                            CornerRadius="3"
+                            Padding="12"
+                            Margin="0,0,0,14"
+                            Visibility="Collapsed">
+                        <TextBlock FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Foreground="{DynamicResource GitUnstagedForeground}"
+                                   Text="This server's identity has changed since you last paired with it. That happens after a reinstall — but it is also what a machine impersonating the server would look like. Only continue if you know why it changed." />
+                    </Border>
+
+                    <TextBlock Text="Pairing code" Style="{StaticResource FieldLabel}" />
+                    <TextBox x:Name="CodeBox"
+                             Height="34"
+                             FontSize="18"
+                             FontFamily="Cascadia Code, Consolas, Courier New"
+                             CharacterCasing="Upper"
+                             MaxLength="12"
+                             VerticalContentAlignment="Center"
+                             Margin="0,0,0,4"
+                             TextChanged="Code_Changed" />
+                    <TextBlock Style="{StaticResource HintText}"
+                               Text="Shown on the server's status strip when it entered server mode." />
+                </StackPanel>
+            </Grid>
+
+            <Border Grid.Row="2"
+                    BorderBrush="{DynamicResource ToolbarBorderBrush}"
+                    BorderThickness="0,1,0,0"
+                    Padding="20,12">
+                <Grid>
+                    <TextBlock x:Name="StatusText"
+                               VerticalAlignment="Center"
+                               FontSize="11"
+                               TextWrapping="Wrap"
+                               MaxWidth="330"
+                               HorizontalAlignment="Left"
+                               Foreground="{DynamicResource HelpMutedForeground}" />
+
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button x:Name="PrimaryButton"
+                                Content="Connect"
+                                Style="{StaticResource DialogButton}"
+                                IsDefault="True"
+                                Margin="0,0,8,0"
+                                Click="Primary_Click" />
+                        <Button Content="Cancel"
+                                Style="{StaticResource DialogButton}"
+                                IsCancel="True"
+                                Click="Cancel_Click" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </Grid>
+    </Border>
+</Window>

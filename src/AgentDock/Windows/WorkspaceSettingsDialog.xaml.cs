@@ -5,6 +5,8 @@ using System.Windows.Input;
 using AgentDock.Models;
 using AgentDock.Services;
 
+using AgentDock.Services.Abstractions;
+
 namespace AgentDock.Windows;
 
 public partial class WorkspaceSettingsDialog : Window
@@ -19,12 +21,17 @@ public partial class WorkspaceSettingsDialog : Window
 
     public Result? Outcome { get; private set; }
 
+    private readonly IThemeRegistry _themeRegistry;
+
     private WorkspaceSettingsDialog(
+        IThemeRegistry themeRegistry,
         string currentThemeId,
         string currentToolbarPosition,
         bool showActiveProjectsGroup,
         int activeProjectsLimit)
     {
+        _themeRegistry = themeRegistry;
+
         InitializeComponent();
 
         ShowActiveProjectsCheck.IsChecked = showActiveProjectsGroup;
@@ -33,9 +40,9 @@ public partial class WorkspaceSettingsDialog : Window
         ActiveProjectsLimitLabel.Text =
             $"projects shown ({WorkspaceFile.MinActiveProjectsLimit}–{WorkspaceFile.MaxActiveProjectsLimit})";
 
-        ThemeCombo.ItemsSource = ThemeRegistry.All;
+        ThemeCombo.ItemsSource = _themeRegistry.All;
         ThemeCombo.SelectedItem =
-            ThemeRegistry.FindById(currentThemeId) ?? ThemeRegistry.Default;
+            _themeRegistry.FindById(currentThemeId) ?? _themeRegistry.Default;
 
         foreach (ComboBoxItem item in ToolbarPositionCombo.Items)
         {
@@ -50,6 +57,7 @@ public partial class WorkspaceSettingsDialog : Window
     }
 
     public static Result? Show(
+        IThemeRegistry themeRegistry,
         Window owner,
         string currentThemeId,
         string currentToolbarPosition,
@@ -57,7 +65,7 @@ public partial class WorkspaceSettingsDialog : Window
         int activeProjectsLimit)
     {
         var dlg = new WorkspaceSettingsDialog(
-            currentThemeId, currentToolbarPosition, showActiveProjectsGroup, activeProjectsLimit)
+            themeRegistry, currentThemeId, currentToolbarPosition, showActiveProjectsGroup, activeProjectsLimit)
         { Owner = owner };
         return dlg.ShowDialog() == true ? dlg.Outcome : null;
     }
@@ -77,7 +85,7 @@ public partial class WorkspaceSettingsDialog : Window
 
     private void OkButton_Click(object sender, RoutedEventArgs e)
     {
-        var theme = ThemeCombo.SelectedItem as ThemeDescriptor ?? ThemeRegistry.Default;
+        var theme = ThemeCombo.SelectedItem as ThemeDescriptor ?? _themeRegistry.Default;
         var toolbar = (ToolbarPositionCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "Top";
 
         // An empty or out-of-range box falls back to the default rather than blocking OK.

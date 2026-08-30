@@ -3,6 +3,8 @@ using System.IO;
 using System.Net.Http;
 using System.Text.Json;
 
+using AgentDock.Services.Abstractions;
+
 namespace AgentDock.Services;
 
 /// <summary>
@@ -22,7 +24,7 @@ public enum UpdateChannel { Stable, Beta }
 /// </summary>
 public record UpdateInfo(string Version, string DownloadUrl, string ReleaseName, string Notes);
 
-public static class UpdateCheckService
+public sealed class UpdateCheckService(ILogService log) : IUpdateCheckService
 {
     private const string ApiBase = "https://api.github.com/repos/develorem/agent-dock";
     private const string LatestReleaseUrl = ApiBase + "/releases/latest";
@@ -31,7 +33,7 @@ public static class UpdateCheckService
     private const string InstallerAssetPrefix = "AgentDock-";
     private const string InstallerAssetSuffix = "-setup.exe";
 
-    private static readonly HttpClient Http = CreateHttpClient();
+    private readonly HttpClient Http = CreateHttpClient();
 
     private static HttpClient CreateHttpClient()
     {
@@ -47,16 +49,16 @@ public static class UpdateCheckService
     /// Returns UpdateInfo if a newer version exists, null otherwise.
     /// Never throws — returns null on any error.
     /// </summary>
-    public static async Task<UpdateInfo?> CheckForUpdateAsync(UpdateChannel channel = UpdateChannel.Stable)
+    public async Task<UpdateInfo?> CheckForUpdateAsync(UpdateChannel channel = UpdateChannel.Stable)
     {
         try
         {
-            Log.Info($"UpdateCheck: checking for updates (channel={channel})");
+            log.Info($"UpdateCheck: checking for updates (channel={channel})");
 
             var current = SemVer.TryParse(App.Version);
             if (current is null)
             {
-                Log.Warn($"UpdateCheck: could not parse current version '{App.Version}'");
+                log.Warn($"UpdateCheck: could not parse current version '{App.Version}'");
                 return null;
             }
 
@@ -69,17 +71,17 @@ public static class UpdateCheckService
 
             if (candidate.Version.CompareTo(current) <= 0)
             {
-                Log.Info($"UpdateCheck: current {current} >= remote {candidate.Version}, no update");
+                log.Info($"UpdateCheck: current {current} >= remote {candidate.Version}, no update");
                 return null;
             }
 
             if (string.IsNullOrEmpty(candidate.DownloadUrl))
             {
-                Log.Warn("UpdateCheck: no setup.exe asset found in release");
+                log.Warn("UpdateCheck: no setup.exe asset found in release");
                 return null;
             }
 
-            Log.Info($"UpdateCheck: update available — {candidate.Version} (current: {current})");
+            log.Info($"UpdateCheck: update available — {candidate.Version} (current: {current})");
             return new UpdateInfo(
                 candidate.Version.ToString(),
                 candidate.DownloadUrl,
@@ -88,17 +90,17 @@ public static class UpdateCheckService
         }
         catch (TaskCanceledException)
         {
-            Log.Warn("UpdateCheck: request timed out");
+            log.Warn("UpdateCheck: request timed out");
             return null;
         }
         catch (HttpRequestException ex)
         {
-            Log.Warn($"UpdateCheck: network error — {ex.Message}");
+            log.Warn($"UpdateCheck: network error — {ex.Message}");
             return null;
         }
         catch (Exception ex)
         {
-            Log.Error("UpdateCheck: unexpected error", ex);
+            log.Error("UpdateCheck: unexpected error", ex);
             return null;
         }
     }
@@ -106,12 +108,12 @@ public static class UpdateCheckService
     /// <summary>
     /// GET /releases/latest — returns the latest non-prerelease release.
     /// </summary>
-    private static async Task<ReleaseCandidate?> FindLatestStableReleaseAsync()
+    private async Task<ReleaseCandidate?> FindLatestStableReleaseAsync()
     {
         using var response = await Http.GetAsync(LatestReleaseUrl);
         if (!response.IsSuccessStatusCode)
         {
-            Log.Warn($"UpdateCheck: API returned {response.StatusCode}");
+            log.Warn($"UpdateCheck: API returned {response.StatusCode}");
             return null;
         }
 
@@ -126,12 +128,12 @@ public static class UpdateCheckService
     /// GET /releases — scans all releases (including prereleases) and returns the
     /// one with the highest SemVer.
     /// </summary>
-    private static async Task<ReleaseCandidate?> FindBestBetaReleaseAsync()
+    private async Task<ReleaseCandidate?> FindBestBetaReleaseAsync()
     {
         using var response = await Http.GetAsync(AllReleasesUrl);
         if (!response.IsSuccessStatusCode)
         {
-            Log.Warn($"UpdateCheck: API returned {response.StatusCode}");
+            log.Warn($"UpdateCheck: API returned {response.StatusCode}");
             return null;
         }
 
@@ -162,7 +164,7 @@ public static class UpdateCheckService
     /// Returns null if the release isn't usable (missing/unparseable tag, etc.)
     /// or if <paramref name="requireStable"/> and the tag has a prerelease suffix.
     /// </summary>
-    private static ReleaseCandidate? ExtractCandidate(JsonElement release, bool requireStable)
+    private ReleaseCandidate? ExtractCandidate(JsonElement release, bool requireStable)
     {
         var tag = release.TryGetProperty("tag_name", out var t) ? t.GetString() : null;
         if (string.IsNullOrEmpty(tag))
@@ -171,13 +173,13 @@ public static class UpdateCheckService
         var version = SemVer.TryParse(tag);
         if (version is null)
         {
-            Log.Warn($"UpdateCheck: could not parse tag '{tag}'");
+            log.Warn($"UpdateCheck: could not parse tag '{tag}'");
             return null;
         }
 
         if (requireStable && version.IsPrerelease)
         {
-            Log.Info($"UpdateCheck: skipping pre-release {tag}");
+            log.Info($"UpdateCheck: skipping pre-release {tag}");
             return null;
         }
 
@@ -208,14 +210,14 @@ public static class UpdateCheckService
     /// Downloads the installer to a temp file with progress reporting.
     /// Returns the path to the downloaded file, or null on failure.
     /// </summary>
-    public static async Task<string?> DownloadInstallerAsync(
+    public async Task<string?> DownloadInstallerAsync(
         string downloadUrl,
         IProgress<double>? progress = null,
         CancellationToken cancellationToken = default)
     {
         try
         {
-            Log.Info($"UpdateCheck: downloading installer from {downloadUrl}");
+            log.Info($"UpdateCheck: downloading installer from {downloadUrl}");
 
             using var response = await Http.GetAsync(downloadUrl,
                 HttpCompletionOption.ResponseHeadersRead, cancellationToken);
@@ -243,17 +245,17 @@ public static class UpdateCheckService
             }
 
             progress?.Report(1.0);
-            Log.Info($"UpdateCheck: download complete — {tempPath} ({totalRead} bytes)");
+            log.Info($"UpdateCheck: download complete — {tempPath} ({totalRead} bytes)");
             return tempPath;
         }
         catch (OperationCanceledException)
         {
-            Log.Info("UpdateCheck: download cancelled by user");
+            log.Info("UpdateCheck: download cancelled by user");
             return null;
         }
         catch (Exception ex)
         {
-            Log.Error("UpdateCheck: download failed", ex);
+            log.Error("UpdateCheck: download failed", ex);
             return null;
         }
     }
@@ -262,7 +264,7 @@ public static class UpdateCheckService
     /// Writes a temp batch script that waits for our process to exit, runs the installer
     /// silently, launches the new app, then deletes itself. Shuts down the current app.
     /// </summary>
-    public static void LaunchUpdateAndShutdown(string installerPath)
+    public void LaunchUpdateAndShutdown(string installerPath)
     {
         var appExePath = Environment.ProcessPath
             ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "AgentDock.exe");
@@ -282,7 +284,7 @@ public static class UpdateCheckService
 
         File.WriteAllText(batchPath, script);
 
-        Log.Info($"UpdateCheck: launching update script — {batchPath}");
+        log.Info($"UpdateCheck: launching update script — {batchPath}");
 
         Process.Start(new ProcessStartInfo
         {

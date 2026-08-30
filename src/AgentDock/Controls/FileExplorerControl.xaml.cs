@@ -10,6 +10,8 @@ using System.Windows.Threading;
 using AgentDock.Models;
 using AgentDock.Services;
 
+using AgentDock.Services.Abstractions;
+
 namespace AgentDock.Controls;
 
 public partial class FileExplorerControl : UserControl
@@ -38,8 +40,16 @@ public partial class FileExplorerControl : UserControl
     /// </summary>
     public static HashSet<string> AvailableTools { get; } = new(StringComparer.OrdinalIgnoreCase);
 
-    public FileExplorerControl()
+    private readonly IProjectSettingsStore _projectSettings;
+    private readonly IThemeService _theme;
+
+    public FileExplorerControl(
+        IProjectSettingsStore projectSettings,
+        IThemeService theme)
     {
+        _projectSettings = projectSettings;
+        _theme = theme;
+
         InitializeComponent();
     }
 
@@ -53,20 +63,9 @@ public partial class FileExplorerControl : UserControl
             ? Visibility.Visible
             : Visibility.Collapsed;
 
-        FileTree.Items.Clear();
-
-        // Load root contents directly — don't show the root folder itself
-        var rootNode = new FileNode
-        {
-            Name = Path.GetFileName(rootPath) ?? rootPath,
-            FullPath = rootPath,
-            IsDirectory = true
-        };
-
-        LoadChildren(rootNode);
-
-        foreach (var child in rootNode.Children)
-            FileTree.Items.Add(child);
+        // Bound to an observable collection so the tree can be patched rather than rebuilt.
+        FileTree.ItemsSource = _rootNodes;
+        SyncChildren(_rootNodes, BuildLocalChildren(rootPath));
     }
 
     /// <summary>
@@ -164,116 +163,22 @@ public partial class FileExplorerControl : UserControl
         }
         return null;
     }
+    /// <summary>
+    /// Re-reads the tree in place. Patches rather than rebuilding, so expansion state,
+    /// selection and scroll position survive — the collect-rebuild-restore version of this
+    /// flickered every time the agent touched a file, since it is wired to the git watcher.
+    /// </summary>
+    public void Refresh() => RefreshIncremental();
 
     /// <summary>
-    /// Refreshes the file tree while preserving expanded folder state.
+    /// Materializes one directory's children, replacing the placeholder node. Delegates to the
+    /// same builder and patcher the incremental refresh uses, so there is one definition of
+    /// what a directory's contents look like.
     /// </summary>
-    public void Refresh()
-    {
-        if (string.IsNullOrEmpty(_rootPath))
-            return;
-
-        var expandedPaths = CollectExpandedPaths();
-        LoadDirectory(_rootPath);
-        RestoreExpandedState(expandedPaths);
-    }
-
-    private HashSet<string> CollectExpandedPaths()
-    {
-        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (FileNode node in FileTree.Items)
-            CollectExpandedRecursive(node, paths);
-        return paths;
-    }
-
-    private void CollectExpandedRecursive(FileNode node, HashSet<string> paths)
-    {
-        if (!node.IsDirectory || node.FullPath == null || !node.IsExpanded)
-            return;
-
-        paths.Add(node.FullPath);
-        foreach (var child in node.Children)
-            CollectExpandedRecursive(child, paths);
-    }
-
-    private void RestoreExpandedState(HashSet<string> expandedPaths)
-    {
-        if (expandedPaths.Count == 0)
-            return;
-
-        foreach (FileNode node in FileTree.Items)
-            RestoreExpandedRecursive(node, expandedPaths);
-    }
-
-    private void RestoreExpandedRecursive(FileNode node, HashSet<string> expandedPaths)
-    {
-        if (!node.IsDirectory || node.FullPath == null)
-            return;
-        if (!expandedPaths.Contains(node.FullPath))
-            return;
-
-        // Load real children (replacing dummy "Loading..." node)
-        if (node.Children.Count == 1 && node.Children[0].FullPath == null)
-            LoadChildren(node);
-
-        node.IsExpanded = true;
-        node.Icon = "\uD83D\uDCC2"; // open folder
-
-        foreach (var child in node.Children)
-            RestoreExpandedRecursive(child, expandedPaths);
-    }
-
     private void LoadChildren(FileNode parentNode)
     {
-        parentNode.Children.Clear();
-
-        try
-        {
-            // Directories first, then files, both alphabetical
-            var dirInfo = new DirectoryInfo(parentNode.FullPath!);
-
-            var directories = dirInfo.GetDirectories()
-                .Where(d => !IsIgnored(d.FullName, isDirectory: true))
-                .OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase);
-
-            foreach (var dir in directories)
-            {
-                var dirNode = new FileNode
-                {
-                    Name = dir.Name,
-                    FullPath = dir.FullName,
-                    IsDirectory = true,
-                    Icon = "\uD83D\uDCC1" // closed folder
-                };
-
-                // Add a dummy child so the expand arrow shows
-                dirNode.Children.Add(new FileNode { Name = "Loading...", Icon = "" });
-                parentNode.Children.Add(dirNode);
-            }
-
-            var files = dirInfo.GetFiles()
-                .Where(f => !IsIgnored(f.FullName, isDirectory: false))
-                .OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase);
-
-            foreach (var file in files)
-            {
-                parentNode.Children.Add(new FileNode
-                {
-                    Name = file.Name,
-                    FullPath = file.FullName,
-                    IsDirectory = false,
-                    Icon = GetFileIcon(file.Extension)
-                });
-            }
-        }
-        catch (UnauthorizedAccessException)
-        {
-            // Skip directories we can't access
-        }
-        catch (IOException)
-        {
-            // Skip on IO errors
-        }
+        if (parentNode.FullPath == null) return;
+        SyncChildren(parentNode.Children, BuildLocalChildren(parentNode.FullPath));
     }
 
     private bool IsIgnored(string fullPath, bool isDirectory)
@@ -294,9 +199,11 @@ public partial class FileExplorerControl : UserControl
             return;
 
         // Check if children are just the dummy "Loading..." node
+        // Children are still the placeholder — materialize them, from the server when remote.
         if (node.Children.Count == 1 && node.Children[0].FullPath == null)
         {
-            LoadChildren(node);
+            if (!TryExpandRemote(node))
+                LoadChildren(node);
         }
 
         node.Icon = "\uD83D\uDCC2"; // open folder
@@ -401,11 +308,11 @@ public partial class FileExplorerControl : UserControl
         if (owner == null)
             return;
 
-        var result = Windows.ProjectSettingsDialog.Show(owner, _rootPath);
+        var result = Windows.ProjectSettingsDialog.Show(owner, _rootPath, _projectSettings);
 
         if (result != null)
         {
-            ProjectSettingsManager.Update(_rootPath, s =>
+            _projectSettings.Update(_rootPath, s =>
             {
                 s.Name = result.Name;
                 s.Icon = result.Icon;
@@ -514,7 +421,7 @@ public partial class FileExplorerControl : UserControl
     }
 }
 
-public class FileNode : INotifyPropertyChanged
+public class FileNode(IThemeService theme) : INotifyPropertyChanged
 {
     private string _icon = "";
     private string _name = "";
@@ -541,8 +448,8 @@ public class FileNode : INotifyPropertyChanged
     /// Returns a themed foreground brush: folder-yellow for directories, normal for files.
     /// </summary>
     public Brush IconForeground => IsDirectory
-        ? ThemeManager.GetBrush("ExplorerFolderIconForeground")
-        : ThemeManager.GetBrush("ExplorerForeground");
+        ? theme.GetBrush("ExplorerFolderIconForeground")
+        : theme.GetBrush("ExplorerForeground");
 
     public bool IsExpanded
     {

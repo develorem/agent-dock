@@ -4,6 +4,8 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using AgentDock.Models;
 
+using AgentDock.Services.Abstractions;
+
 namespace AgentDock.Services;
 
 /// <summary>
@@ -13,7 +15,7 @@ namespace AgentDock.Services;
 /// API accepts. Output media type is therefore always one Claude supports
 /// (<c>image/png</c> or <c>image/jpeg</c>), regardless of the source format.
 /// </summary>
-public static class ImageAttachmentHelper
+public sealed class ImageAttachmentService(ILogService log) : IImageAttachmentService
 {
     // Anthropic resizes anything larger than ~1568px on the long edge, so there's
     // no benefit to sending bigger — downscale first to keep payloads small.
@@ -27,12 +29,12 @@ public static class ImageAttachmentHelper
     // Long edge of the in-app thumbnail kept on the VM (chip + message bubble).
     private const int ThumbnailEdge = 200;
 
-    private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
+    private readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp"
     };
 
-    public static bool IsSupportedImageFile(string path)
+    public bool IsSupportedImageFile(string path)
         => SupportedExtensions.Contains(Path.GetExtension(path));
 
     /// <summary>
@@ -40,7 +42,7 @@ public static class ImageAttachmentHelper
     /// bitmap for the enlarged lightbox preview. Falls back to the small thumbnail
     /// if decoding somehow fails.
     /// </summary>
-    public static ImageSource CreatePreview(PendingImageAttachment attachment)
+    public ImageSource CreatePreview(PendingImageAttachment attachment)
     {
         try
         {
@@ -55,7 +57,7 @@ public static class ImageAttachmentHelper
         }
         catch (Exception ex)
         {
-            Log.Warn($"ImageAttachment: failed to decode preview — {ex.Message}");
+            log.Warn($"ImageAttachment: failed to decode preview — {ex.Message}");
             return attachment.Thumbnail;
         }
     }
@@ -64,7 +66,7 @@ public static class ImageAttachmentHelper
     /// Builds an attachment from an image file on disk. Returns null (and logs) if
     /// the file can't be decoded.
     /// </summary>
-    public static PendingImageAttachment? FromFile(string path)
+    public PendingImageAttachment? FromFile(string path)
     {
         try
         {
@@ -77,7 +79,7 @@ public static class ImageAttachmentHelper
         }
         catch (Exception ex)
         {
-            Log.Warn($"ImageAttachment: failed to load '{path}' — {ex.Message}");
+            log.Warn($"ImageAttachment: failed to load '{path}' — {ex.Message}");
             return null;
         }
     }
@@ -90,7 +92,7 @@ public static class ImageAttachmentHelper
     /// and renders screenshots with a black background on some sources. Returns null
     /// (and logs) if the clipboard has no usable image.
     /// </summary>
-    public static PendingImageAttachment? FromClipboard()
+    public PendingImageAttachment? FromClipboard()
     {
         try
         {
@@ -114,7 +116,7 @@ public static class ImageAttachmentHelper
         }
         catch (Exception ex)
         {
-            Log.Warn($"ImageAttachment: failed to read clipboard image — {ex.Message}");
+            log.Warn($"ImageAttachment: failed to read clipboard image — {ex.Message}");
         }
         return null;
     }
@@ -123,7 +125,7 @@ public static class ImageAttachmentHelper
     /// Builds an attachment from an in-memory bitmap (e.g. a pasted screenshot).
     /// Returns null (and logs) on failure.
     /// </summary>
-    public static PendingImageAttachment? FromBitmap(BitmapSource source, string displayName)
+    public PendingImageAttachment? FromBitmap(BitmapSource source, string displayName)
     {
         try
         {
@@ -131,12 +133,12 @@ public static class ImageAttachmentHelper
         }
         catch (Exception ex)
         {
-            Log.Warn($"ImageAttachment: failed to process bitmap — {ex.Message}");
+            log.Warn($"ImageAttachment: failed to process bitmap — {ex.Message}");
             return null;
         }
     }
 
-    private static PendingImageAttachment Build(BitmapSource source, string displayName)
+    private PendingImageAttachment Build(BitmapSource source, string displayName)
     {
         var scaled = Downscale(source, MaxEdge);
 
@@ -155,18 +157,18 @@ public static class ImageAttachmentHelper
         };
     }
 
-    private static (byte[] Data, string MediaType) Encode(BitmapSource image)
+    private (byte[] Data, string MediaType) Encode(BitmapSource image)
     {
         var png = EncodeWith(new PngBitmapEncoder(), image);
         if (png.LongLength <= MaxRawBytes)
             return (png, "image/png");
 
         var jpeg = EncodeWith(new JpegBitmapEncoder { QualityLevel = 85 }, image);
-        Log.Info($"ImageAttachment: PNG was {png.LongLength} bytes (> {MaxRawBytes}); using JPEG ({jpeg.LongLength} bytes)");
+        log.Info($"ImageAttachment: PNG was {png.LongLength} bytes (> {MaxRawBytes}); using JPEG ({jpeg.LongLength} bytes)");
         return (jpeg, "image/jpeg");
     }
 
-    private static byte[] EncodeWith(BitmapEncoder encoder, BitmapSource image)
+    private byte[] EncodeWith(BitmapEncoder encoder, BitmapSource image)
     {
         encoder.Frames.Add(BitmapFrame.Create(image));
         using var ms = new MemoryStream();
@@ -178,7 +180,7 @@ public static class ImageAttachmentHelper
     /// Returns <paramref name="source"/> scaled down so its longest edge is at most
     /// <paramref name="maxEdge"/>. Images already within bounds are returned as-is.
     /// </summary>
-    private static BitmapSource Downscale(BitmapSource source, int maxEdge)
+    private BitmapSource Downscale(BitmapSource source, int maxEdge)
     {
         var longest = Math.Max(source.PixelWidth, source.PixelHeight);
         if (longest <= maxEdge)

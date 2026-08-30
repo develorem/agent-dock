@@ -5,7 +5,7 @@ using Xunit;
 namespace AgentDock.Tests;
 
 /// <summary>
-/// Tests for <see cref="MarkdownHelper.LinkifyPaths"/> — the stage that turns bare
+/// Tests for <see cref="MarkdownRenderer.LinkifyPaths"/> — the stage that turns bare
 /// URLs and project-relative file paths into clickable links before MdXaml parses.
 ///
 /// Path resolution requires the file to exist on disk (File.Exists), so each test
@@ -43,7 +43,7 @@ public class LinkifyPathsTests : IDisposable
     public void Linkify_WrapsBareUrl()
         => Assert.Equal(
             "See [https://example.com](https://example.com) here",
-            MarkdownHelper.LinkifyPaths("See https://example.com here", _root));
+            MarkdownRenderer.LinkifyPaths("See https://example.com here", _root));
 
     // A bold-wrapped bare URL: the match must STOP at the closing ** rather than
     // swallowing the asterisks into the URL. Otherwise PreProcess can't pair the
@@ -52,13 +52,13 @@ public class LinkifyPathsTests : IDisposable
     public void Linkify_BoldWrappedUrl_StopsAtClosingDelimiters()
         => Assert.Equal(
             "**[https://resend.com](https://resend.com)** — sign up",
-            MarkdownHelper.LinkifyPaths("**https://resend.com** — sign up", _root));
+            MarkdownRenderer.LinkifyPaths("**https://resend.com** — sign up", _root));
 
     [Fact]
     public void Linkify_LeavesExistingMarkdownLinkAlone()
     {
         const string input = "[click](https://example.com)";
-        Assert.Equal(input, MarkdownHelper.LinkifyPaths(input, _root));
+        Assert.Equal(input, MarkdownRenderer.LinkifyPaths(input, _root));
     }
 
     // --- Resolvable file paths become agentdock-file links with an escaped label ---
@@ -66,7 +66,7 @@ public class LinkifyPathsTests : IDisposable
     [Fact]
     public void Linkify_WrapsExistingRelativePath()
     {
-        var output = MarkdownHelper.LinkifyPaths("Edit docs/permission_groups.cs to fix", _root);
+        var output = MarkdownRenderer.LinkifyPaths("Edit docs/permission_groups.cs to fix", _root);
         // Label keeps the path text but escapes the underscore so it doesn't italicize.
         Assert.Contains(@"[docs/permission\_groups.cs](agentdock-file:///", output);
         // The unescaped form must NOT appear — that's the bug we're guarding against.
@@ -78,7 +78,7 @@ public class LinkifyPathsTests : IDisposable
     {
         // MdXaml parses code spans before anchors, so a `code` span inside a link
         // label breaks the link. LinkifyPaths must drop the backticks for file refs.
-        var output = MarkdownHelper.LinkifyPaths("Open `docs/permission_groups.cs` now", _root);
+        var output = MarkdownRenderer.LinkifyPaths("Open `docs/permission_groups.cs` now", _root);
         Assert.Contains(@"[docs/permission\_groups.cs](agentdock-file:///", output);
         Assert.DoesNotContain("`", output);
     }
@@ -87,7 +87,7 @@ public class LinkifyPathsTests : IDisposable
     public void Linkify_NonExistentPath_LeftAsIs()
     {
         const string input = "Edit missing/nope.cs please";
-        Assert.Equal(input, MarkdownHelper.LinkifyPaths(input, _root));
+        Assert.Equal(input, MarkdownRenderer.LinkifyPaths(input, _root));
     }
 
     [Fact]
@@ -95,14 +95,14 @@ public class LinkifyPathsTests : IDisposable
     {
         // `git status` has no slash and resolves to no file: it must stay a code span.
         const string input = "Run `git status` now";
-        Assert.Equal(input, MarkdownHelper.LinkifyPaths(input, _root));
+        Assert.Equal(input, MarkdownRenderer.LinkifyPaths(input, _root));
     }
 
     [Fact]
     public void Linkify_PathInsideFencedCodeBlock_NotLinkified()
     {
         const string input = "```\ndocs/permission_groups.cs\n```";
-        var output = MarkdownHelper.LinkifyPaths(input, _root);
+        var output = MarkdownRenderer.LinkifyPaths(input, _root);
         Assert.DoesNotContain("agentdock-file", output);
         Assert.Contains("docs/permission_groups.cs", output);
     }
@@ -112,8 +112,8 @@ public class LinkifyPathsTests : IDisposable
     [Fact]
     public void Pipeline_LinkifyThenPreProcess_HandlesPathAndBoldLink()
     {
-        var pipeline = MarkdownHelper.PreProcess(
-            MarkdownHelper.LinkifyPaths("**[docs](https://x.com)** and docs/permission_groups.cs", _root));
+        var pipeline = MarkdownRenderer.PreProcess(
+            MarkdownRenderer.LinkifyPaths("**[docs](https://x.com)** and docs/permission_groups.cs", _root));
         Assert.Contains("[**docs**](https://x.com)", pipeline);                       // bold moved inside label
         Assert.Contains(@"[docs/permission\_groups.cs](agentdock-file:///", pipeline); // path linkified + escaped
     }
@@ -124,8 +124,8 @@ public class LinkifyPathsTests : IDisposable
     [Fact]
     public void Pipeline_BoldWrappedUrl_BecomesBoldLink()
     {
-        var pipeline = MarkdownHelper.PreProcess(
-            MarkdownHelper.LinkifyPaths("**https://resend.com** — sign up there", _root));
+        var pipeline = MarkdownRenderer.PreProcess(
+            MarkdownRenderer.LinkifyPaths("**https://resend.com** — sign up there", _root));
         Assert.Equal("[**https://resend.com**](https://resend.com) — sign up there", pipeline);
     }
 }

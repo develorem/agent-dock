@@ -5,8 +5,8 @@ namespace AgentDock.Tests;
 
 /// <summary>
 /// Tests for the deterministic, filesystem-independent string transforms in
-/// <see cref="MarkdownHelper"/>: <see cref="MarkdownHelper.PreProcess"/> and
-/// <see cref="MarkdownHelper.StripLeadingVersionHeading"/>.
+/// <see cref="MarkdownHelper"/>: <see cref="MarkdownRenderer.PreProcess"/> and
+/// <see cref="MarkdownRenderer.StripLeadingVersionHeading"/>.
 ///
 /// HOW TO ADD A SNIPPET THAT RENDERS BADLY:
 /// If the broken snippet is fixed in the pre-processing stage (bold/italic links,
@@ -25,19 +25,19 @@ public class MarkdownPreProcessTests
     [InlineData("a **[link](u)** b", "a [**link**](u) b")]
     [InlineData("- **[item](u)** — trailing", "- [**item**](u) — trailing")]
     public void PreProcess_MovesBoldInsideLinkLabel(string input, string expected)
-        => Assert.Equal(expected, MarkdownHelper.PreProcess(input));
+        => Assert.Equal(expected, MarkdownRenderer.PreProcess(input));
 
     [Theory]
     [InlineData("*[text](https://example.com)*", "[*text*](https://example.com)")]
     [InlineData("a *[link](u)* b", "a [*link*](u) b")]
     public void PreProcess_MovesItalicInsideLinkLabel(string input, string expected)
-        => Assert.Equal(expected, MarkdownHelper.PreProcess(input));
+        => Assert.Equal(expected, MarkdownRenderer.PreProcess(input));
 
     // A genuinely bold link (***t***) is the bold rule's job; make sure the italic
     // rule's negative lookarounds don't also fire on it and corrupt the output.
     [Fact]
     public void PreProcess_BoldLink_NotAlsoTreatedAsItalic()
-        => Assert.Equal("[**text**](u)", MarkdownHelper.PreProcess("**[text](u)**"));
+        => Assert.Equal("[**text**](u)", MarkdownRenderer.PreProcess("**[text](u)**"));
 
     // --- Bold spanning an inline atom (code span / link): split so ** pairs ---
     // MdXaml can't pair **...** when a code span or link sits between the
@@ -49,7 +49,7 @@ public class MarkdownPreProcessTests
     [InlineData("**`code` only**", "`code` **only**")]
     [InlineData("**only `code`**", "**only** `code`")]
     public void PreProcess_SplitsBoldAroundInlineAtoms(string input, string expected)
-        => Assert.Equal(expected, MarkdownHelper.PreProcess(input));
+        => Assert.Equal(expected, MarkdownRenderer.PreProcess(input));
 
     // Plain bold with no inline atom inside must be left exactly as-is.
     [Theory]
@@ -57,7 +57,7 @@ public class MarkdownPreProcessTests
     [InlineData("plain text with no markup")]
     [InlineData("`code span alone`")]
     public void PreProcess_LeavesPlainBoldAndCodeUntouched(string input)
-        => Assert.Equal(input, MarkdownHelper.PreProcess(input));
+        => Assert.Equal(input, MarkdownRenderer.PreProcess(input));
 
     // Regression: two separate bolds, each followed by a code span, on one line. The
     // closing ** of the first bold must NOT pair with the opening ** of the second and
@@ -70,7 +70,7 @@ public class MarkdownPreProcessTests
     [InlineData("**iac-aws**: `public-api-runs`")]                 // single bold, code outside it
     [InlineData("**one** then `code` then **two**")]
     public void PreProcess_DoesNotMisPairAdjacentBoldsAroundCode(string input)
-        => Assert.Equal(input, MarkdownHelper.PreProcess(input));
+        => Assert.Equal(input, MarkdownRenderer.PreProcess(input));
 
     // The same hazard, but with a markdown link as the atom between two bolds (the shape
     // LinkifyPaths produces from a bare file path sitting between two bold words).
@@ -78,7 +78,7 @@ public class MarkdownPreProcessTests
     public void PreProcess_DoesNotMisPairAdjacentBoldsAroundLink()
         => Assert.Equal(
             "**foo**: [src/x.cs](u) and **bar**: done",
-            MarkdownHelper.PreProcess("**foo**: [src/x.cs](u) and **bar**: done"));
+            MarkdownRenderer.PreProcess("**foo**: [src/x.cs](u) and **bar**: done"));
 
     // --- LooksLikeMarkdown: does a reply need the renderer + source/rendered toggle? ---
     // Regression: a single-line reply carrying inline markdown was shown verbatim (literal
@@ -96,7 +96,7 @@ public class MarkdownPreProcessTests
     [InlineData("visit https://example.com today")]
     [InlineData("line one\nline two")]                       // multi-line always qualifies
     public void LooksLikeMarkdown_TrueForInlineOrMultilineMarkdown(string input)
-        => Assert.True(MarkdownHelper.LooksLikeMarkdown(input));
+        => Assert.True(MarkdownRenderer.LooksLikeMarkdown(input));
 
     [Theory]
     [InlineData("just a plain sentence with no markup.")]
@@ -105,7 +105,7 @@ public class MarkdownPreProcessTests
     [InlineData("2 * 3 = 6 and 4 * 5 = 20")]                 // bare arithmetic, not emphasis
     [InlineData("snake_case_identifier stays plain")]        // underscores inside a word
     public void LooksLikeMarkdown_FalseForPlainSingleLine(string input)
-        => Assert.False(MarkdownHelper.LooksLikeMarkdown(input));
+        => Assert.False(MarkdownRenderer.LooksLikeMarkdown(input));
 
     // --- StripLeadingVersionHeading: drop a leading "# vX.Y.Z" + blank line ---
 
@@ -114,12 +114,12 @@ public class MarkdownPreProcessTests
     [InlineData("# 1.2.3 Some title\n\nThe body.", "The body.")]
     [InlineData("# v0.9.0\nNo blank line.", "No blank line.")]
     public void StripLeadingVersionHeading_RemovesVersionHeading(string input, string expected)
-        => Assert.Equal(expected, MarkdownHelper.StripLeadingVersionHeading(input));
+        => Assert.Equal(expected, MarkdownRenderer.StripLeadingVersionHeading(input));
 
     [Theory]
     [InlineData("## v0.9.0\n\nNot an H1.")]                 // only H1 counts
     [InlineData("# Introduction\n\nNot a version.")]        // not version-shaped
     [InlineData("Body first.\n\n# v0.9.0")]                 // not at the start
     public void StripLeadingVersionHeading_LeavesNonVersionHeadings(string input)
-        => Assert.Equal(input, MarkdownHelper.StripLeadingVersionHeading(input));
+        => Assert.Equal(input, MarkdownRenderer.StripLeadingVersionHeading(input));
 }

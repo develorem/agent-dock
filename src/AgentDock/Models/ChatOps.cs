@@ -14,6 +14,22 @@ namespace AgentDock.Models;
 /// Ops carry plain data only — never WPF objects — so they are safe to construct
 /// off the UI thread.
 /// </summary>
+// Ops cross the network as well as the thread boundary in remote-session mode, so the
+// hierarchy carries JSON type discriminators. The comment above holds doubly on the wire:
+// plain data only, no WPF objects.
+[System.Text.Json.Serialization.JsonPolymorphic(TypeDiscriminatorPropertyName = "$o")]
+[System.Text.Json.Serialization.JsonDerivedType(typeof(RemoveInactivityOp), "rmInactivity")]
+[System.Text.Json.Serialization.JsonDerivedType(typeof(AppendThinkingOp), "thinking")]
+[System.Text.Json.Serialization.JsonDerivedType(typeof(CommentaryOp), "commentary")]
+[System.Text.Json.Serialization.JsonDerivedType(typeof(FinalizeThinkingOp), "finThinking")]
+[System.Text.Json.Serialization.JsonDerivedType(typeof(EnsureExecutionOp), "ensureExec")]
+[System.Text.Json.Serialization.JsonDerivedType(typeof(AddToolOp), "tool")]
+[System.Text.Json.Serialization.JsonDerivedType(typeof(AddSubagentOp), "subagent")]
+[System.Text.Json.Serialization.JsonDerivedType(typeof(AddSubagentReportOp), "subagentReport")]
+[System.Text.Json.Serialization.JsonDerivedType(typeof(ActivityCountsOp), "counts")]
+[System.Text.Json.Serialization.JsonDerivedType(typeof(FinalizeExecutionOp), "finExec")]
+[System.Text.Json.Serialization.JsonDerivedType(typeof(PostAnswerOp), "answer")]
+[System.Text.Json.Serialization.JsonDerivedType(typeof(TurnCompleteOp), "turnComplete")]
 public abstract record ChatOp;
 
 /// <summary>Drop the inactivity warning bubble (output resumed).</summary>

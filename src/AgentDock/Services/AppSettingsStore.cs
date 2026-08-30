@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using AgentDock.Services.Abstractions;
 
 namespace AgentDock.Services;
 
@@ -9,22 +10,21 @@ namespace AgentDock.Services;
 /// Uses JsonNode for merge-style updates so multiple consumers (ThemeManager,
 /// WorkspaceManager) can each write their own keys without clobbering others.
 /// </summary>
-public static class AppSettings
+public sealed class AppSettingsStore(ILogService log) : IAppSettingsStore
 {
-    public static readonly string SettingsDir =
+    public string SettingsDir { get; } =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AgentDock");
 
-    public static readonly string SettingsFile =
-        Path.Combine(SettingsDir, "settings.json");
+    public string SettingsFile => Path.Combine(SettingsDir, "settings.json");
 
-    private static readonly object Lock = new();
+    private readonly object _lock = new();
 
     /// <summary>
     /// Reads a string value from settings.json, or returns defaultValue if missing.
     /// </summary>
-    public static string GetString(string key, string defaultValue = "")
+    public string GetString(string key, string defaultValue = "")
     {
-        lock (Lock)
+        lock (_lock)
         {
             try
             {
@@ -33,7 +33,7 @@ public static class AppSettings
             }
             catch (Exception ex)
             {
-                Log.Warn($"AppSettings: failed to read '{key}' — {ex.Message}");
+                log.Warn($"AppSettingsStore: failed to read '{key}' — {ex.Message}");
                 return defaultValue;
             }
         }
@@ -42,9 +42,9 @@ public static class AppSettings
     /// <summary>
     /// Writes a string value to settings.json, preserving all other keys.
     /// </summary>
-    public static void SetString(string key, string value)
+    public void SetString(string key, string value)
     {
-        lock (Lock)
+        lock (_lock)
         {
             try
             {
@@ -54,7 +54,7 @@ public static class AppSettings
             }
             catch (Exception ex)
             {
-                Log.Warn($"AppSettings: failed to write '{key}' — {ex.Message}");
+                log.Warn($"AppSettingsStore: failed to write '{key}' — {ex.Message}");
             }
         }
     }
@@ -62,9 +62,9 @@ public static class AppSettings
     /// <summary>
     /// Reads a string list from settings.json, or returns empty list if missing.
     /// </summary>
-    public static List<string> GetStringList(string key)
+    public List<string> GetStringList(string key)
     {
-        lock (Lock)
+        lock (_lock)
         {
             try
             {
@@ -74,7 +74,7 @@ public static class AppSettings
             }
             catch (Exception ex)
             {
-                Log.Warn($"AppSettings: failed to read list '{key}' — {ex.Message}");
+                log.Warn($"AppSettingsStore: failed to read list '{key}' — {ex.Message}");
             }
 
             return [];
@@ -84,9 +84,9 @@ public static class AppSettings
     /// <summary>
     /// Writes a string list to settings.json, preserving all other keys.
     /// </summary>
-    public static void SetStringList(string key, List<string> values)
+    public void SetStringList(string key, List<string> values)
     {
-        lock (Lock)
+        lock (_lock)
         {
             try
             {
@@ -99,12 +99,12 @@ public static class AppSettings
             }
             catch (Exception ex)
             {
-                Log.Warn($"AppSettings: failed to write list '{key}' — {ex.Message}");
+                log.Warn($"AppSettingsStore: failed to write list '{key}' — {ex.Message}");
             }
         }
     }
 
-    private static JsonObject? LoadRoot()
+    private JsonObject? LoadRoot()
     {
         if (!File.Exists(SettingsFile))
             return null;
@@ -113,7 +113,7 @@ public static class AppSettings
         return JsonNode.Parse(json)?.AsObject();
     }
 
-    private static void SaveRoot(JsonObject root)
+    private void SaveRoot(JsonObject root)
     {
         Directory.CreateDirectory(SettingsDir);
         var options = new JsonSerializerOptions { WriteIndented = true };

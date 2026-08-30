@@ -13,6 +13,8 @@ using AgentDock.Services;
 using AgentDock.Windows;
 using MdXaml;
 
+using AgentDock.Services.Abstractions;
+
 namespace AgentDock.Controls;
 
 public partial class AiChatControl : UserControl
@@ -192,9 +194,38 @@ public partial class AiChatControl : UserControl
     /// </summary>
     public bool HasBackgroundWork => _session?.HasBackgroundWork ?? false;
 
-    public AiChatControl()
+    private readonly ILogService _log;
+    private readonly IPerfDiagnostics _perf;
+    private readonly IThemeService _theme;
+    private readonly IProjectSettingsStore _projectSettings;
+    private readonly IAccountManager _accounts;
+    private readonly IClaudeSessionFactory _sessionFactory;
+    private readonly IClaudeEnvironment _claudeEnvironment;
+    private readonly IMarkdownRenderer _markdown;
+    private readonly IImageAttachmentService _images;
+
+    public AiChatControl(
+        ILogService log,
+        IPerfDiagnostics perf,
+        IThemeService theme,
+        IProjectSettingsStore projectSettings,
+        IAccountManager accounts,
+        IClaudeSessionFactory sessionFactory,
+        IClaudeEnvironment claudeEnvironment,
+        IMarkdownRenderer markdown,
+        IImageAttachmentService images)
     {
-        Log.Info("AiChatControl: constructor");
+        _log = log;
+        _perf = perf;
+        _theme = theme;
+        _projectSettings = projectSettings;
+        _accounts = accounts;
+        _sessionFactory = sessionFactory;
+        _claudeEnvironment = claudeEnvironment;
+        _markdown = markdown;
+        _images = images;
+
+        _log.Info("AiChatControl: constructor");
         InitializeComponent();
         MessageList.ItemsSource = Messages;
         Messages.CollectionChanged += OnMessagesChanged;
@@ -203,15 +234,15 @@ public partial class AiChatControl : UserControl
         // Intercept Ctrl+V so a pasted screenshot / image file becomes an
         // attachment instead of pasting its path (or nothing) as text.
         DataObject.AddPastingHandler(InputBox, InputBox_Pasting);
-        Log.Info("AiChatControl: InitializeComponent complete");
+        _log.Info("AiChatControl: InitializeComponent complete");
     }
 
     public void Initialize(string projectPath)
     {
-        Log.Info($"AiChatControl: Initialize for '{projectPath}'");
+        _log.Info($"AiChatControl: Initialize for '{projectPath}'");
         _projectPath = projectPath;
         // Reopen on whichever login this project last started a session with.
-        _preferredAccountId = ProjectSettingsManager.Load(projectPath).ClaudeAccountId;
+        _preferredAccountId = _projectSettings.Load(projectPath).ClaudeAccountId;
         // Refresh the login picker whenever the Start panel appears (initial show
         // and after a session ends) and when its dropdown opens, so accounts added
         // via the Accounts dialog show up without restarting the app.
@@ -295,7 +326,7 @@ public partial class AiChatControl : UserControl
     /// </summary>
     private void PopulateAccountPicker()
     {
-        var accounts = AccountManager.Load();
+        var accounts = _accounts.Load();
         if (accounts.Count == 0)
         {
             AccountPickerPanel.Visibility = Visibility.Collapsed;
@@ -310,8 +341,8 @@ public partial class AiChatControl : UserControl
         {
             // Login state first, email as the label — a signed-out account still has an
             // email on disk, and showing only that hides the fact it can't run.
-            var email = AccountManager.ReadEmail(a.Id);
-            var suffix = AccountManager.IsLoggedIn(a.Id)
+            var email = _accounts.ReadEmail(a.Id);
+            var suffix = _accounts.IsLoggedIn(a.Id)
                 ? email != null ? $" — {email}" : " — signed in"
                 : email != null ? $" — {email} · signed out" : " — not signed in";
             choices.Add(new AccountChoice { Id = a.Id, Label = a.Name, DisplayName = a.Name + suffix });
@@ -350,15 +381,15 @@ public partial class AiChatControl : UserControl
         _preferredAccountId = choice.Id;
         if (!string.IsNullOrEmpty(_projectPath))
         {
-            Log.Info($"AiChatControl: remembering account id={choice.Id} for '{_projectPath}'");
-            ProjectSettingsManager.Update(_projectPath, s => s.ClaudeAccountId = choice.Id);
+            _log.Info($"AiChatControl: remembering account id={choice.Id} for '{_projectPath}'");
+            _projectSettings.Update(_projectPath, s => s.ClaudeAccountId = choice.Id);
         }
     }
 
     private void StartSession(bool dangerous)
     {
-        Log.Info($"AiChatControl: StartSession(dangerous={dangerous})");
-        if (!ClaudeSession.IsClaudeAvailable())
+        _log.Info($"AiChatControl: StartSession(dangerous={dangerous})");
+        if (!_claudeEnvironment.IsAvailable())
         {
             StartError.Text = "Claude CLI not found in PATH. Install Claude Code first.";
             StartError.Visibility = Visibility.Visible;
@@ -372,21 +403,21 @@ public partial class AiChatControl : UserControl
         if (AccountPickerPanel.Visibility == Visibility.Visible &&
             AccountCombo.SelectedItem is AccountChoice choice)
         {
-            if (!AccountManager.IsLoggedIn(choice.Id))
+            if (!_accounts.IsLoggedIn(choice.Id))
             {
                 StartError.Text = "That account isn't signed in yet. Open Claude Accounts to log in first.";
                 StartError.Visibility = Visibility.Visible;
                 return;
             }
-            accountConfigDir = AccountManager.ConfigDirFor(choice.Id);
-            Log.Info($"AiChatControl: StartSession using account id={choice.Id}");
+            accountConfigDir = _accounts.ConfigDirFor(choice.Id);
+            _log.Info($"AiChatControl: StartSession using account id={choice.Id}");
             AccountLabel = choice.Label;
             _sessionAccountId = choice.Id;
         }
 
         StartError.Visibility = Visibility.Collapsed;
 
-        _session = new ClaudeSession(_projectPath, accountConfigDir);
+        _session = _sessionFactory.Create(_projectPath, accountConfigDir);
         WireSessionEvents();
 
         StartPanel.Visibility = Visibility.Collapsed;
@@ -433,6 +464,10 @@ public partial class AiChatControl : UserControl
         if (_session == null) return;
         foreach (var op in ops)
             ApplyOp(op);
+
+        // Replicate after applying locally, in the same order, so a connected client
+        // converges on exactly the state this panel is in.
+        OpsProduced?.Invoke(ops);
     }
 
     private void ApplyOp(ChatOp op)
@@ -491,7 +526,7 @@ public partial class AiChatControl : UserControl
         // Not just multi-line: a single-line reply can still carry inline markdown
         // (**bold**, *italic*, `code`, links, bare URLs) that must be rendered — and
         // that needs the source/rendered toggle — rather than shown with literal stars.
-        var isMarkdown = MarkdownHelper.LooksLikeMarkdown(text);
+        var isMarkdown = MarkdownRenderer.LooksLikeMarkdown(text);
         Func<FlowDocument>? markdownBuilder = null;
         if (isMarkdown)
         {
@@ -515,18 +550,18 @@ public partial class AiChatControl : UserControl
     // memoized with ??=, so a throw never caches and runs again next time). We log the
     // failure with the source text — that's the only copy that reproduces it — so the
     // underlying render bug stays visible and fixable rather than being silently swallowed.
-    private static FlowDocument BuildAnswerDocument(
+    private FlowDocument BuildAnswerDocument(
         string text, System.Windows.Style style, string projectPath, Action<string> onLink)
     {
         try
         {
-            return MarkdownHelper.BuildDocument(
+            return _markdown.BuildDocument(
                 text, markdownStyle: style, projectPath: projectPath, onFileLinkClicked: onLink);
         }
         catch (Exception ex)
         {
-            Log.Error($"Markdown render failed; showing plain text. Source markdown:\n{text}", ex);
-            return MarkdownHelper.BuildPlainTextFallback(text, style);
+            _log.Error($"Markdown render failed; showing plain text. Source markdown:\n{text}", ex);
+            return _markdown.BuildPlainTextFallback(text, style);
         }
     }
 
@@ -548,7 +583,7 @@ public partial class AiChatControl : UserControl
         if (nowWorking != _countedAsWorking)
         {
             _countedAsWorking = nowWorking;
-            PerfDiagnostics.WorkingSessionDelta(nowWorking ? 1 : -1);
+            _perf.WorkingSessionDelta(nowWorking ? 1 : -1);
         }
 
         if (state == ClaudeSessionState.Working)
@@ -864,8 +899,9 @@ public partial class AiChatControl : UserControl
             return;
         }
 
-        // A live session is required to send or queue.
-        if (_session == null)
+        // A live session is required to send or queue — except on a remote head, where the
+        // session lives on the server and the wire is the send path.
+        if (_session == null && !IsRemote)
             return;
 
         // Snapshot the queued images for both the payload and the bubble, then clear
@@ -880,7 +916,14 @@ public partial class AiChatControl : UserControl
         // Dispatch immediately only when the session is idle AND nothing is already
         // queued ahead of this — otherwise append so strict FIFO order is preserved
         // (a new message can't jump the queue, and a busy session no longer drops it).
-        if (_session.State == ClaudeSessionState.Idle && _queue.IsEmpty)
+        // On a remote head the server owns the queue, so everything goes straight out and the
+        // server decides whether to run it now or queue it. Keeping a second queue here would
+        // give the two machines different ideas about the order.
+        var idle = IsRemote
+            ? _remoteState?.State == ClaudeSessionState.Idle
+            : _session!.State == ClaudeSessionState.Idle;
+
+        if (IsRemote || (idle && _queue.IsEmpty))
             Dispatch(text, attachments, thumbnails);
         else
             _queue.Enqueue(new QueuedMessage
@@ -896,15 +939,22 @@ public partial class AiChatControl : UserControl
     // The actual send: finalize the previous turn's activity bubble, echo the user
     // message, show the waiting placeholder, and hand the text + images to the session.
     // Shared by the immediate-send path and the queue pump so both behave identically.
-    private void Dispatch(string text, IReadOnlyList<ImageAttachment> attachments, IReadOnlyList<ImageSource>? thumbnails)
+    private void Dispatch(
+        string text,
+        IReadOnlyList<ImageAttachment> attachments,
+        IReadOnlyList<ImageSource>? thumbnails,
+        Guid? bubbleId = null)
     {
+        // Remote mode: the agent lives on the server, so the text goes on the wire.
+        if (TrySendRemote(text, attachments, thumbnails)) return;
+
         // Defensive turn-boundary finalize — should already have happened on the
         // previous result, but covers edge cases (manual /compact mid-stream etc.).
         FinalizeActivity(null);
         _processor?.Reset();
 
         _lastMessageSentTime = DateTime.UtcNow;
-        AddUserMessage(text, thumbnails);
+        AddUserMessage(text, thumbnails, bubbleId);
         ShowWaitingBubble();
         _session!.SendMessage(text, attachments);
     }
@@ -915,7 +965,12 @@ public partial class AiChatControl : UserControl
     // now) or working (append to the queue). It's disabled only when there's no live
     // session or it has exited.
     private void UpdateSendButtonEnabled()
-        => SendButton.IsEnabled = _session?.State is ClaudeSessionState.Idle or ClaudeSessionState.Working;
+    {
+        // In remote mode there is no local session to ask; the authoritative state is the
+        // replica the server pushed.
+        var state = IsRemote ? _remoteState?.State : _session?.State;
+        SendButton.IsEnabled = state is ClaudeSessionState.Idle or ClaudeSessionState.Working;
+    }
 
     // The dropdown half of the split Send button. Send is the default action, so the
     // menu only exists to reach the alternative (schedule for later); "Send now" is
@@ -1056,7 +1111,7 @@ public partial class AiChatControl : UserControl
         if (head == null) return;
 
         _queue.DequeueHead();
-        Dispatch(head.Text, head.Attachments, head.Thumbnails);
+        Dispatch(head.Text, head.Attachments, head.Thumbnails, head.BubbleId);
     }
 
     // The clock button folded into the Send split button's dropdown, so a pending
@@ -1065,8 +1120,8 @@ public partial class AiChatControl : UserControl
     {
         var hasScheduled = _queue.NextScheduledFireUtc != null;
         SendMenuIcon.Foreground = hasScheduled
-            ? ThemeManager.GetBrush("ChatStatusWarningForeground")
-            : ThemeManager.GetBrush("ChatButtonForeground");
+            ? _theme.GetBrush("ChatStatusWarningForeground")
+            : _theme.GetBrush("ChatButtonForeground");
         SendMenuButton.ToolTip = hasScheduled
             ? "A scheduled message is waiting — click for send options"
             : "More send options";
@@ -1096,6 +1151,8 @@ public partial class AiChatControl : UserControl
 
     private void ExecuteLocalCommand(string command)
     {
+        if (TryLocalCommandRemote(command)) return;
+
         switch (command)
         {
             case "/clear":
@@ -1123,7 +1180,7 @@ public partial class AiChatControl : UserControl
                 break;
 
             case "/logs":
-                var logPath = Log.LogFilePath;
+                var logPath = _log.LogFilePath;
                 if (logPath != null)
                 {
                     var folder = System.IO.Path.GetDirectoryName(logPath);
@@ -1157,11 +1214,11 @@ public partial class AiChatControl : UserControl
             if (Clipboard.ContainsFileDropList())
             {
                 var images = Clipboard.GetFileDropList().Cast<string>()
-                    .Where(ImageAttachmentHelper.IsSupportedImageFile).ToList();
+                    .Where(_images.IsSupportedImageFile).ToList();
                 if (images.Count > 0)
                 {
                     foreach (var path in images)
-                        AddAttachment(ImageAttachmentHelper.FromFile(path));
+                        AddAttachment(_images.FromFile(path));
                     return true;
                 }
             }
@@ -1171,7 +1228,7 @@ public partial class AiChatControl : UserControl
             // ContainsImage() doesn't report, so check both.
             if (Clipboard.ContainsImage() || Clipboard.ContainsData("PNG"))
             {
-                var attachment = ImageAttachmentHelper.FromClipboard();
+                var attachment = _images.FromClipboard();
                 if (attachment != null)
                 {
                     AddAttachment(attachment);
@@ -1181,7 +1238,7 @@ public partial class AiChatControl : UserControl
         }
         catch (Exception ex)
         {
-            Log.Warn($"AiChatControl: clipboard image paste failed — {ex.Message}");
+            _log.Warn($"AiChatControl: clipboard image paste failed — {ex.Message}");
         }
         return false;
     }
@@ -1198,20 +1255,20 @@ public partial class AiChatControl : UserControl
             || e.Data.GetData(DataFormats.FileDrop) is not string[] files)
             return;
 
-        var images = files.Where(ImageAttachmentHelper.IsSupportedImageFile).ToList();
+        var images = files.Where(_images.IsSupportedImageFile).ToList();
         if (images.Count == 0)
             return;
 
         foreach (var path in images)
-            AddAttachment(ImageAttachmentHelper.FromFile(path));
+            AddAttachment(_images.FromFile(path));
         e.Handled = true;
         FocusInput();
     }
 
-    private static bool HasDroppableImages(DragEventArgs e)
+    private bool HasDroppableImages(DragEventArgs e)
         => e.Data.GetDataPresent(DataFormats.FileDrop)
            && e.Data.GetData(DataFormats.FileDrop) is string[] files
-           && files.Any(ImageAttachmentHelper.IsSupportedImageFile);
+           && files.Any(_images.IsSupportedImageFile);
 
     private void AddAttachment(PendingImageAttachment? attachment)
     {
@@ -1233,7 +1290,7 @@ public partial class AiChatControl : UserControl
             return;
 
         var owner = Window.GetWindow(this)!;
-        var preview = ImageAttachmentHelper.CreatePreview(a);
+        var preview = _images.CreatePreview(a);
         if (ImagePreviewDialog.Show(owner, preview, a.DisplayName))
             PendingAttachments.Remove(a);
     }
@@ -1272,17 +1329,24 @@ public partial class AiChatControl : UserControl
 
     // --- Message Collection Helpers ---
 
-    private void AddUserMessage(string text, IReadOnlyList<ImageSource>? images = null)
+    private void AddUserMessage(string text, IReadOnlyList<ImageSource>? images = null, Guid? id = null)
     {
         // Sending always snaps to the newest message, even if the user had
         // scrolled up to read history.
         _stickToBottom = true;
-        Messages.Add(new UserMessage(Guid.NewGuid(), text, images));
+        var message = new UserMessage(id ?? Guid.NewGuid(), text, images);
+        Messages.Add(message);
+
+        // User and system bubbles are appended directly rather than through a ChatOp,
+        // so they need their own replication hook or a client would never see them.
+        RaiseTranscriptAppended(message);
     }
 
     private void AddSystemMessage(string text, bool isWarning = false)
     {
-        Messages.Add(new SystemMessage(Guid.NewGuid(), text, isWarning));
+        var message = new SystemMessage(Guid.NewGuid(), text, isWarning);
+        Messages.Add(message);
+        RaiseTranscriptAppended(message);
     }
 
     private void ShowWaitingBubble()
@@ -1378,7 +1442,7 @@ public partial class AiChatControl : UserControl
         AddSystemMessage($"Error: {detail}", isWarning: true);
 
         var noWorkDone = result.InputTokens == 0 && result.OutputTokens == 0;
-        if (noWorkDone && _sessionAccountId != null && !AccountManager.IsLoggedIn(_sessionAccountId))
+        if (noWorkDone && _sessionAccountId != null && !_accounts.IsLoggedIn(_sessionAccountId))
         {
             // No session restart needed: turns are one-shot with --resume, so SessionId
             // outlives the failed process. Signing back in and re-sending picks the
@@ -1468,6 +1532,10 @@ public partial class AiChatControl : UserControl
 
     private void OnPermissionRequested(ClaudePermissionRequest req)
     {
+        // A prompt is only replicated when this panel owns the session; in remote mode
+        // the prompt arrived from the server and re-publishing it would loop.
+        if (!IsRemote) PermissionRequestRaised?.Invoke(req);
+
         if (req.ToolName == "AskUserQuestion" && req.Input.ValueKind == JsonValueKind.Object)
         {
             ShowQuestionPanel(req);
@@ -1520,8 +1588,8 @@ public partial class AiChatControl : UserControl
                     {
                         Template = (ControlTemplate)FindResource("ChatButtonChrome"),
                         Cursor = Cursors.Hand,
-                        Background = ThemeManager.GetBrush("ChatOptionButtonBackground"),
-                        BorderBrush = ThemeManager.GetBrush("ChatOptionButtonBorderBrush"),
+                        Background = _theme.GetBrush("ChatOptionButtonBackground"),
+                        BorderBrush = _theme.GetBrush("ChatOptionButtonBorderBrush"),
                         BorderThickness = new Thickness(1),
                         Padding = new Thickness(10, 6, 10, 6),
                         Margin = new Thickness(0, 0, 0, 4),
@@ -1534,7 +1602,7 @@ public partial class AiChatControl : UserControl
                         Text = label,
                         FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
                         FontSize = 12,
-                        Foreground = ThemeManager.GetBrush("ChatTextForeground")
+                        Foreground = _theme.GetBrush("ChatTextForeground")
                     });
                     if (!string.IsNullOrEmpty(desc))
                     {
@@ -1543,7 +1611,7 @@ public partial class AiChatControl : UserControl
                             Text = desc,
                             FontFamily = new FontFamily("Cascadia Code, Consolas, Courier New"),
                             FontSize = 10,
-                            Foreground = ThemeManager.GetBrush("ChatMutedForeground"),
+                            Foreground = _theme.GetBrush("ChatMutedForeground"),
                             TextWrapping = TextWrapping.Wrap,
                             Margin = new Thickness(0, 2, 0, 0)
                         });
@@ -1563,7 +1631,7 @@ public partial class AiChatControl : UserControl
         }
         catch (Exception ex)
         {
-            Log.Error("Failed to parse AskUserQuestion input", ex);
+            _log.Error("Failed to parse AskUserQuestion input", ex);
             PermissionToolName.Text = $"Tool: {req.ToolName}";
             PermissionDetail.Text = FormatToolInput(req.Input);
             InputPanel.Visibility = Visibility.Collapsed;
@@ -1573,6 +1641,8 @@ public partial class AiChatControl : UserControl
 
     private void SubmitQuestionAnswer(string answer)
     {
+        if (TryAnswerQuestionRemote(_pendingQuestionText ?? "", answer)) return;
+
         if (_session == null || _pendingQuestionText == null)
             return;
 
@@ -1611,16 +1681,22 @@ public partial class AiChatControl : UserControl
 
     private void PermissionAllow_Click(object sender, RoutedEventArgs e)
     {
+        if (TryAnswerRemote(allow: true, denyReason: null)) return;
+
         _session?.AllowPermission();
         PermissionPanel.Visibility = Visibility.Collapsed;
         InputPanel.Visibility = Visibility.Visible;
+        PermissionCleared?.Invoke();
     }
 
     private void PermissionDeny_Click(object sender, RoutedEventArgs e)
     {
+        if (TryAnswerRemote(allow: false, denyReason: null)) return;
+
         _session?.DenyPermission();
         PermissionPanel.Visibility = Visibility.Collapsed;
         InputPanel.Visibility = Visibility.Visible;
+        PermissionCleared?.Invoke();
     }
 
     // --- Inactivity Warning ---
@@ -1747,10 +1823,10 @@ public partial class AiChatControl : UserControl
     private void AssistantMarkdown_Loaded(object sender, RoutedEventArgs e)
         => AttachAssistantDocument((MarkdownScrollViewer)sender, ((MarkdownScrollViewer)sender).DataContext as AssistantMessage);
 
-    private static void AttachAssistantDocument(MarkdownScrollViewer viewer, AssistantMessage? msg)
+    private void AttachAssistantDocument(MarkdownScrollViewer viewer, AssistantMessage? msg)
     {
         // Idempotent — the helper hooks each viewer once, however often containers recycle.
-        MarkdownHelper.EnableMarkdownLinkCopy(viewer);
+        _markdown.EnableMarkdownLinkCopy(viewer);
 
         // GetMarkdown builds the document on first realize (UI thread) and caches
         // it; subsequent realizations of the same message reuse the instance.

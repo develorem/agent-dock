@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
 using AgentDock.Models;
+using AgentDock.Services.Abstractions;
 
 namespace AgentDock.Services;
 
@@ -13,6 +14,9 @@ namespace AgentDock.Services;
 public class ClaudeSession : IDisposable
 {
     private readonly string _workingDirectory;
+    private readonly ILogService _log;
+    private readonly IClaudeEnvironment _environment;
+    private readonly IPerfDiagnostics _perf;
     private readonly string? _accountConfigDir;
     private Process? _process;
     private CancellationTokenSource? _readCts;
@@ -26,11 +30,6 @@ public class ClaudeSession : IDisposable
     /// </summary>
     public int InactivityTimeoutSeconds { get; set; } = 90;
 
-    /// <summary>
-    /// Path to the claude binary. Defaults to "claude" (found via PATH).
-    /// Set via Settings > Claude Path Override and persisted in AppSettings.
-    /// </summary>
-    public static string ClaudeBinaryPath { get; set; } = "claude";
 
     public ClaudeSessionState State { get; private set; } = ClaudeSessionState.NotStarted;
     public string? SessionId { get; private set; }
@@ -81,77 +80,19 @@ public class ClaudeSession : IDisposable
     /// default login (<c>~/.claude</c>), i.e. today's behaviour. Chosen on the Start
     /// panel and fixed for the life of the session — see AccountManager.
     /// </summary>
-    public ClaudeSession(string workingDirectory, string? accountConfigDir = null)
+    public ClaudeSession(
+        string workingDirectory,
+        ILogService log,
+        IClaudeEnvironment environment,
+        IPerfDiagnostics perf,
+        string? accountConfigDir = null)
     {
         _workingDirectory = workingDirectory;
         _accountConfigDir = string.IsNullOrWhiteSpace(accountConfigDir) ? null : accountConfigDir;
-        PerfDiagnostics.SessionCreated();
-    }
-
-    public static bool IsClaudeAvailable()
-    {
-        try
-        {
-            // Use cmd.exe /c to resolve .cmd/.bat wrappers (npm-installed CLIs on Windows)
-            // This matches the prerequisite check behaviour.
-            var psi = new ProcessStartInfo
-            {
-                FileName = "cmd.exe",
-                Arguments = $"/c {ClaudeBinaryPath} --version",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            using var process = Process.Start(psi);
-            if (process == null) return false;
-
-            process.WaitForExit(5000);
-            return process.ExitCode == 0;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Resolves the Claude binary path to a full path that Process.Start can use directly.
-    /// Searches PATH for .cmd/.bat/.exe variants if ClaudeBinaryPath is just a name like "claude".
-    /// </summary>
-    public static string ResolveClaudeBinaryPath()
-    {
-        var path = ClaudeBinaryPath;
-
-        // If it's already a rooted path that exists, use it directly
-        if (Path.IsPathRooted(path) && File.Exists(path))
-            return path;
-
-        // Search PATH for the command. Prefer .cmd/.bat first because Claude Code CLI
-        // on Windows is an npm .cmd wrapper, and we must avoid picking up claude.exe from
-        // the Claude Desktop app (which doesn't support the JSON-lines protocol).
-        var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? "";
-        var extensions = new[] { ".cmd", ".bat", "", ".exe" };
-
-        foreach (var dir in pathEnv.Split(Path.PathSeparator))
-        {
-            if (string.IsNullOrWhiteSpace(dir))
-                continue;
-
-            foreach (var ext in extensions)
-            {
-                var candidate = Path.Combine(dir, path + ext);
-                if (File.Exists(candidate))
-                {
-                    Log.Info($"ClaudeSession: resolved '{path}' to '{candidate}'");
-                    return candidate;
-                }
-            }
-        }
-
-        // Fallback: return as-is and let Process.Start try
-        return path;
+        _log = log;
+        _environment = environment;
+        _perf = perf;
+        _perf.SessionCreated();
     }
 
     /// <summary>
@@ -160,7 +101,7 @@ public class ClaudeSession : IDisposable
     /// </summary>
     public void Start(bool dangerousMode = false)
     {
-        Log.Info($"ClaudeSession.Start: dangerous={dangerousMode}, cwd={_workingDirectory}");
+        _log.Info($"ClaudeSession.Start: dangerous={dangerousMode}, cwd={_workingDirectory}");
 
         if (State != ClaudeSessionState.NotStarted && State != ClaudeSessionState.Exited && State != ClaudeSessionState.Error)
             throw new InvalidOperationException($"Cannot start session in state {State}");
@@ -211,8 +152,8 @@ public class ClaudeSession : IDisposable
         if (IsDangerousMode)
             args += " --dangerously-skip-permissions";
 
-        var resolvedPath = ResolveClaudeBinaryPath();
-        Log.Info($"ClaudeSession.SendMessage: launching '{resolvedPath}' with args: {args}");
+        var resolvedPath = _environment.ResolveBinaryPath();
+        _log.Info($"ClaudeSession.SendMessage: launching '{resolvedPath}' with args: {args}");
 
         var psi = new ProcessStartInfo
         {
@@ -237,7 +178,7 @@ public class ClaudeSession : IDisposable
         if (_accountConfigDir != null)
         {
             psi.Environment["CLAUDE_CONFIG_DIR"] = _accountConfigDir;
-            Log.Info($"ClaudeSession.SendMessage: CLAUDE_CONFIG_DIR={_accountConfigDir}");
+            _log.Info($"ClaudeSession.SendMessage: CLAUDE_CONFIG_DIR={_accountConfigDir}");
         }
 
         try
@@ -246,7 +187,7 @@ public class ClaudeSession : IDisposable
         }
         catch (Exception ex)
         {
-            Log.Error("ClaudeSession.SendMessage: failed to start process", ex);
+            _log.Error("ClaudeSession.SendMessage: failed to start process", ex);
             SetState(ClaudeSessionState.Error);
             ErrorOutput?.Invoke($"Failed to start Claude: {ex.Message}");
             return;
@@ -254,13 +195,13 @@ public class ClaudeSession : IDisposable
 
         if (_process == null)
         {
-            Log.Error("ClaudeSession.SendMessage: Process.Start returned null");
+            _log.Error("ClaudeSession.SendMessage: Process.Start returned null");
             SetState(ClaudeSessionState.Error);
             ErrorOutput?.Invoke("Failed to start Claude process");
             return;
         }
 
-        Log.Info($"ClaudeSession.SendMessage: process started, PID={_process.Id}");
+        _log.Info($"ClaudeSession.SendMessage: process started, PID={_process.Id}");
 
         _process.EnableRaisingEvents = true;
         _process.Exited += OnProcessExited;
@@ -270,7 +211,7 @@ public class ClaudeSession : IDisposable
         {
             if (e.Data != null)
             {
-                Log.Info($"ClaudeSession STDERR: {e.Data}");
+                _log.Info($"ClaudeSession STDERR: {e.Data}");
                 ErrorOutput?.Invoke(e.Data);
             }
         };
@@ -286,7 +227,7 @@ public class ClaudeSession : IDisposable
         {
             if (t.IsFaulted)
             {
-                Log.Error("ClaudeSession: ReadOutputLoop task faulted", t.Exception);
+                _log.Error("ClaudeSession: ReadOutputLoop task faulted", t.Exception);
                 ErrorOutput?.Invoke($"Read loop crashed: {t.Exception?.InnerException?.Message}");
                 if (State == ClaudeSessionState.Working || State == ClaudeSessionState.WaitingForPermission)
                     SetState(ClaudeSessionState.Error);
@@ -310,7 +251,7 @@ public class ClaudeSession : IDisposable
         if (PendingPermission == null || _process == null)
             return;
 
-        Log.Info($"ClaudeSession.AllowPermission: {PendingPermission.ToolName}");
+        _log.Info($"ClaudeSession.AllowPermission: {PendingPermission.ToolName}");
         WriteStdin(JsonSerializer.Serialize(new ClaudeControlResponse
         {
             Response = new ClaudeControlResponseBody
@@ -338,7 +279,7 @@ public class ClaudeSession : IDisposable
         if (PendingPermission == null || _process == null)
             return;
 
-        Log.Info($"ClaudeSession.DenyPermission: {PendingPermission.ToolName}");
+        _log.Info($"ClaudeSession.DenyPermission: {PendingPermission.ToolName}");
         WriteStdin(JsonSerializer.Serialize(new ClaudeControlResponse
         {
             Response = new ClaudeControlResponseBody
@@ -366,7 +307,7 @@ public class ClaudeSession : IDisposable
         if (PendingPermission == null || _process == null)
             return;
 
-        Log.Info($"ClaudeSession.AnswerQuestion: '{answer}' for '{questionText}'");
+        _log.Info($"ClaudeSession.AnswerQuestion: '{answer}' for '{questionText}'");
 
         // Build updatedInput with the user's answer merged into the original input
         var answersDict = new Dictionary<string, string> { { questionText, answer } };
@@ -402,7 +343,7 @@ public class ClaudeSession : IDisposable
 
     public async Task StopAsync()
     {
-        Log.Info("ClaudeSession.Stop called");
+        _log.Info("ClaudeSession.Stop called");
 
         StopInactivityTimer();
 
@@ -428,7 +369,7 @@ public class ClaudeSession : IDisposable
                 catch { }
                 finally
                 {
-                    Log.Info($"ClaudeSession: process killed (exited={proc.HasExited})");
+                    _log.Info($"ClaudeSession: process killed (exited={proc.HasExited})");
                     try { proc.Dispose(); } catch { }
                 }
             });
@@ -439,7 +380,7 @@ public class ClaudeSession : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        PerfDiagnostics.SessionDisposed();
+        _perf.SessionDisposed();
         StopInactivityTimer();
         _readCts?.Cancel();
         KillCurrentProcess();
@@ -494,13 +435,13 @@ public class ClaudeSession : IDisposable
 
         try
         {
-            Log.Info($"ClaudeSession STDIN: {(json.Length > 500 ? json[..500] + "..." : json)}");
+            _log.Info($"ClaudeSession STDIN: {(json.Length > 500 ? json[..500] + "..." : json)}");
             _process.StandardInput.WriteLine(json);
             _process.StandardInput.Flush();
         }
         catch (Exception ex)
         {
-            Log.Error("ClaudeSession: WriteStdin error", ex);
+            _log.Error("ClaudeSession: WriteStdin error", ex);
         }
     }
 
@@ -526,7 +467,7 @@ public class ClaudeSession : IDisposable
 
     private async Task ReadOutputLoop(StreamReader stdout, CancellationToken ct)
     {
-        Log.Info("ClaudeSession: ReadOutputLoop started");
+        _log.Info("ClaudeSession: ReadOutputLoop started");
         try
         {
             while (!ct.IsCancellationRequested)
@@ -534,7 +475,7 @@ public class ClaudeSession : IDisposable
                 var line = await stdout.ReadLineAsync(ct);
                 if (line == null)
                 {
-                    Log.Info("ClaudeSession: ReadOutputLoop got EOF");
+                    _log.Info("ClaudeSession: ReadOutputLoop got EOF");
                     break;
                 }
 
@@ -548,7 +489,7 @@ public class ClaudeSession : IDisposable
                 // during a long response and were producing 100+ MB log files. The events are
                 // still parsed and dispatched to the UI; we just don't write them to disk.
                 if (!line.StartsWith("{\"type\":\"stream_event\"", StringComparison.Ordinal))
-                    Log.Info($"ClaudeSession STDOUT: {(line.Length > 500 ? line[..500] + "..." : line)}");
+                    _log.Info($"ClaudeSession STDOUT: {(line.Length > 500 ? line[..500] + "..." : line)}");
 
                 try
                 {
@@ -556,18 +497,18 @@ public class ClaudeSession : IDisposable
                 }
                 catch (Exception ex)
                 {
-                    Log.Error("ClaudeSession: ProcessMessage error", ex);
+                    _log.Error("ClaudeSession: ProcessMessage error", ex);
                     ErrorOutput?.Invoke($"Parse error: {ex.Message}");
                 }
             }
         }
         catch (OperationCanceledException)
         {
-            Log.Info("ClaudeSession: ReadOutputLoop cancelled");
+            _log.Info("ClaudeSession: ReadOutputLoop cancelled");
         }
         catch (Exception ex)
         {
-            Log.Error("ClaudeSession: ReadOutputLoop error", ex);
+            _log.Error("ClaudeSession: ReadOutputLoop error", ex);
             ErrorOutput?.Invoke($"Read error: {ex.Message}");
         }
 
@@ -577,12 +518,12 @@ public class ClaudeSession : IDisposable
         // or an exception killed the loop), recover by transitioning to Error.
         if (State == ClaudeSessionState.Working || State == ClaudeSessionState.WaitingForPermission)
         {
-            Log.Warn($"ClaudeSession: ReadOutputLoop ended while in {State} — setting Error");
+            _log.Warn($"ClaudeSession: ReadOutputLoop ended while in {State} — setting Error");
             ErrorOutput?.Invoke("Claude stopped responding (output stream ended unexpectedly)");
             SetState(ClaudeSessionState.Error);
         }
 
-        Log.Info("ClaudeSession: ReadOutputLoop ended");
+        _log.Info("ClaudeSession: ReadOutputLoop ended");
     }
 
     private void ProcessMessage(string jsonLine)
@@ -631,7 +572,7 @@ public class ClaudeSession : IDisposable
         var newSessionId = GetString(root, "session_id");
         var newModel = GetString(root, "model");
 
-        Log.Info($"ClaudeSession: system init — session={newSessionId}, model={newModel}");
+        _log.Info($"ClaudeSession: system init — session={newSessionId}, model={newModel}");
 
         // Capture session ID for --resume on subsequent turns
         if (newSessionId != null)
@@ -666,7 +607,7 @@ public class ClaudeSession : IDisposable
             Status = status
         };
 
-        Log.Info($"ClaudeSession: task {subtype} id={taskId} status={status ?? "-"} type={evt.TaskType ?? "-"} agent={evt.SubagentType ?? "-"}");
+        _log.Info($"ClaudeSession: task {subtype} id={taskId} status={status ?? "-"} type={evt.TaskType ?? "-"} agent={evt.SubagentType ?? "-"}");
         UpdateBackgroundWork(evt);
         TaskEvent?.Invoke(evt);
     }
@@ -832,7 +773,7 @@ public class ClaudeSession : IDisposable
         // through so real failures still surface.
         if (result.NumTurns == 0 && !result.IsError)
         {
-            Log.Info("ClaudeSession: ignoring resume-flush result (num_turns=0) — real turn follows");
+            _log.Info("ClaudeSession: ignoring resume-flush result (num_turns=0) — real turn follows");
             return;
         }
 
@@ -860,7 +801,7 @@ public class ClaudeSession : IDisposable
             var input = request.TryGetProperty("input", out var inp) ? inp.Clone() : default;
             var toolUseId = GetString(request, "tool_use_id") ?? "";
 
-            Log.Info($"ClaudeSession: permission request — tool={toolName}, requestId={requestId}, toolUseId={toolUseId}");
+            _log.Info($"ClaudeSession: permission request — tool={toolName}, requestId={requestId}, toolUseId={toolUseId}");
 
             var permReq = new ClaudePermissionRequest
             {
@@ -877,7 +818,7 @@ public class ClaudeSession : IDisposable
         }
         else
         {
-            Log.Warn($"ClaudeSession: unhandled control_request subtype '{subtype}', requestId={requestId}");
+            _log.Warn($"ClaudeSession: unhandled control_request subtype '{subtype}', requestId={requestId}");
         }
     }
 
@@ -886,7 +827,7 @@ public class ClaudeSession : IDisposable
         if (State == newState)
             return;
 
-        Log.Info($"ClaudeSession: state {State} -> {newState}");
+        _log.Info($"ClaudeSession: state {State} -> {newState}");
         State = newState;
         StateChanged?.Invoke(newState);
     }
@@ -904,7 +845,7 @@ public class ClaudeSession : IDisposable
             exitCode = -1;
         }
 
-        Log.Info($"ClaudeSession: process exited with code {exitCode}");
+        _log.Info($"ClaudeSession: process exited with code {exitCode}");
 
         // The process is gone — no more task events can arrive, so any still-"running"
         // background tasks are dead. Clear them so the indicator settles.
@@ -941,7 +882,7 @@ public class ClaudeSession : IDisposable
         {
             if (State == ClaudeSessionState.Working)
             {
-                Log.Warn($"ClaudeSession: no output for {InactivityTimeoutSeconds}s — firing InactivityTimeout");
+                _log.Warn($"ClaudeSession: no output for {InactivityTimeoutSeconds}s — firing InactivityTimeout");
                 InactivityTimeout?.Invoke();
             }
         };

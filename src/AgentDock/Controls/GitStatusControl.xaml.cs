@@ -9,6 +9,8 @@ using System.Windows.Threading;
 using AgentDock.Models;
 using AgentDock.Services;
 
+using AgentDock.Services.Abstractions;
+
 namespace AgentDock.Controls;
 
 public partial class GitStatusControl : UserControl
@@ -36,7 +38,7 @@ public partial class GitStatusControl : UserControl
     // still updates because it's driven by the session state, not by git.
     private bool _active;
     // Stored so it can be detached in Cleanup — a lambda subscription to the
-    // static ThemeManager.ThemeChanged would root this control (and its cached
+    // static _theme.ThemeChanged would root this control (and its cached
     // visuals) for the whole app lifetime, even after the project is closed.
     private readonly Action<ThemeDescriptor> _themeChangedHandler;
 
@@ -53,20 +55,34 @@ public partial class GitStatusControl : UserControl
     // doesn't change during a session) and cached so the debounced refresh doesn't
     // shell out to git for it on every file change. Null = no browsable remote.
     private string? _remoteWebUrl;
+
+    /// <summary>Latest branch name, kept in a field so it can be replicated without reading the UI.</summary>
+    private string? _currentBranch;
     private bool _remoteResolved;
 
-    public GitStatusControl()
+    private readonly ILogService _log;
+    private readonly IPerfDiagnostics _perf;
+    private readonly IThemeService _theme;
+
+    public GitStatusControl(
+        ILogService log,
+        IPerfDiagnostics perf,
+        IThemeService theme)
     {
+        _log = log;
+        _perf = perf;
+        _theme = theme;
+
         InitializeComponent();
         FileList.ItemsSource = _items;
         _themeChangedHandler = _ => RefreshStatus();
-        ThemeManager.ThemeChanged += _themeChangedHandler;
+        _theme.ThemeChanged += _themeChangedHandler;
     }
 
     public void LoadRepository(string projectPath)
     {
         _projectPath = projectPath;
-        _gitService = new GitService(projectPath);
+        _gitService = new GitService(projectPath, _perf);
         _isGitRepository = _gitService.IsGitRepository();
         _remoteWebUrl = null;
         _remoteResolved = false;
@@ -77,6 +93,7 @@ public partial class GitStatusControl : UserControl
             NotGitMessage.Visibility = Visibility.Visible;
             StatusPanel.Visibility = Visibility.Collapsed;
             NoChangesMessage.Visibility = Visibility.Collapsed;
+            _currentBranch = null;
             BranchPanel.Visibility = Visibility.Collapsed;
             return;
         }
@@ -161,7 +178,7 @@ public partial class GitStatusControl : UserControl
         }
         catch (Exception ex)
         {
-            Log.Warn($"GitStatusControl: FileSystemWatcher failed, falling back to polling — {ex.Message}");
+            _log.Warn($"GitStatusControl: FileSystemWatcher failed, falling back to polling — {ex.Message}");
             FallBackToPolling();
         }
     }
@@ -179,7 +196,7 @@ public partial class GitStatusControl : UserControl
 
     private void OnWatcherError(object sender, ErrorEventArgs e)
     {
-        Log.Warn($"GitStatusControl: FileSystemWatcher error — {e.GetException().Message}");
+        _log.Warn($"GitStatusControl: FileSystemWatcher error — {e.GetException().Message}");
 
         // Watcher buffer overflow or disconnection — do a refresh and restart
         Dispatcher.BeginInvoke(() =>
@@ -214,12 +231,12 @@ public partial class GitStatusControl : UserControl
 
     /// <summary>
     /// Full teardown on project close. Detaches the theme handler (otherwise the
-    /// static ThemeManager.ThemeChanged event roots this control forever) and
+    /// static _theme.ThemeChanged event roots this control forever) and
     /// stops all watching. Call from the project-removal path.
     /// </summary>
     public void Cleanup()
     {
-        ThemeManager.ThemeChanged -= _themeChangedHandler;
+        _theme.ThemeChanged -= _themeChangedHandler;
         _active = false;
         StopWatching();
     }
@@ -253,7 +270,7 @@ public partial class GitStatusControl : UserControl
         }
         catch (Exception ex)
         {
-            Log.Warn($"GitStatusControl: failed to open remote URL '{_remoteWebUrl}' — {ex.Message}");
+            _log.Warn($"GitStatusControl: failed to open remote URL '{_remoteWebUrl}' — {ex.Message}");
         }
     }
 
@@ -359,7 +376,7 @@ public partial class GitStatusControl : UserControl
         }
         else
         {
-            Log.Warn($"GitStatusControl: Failed to checkout branch '{item.Name}' — {message}");
+            _log.Warn($"GitStatusControl: Failed to checkout branch '{item.Name}' — {message}");
         }
     }
 
@@ -384,7 +401,7 @@ public partial class GitStatusControl : UserControl
         }
         else
         {
-            Log.Warn($"GitStatusControl: Failed to create branch '{branchName}' — {message}");
+            _log.Warn($"GitStatusControl: Failed to create branch '{branchName}' — {message}");
         }
     }
 
@@ -398,7 +415,9 @@ public partial class GitStatusControl : UserControl
     public async void RefreshStatus()
     {
         // Background (non-active) tabs do no git work — see Activate/Deactivate.
-        if (!_active || _gitService == null || !_isGitRepository)
+        // In remote mode the status is pushed by the server; running git here would be reading
+        // the wrong machine's disk.
+        if (_isRemote || !_active || _gitService == null || !_isGitRepository)
             return;
 
         // Coalesce overlapping requests: if a refresh is already running, mark a
@@ -421,7 +440,7 @@ public partial class GitStatusControl : UserControl
         }
         catch (Exception ex)
         {
-            Log.Warn($"GitStatusControl.RefreshStatus failed: {ex.Message}");
+            _log.Warn($"GitStatusControl.RefreshStatus failed: {ex.Message}");
         }
         finally
         {
@@ -471,6 +490,7 @@ public partial class GitStatusControl : UserControl
         if (!string.IsNullOrEmpty(branch))
         {
             if (BranchName.Text != branch) BranchName.Text = branch;
+            _currentBranch = branch;
             BranchPanel.Visibility = Visibility.Visible;
         }
         else
@@ -485,6 +505,7 @@ public partial class GitStatusControl : UserControl
             StatusPanel.Visibility = Visibility.Collapsed;
             NoChangesMessage.Visibility = Visibility.Visible;
             NotGitMessage.Visibility = Visibility.Collapsed;
+            StatusReplicated?.Invoke();
             return;
         }
 
@@ -495,6 +516,10 @@ public partial class GitStatusControl : UserControl
         var changed = SyncFileList(target, targetSet);
         if (changed)
             FileSystemChanged?.Invoke();
+
+        // One hook for remote replication, fired after the bound collection has been
+        // patched, so a client mirrors exactly what this panel now shows.
+        StatusReplicated?.Invoke();
     }
 
     /// <summary>
@@ -534,7 +559,7 @@ public partial class GitStatusControl : UserControl
             if (existing >= 0)
                 _items.Move(existing, j);          // reorder existing row
             else
-                _items.Insert(j, new GitStatusItem(target[j]));   // brand-new row
+                _items.Insert(j, new GitStatusItem(target[j], _theme));   // brand-new row
             changed = true;
         }
 
@@ -562,9 +587,9 @@ public partial class GitStatusControl : UserControl
     }
 }
 
-public class GitStatusItem
+public class GitStatusItem(GitFileEntry entry, IThemeService theme)
 {
-    public GitFileEntry Entry { get; }
+    public GitFileEntry Entry { get; } = entry;
 
     public string FilePath => Entry.FilePath;
 
@@ -581,13 +606,9 @@ public class GitStatusItem
     public string StagedLabel => Entry.IsStaged ? "(staged)" : "";
 
     public Brush StatusColor => Entry.IsStaged
-        ? ThemeManager.GetBrush("GitStagedForeground")
-        : ThemeManager.GetBrush("GitUnstagedForeground");
+        ? theme.GetBrush("GitStagedForeground")
+        : theme.GetBrush("GitUnstagedForeground");
 
-    public GitStatusItem(GitFileEntry entry)
-    {
-        Entry = entry;
-    }
 }
 
 public class BranchListItem(string name, bool isCurrent)

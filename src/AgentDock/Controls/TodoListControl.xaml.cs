@@ -5,6 +5,8 @@ using System.Windows.Input;
 using AgentDock.Models;
 using AgentDock.Services;
 
+using AgentDock.Services.Abstractions;
+
 namespace AgentDock.Controls;
 
 public partial class TodoListControl : UserControl
@@ -12,8 +14,13 @@ public partial class TodoListControl : UserControl
     private string _projectPath = "";
     private readonly ObservableCollection<TodoItem> _items = [];
 
-    public TodoListControl()
+    private readonly IProjectSettingsStore _projectSettings;
+
+    public TodoListControl(
+        IProjectSettingsStore projectSettings)
     {
+        _projectSettings = projectSettings;
+
         InitializeComponent();
         TodoItemsList.ItemsSource = _items;
     }
@@ -23,7 +30,7 @@ public partial class TodoListControl : UserControl
         _projectPath = projectPath;
         _items.Clear();
 
-        var settings = ProjectSettingsManager.Load(projectPath);
+        var settings = _projectSettings.Load(projectPath);
         if (settings.TodoItems != null)
         {
             foreach (var item in settings.TodoItems)
@@ -35,8 +42,10 @@ public partial class TodoListControl : UserControl
 
     private void Save()
     {
+        if (TrySaveRemote()) return;
+
         var items = _items.Count > 0 ? _items.ToList() : null;
-        ProjectSettingsManager.Update(_projectPath, s => s.TodoItems = items);
+        _projectSettings.Update(_projectPath, s => s.TodoItems = items);
     }
 
     private void UpdatePlaceholder()
