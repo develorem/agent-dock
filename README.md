@@ -46,17 +46,29 @@ Switch between projects with a single click. See at a glance which sessions are 
 
 Open as many project folders as you need, each in its own tab. Every tab gets a fully independent workspace — rearrange panels, float them, or tab them together however you like.
 
+### Tab Groups & Active Projects
+
+Group your tabs when one row isn't enough, with per-group icons, colours and a status roll-up. A dynamic **Active** tab always shows the projects with a live session, most recently active first.
+
 ### AI Chat Panel
 
-A terminal-style interface for interacting with your AI agent. Messages stream in real-time, past conversation history collapses to keep things tidy, and permission prompts appear inline — no disruptive pop-ups.
+A terminal-style interface for interacting with your AI agent. Responses stream in, each turn collapses into a single activity bubble, and permission prompts appear inline — no disruptive pop-ups. Attach images, queue follow-ups while the agent works, schedule a message for later, and watch subagents as they run.
+
+### Remote Sessions
+
+Host this machine's live sessions for a second copy of Agent Dock on another machine, and drive them from there — chat, files, git and diffs all come from the host. TLS with a pinned certificate, an eight-character pairing code, and one driver at a time.
+
+### Multiple Claude Accounts
+
+Hold more than one Claude login and pick which one a session signs in as. The title bar shows each plan's 5-hour and 7-day quota separately, plus live cost and token counts.
 
 ### File Explorer
 
-A read-only tree view of your project that respects `.gitignore`. Click any file to preview it instantly.
+A read-only tree view of your project that respects `.gitignore`. Click any file to preview it instantly. It patches in place, so an agent rewriting files doesn't make it flicker or lose your place.
 
 ### Git Status
 
-See staged and unstaged changes at a glance with color-coded indicators. Click a changed file to view its diff in the preview panel.
+See staged and unstaged changes at a glance with color-coded indicators. Click a changed file to view its diff in the preview panel. Switch or create branches from the branch picker, or open the repo's page in your browser.
 
 ### File Preview
 
@@ -64,7 +76,7 @@ Syntax-highlighted code for dozens of languages, rendered markdown, image previe
 
 ### Toolbar Status Icons
 
-Each project tab in the toolbar shows the agent's current state: idle, working, or waiting for input. A red badge warns you when a session is running in dangerous mode.
+Each project tab shows the agent's current state: idle, working, waiting for input, errored, or holding a scheduled message. A red badge warns you when a session is running in dangerous mode.
 
 ### Themes
 
@@ -72,7 +84,7 @@ Six built-in themes — choose between light and dark variants to match your pre
 
 ### Workspace Save & Load
 
-Save your entire session — open projects, panel layouts, toolbar position, theme — and restore it later. Recent workspaces are a click away from the File menu.
+Save your entire session — open projects, panel layouts, tab groups, toolbar position, theme — and restore it later. Recent workspaces are a click away from the File menu and from the empty-state screen.
 
 ---
 
@@ -88,17 +100,25 @@ Save your entire session — open projects, panel layouts, toolbar position, the
 
 ## Documentation
 
-- **[Features](docs/features.md)** — overview of everything Agent Dock can do
-- **[Workspace](docs/workspace.md)** — saving, loading, themes, and settings
-- **[Projects](docs/projects.md)** — tabs, project settings, and panel layouts
-- **[Project Features](docs/project-features.md)** — File Explorer, Git Status, and File Preview
-- **[AI Chat](docs/ai-chat.md)** — sessions, message types, and troubleshooting
+- **[Features](docs/features.md)** — the whole map of what Agent Dock can do
+- **[Workspace](docs/workspace.md)** — saving, loading, and what a workspace stores
+- **[Tab Groups](docs/groups.md)** — groups, status roll-up, and the Active Projects tab
+- **[Projects](docs/projects.md)** — tabs, status indicators, project settings, panel layouts
+- **[Panels](docs/project-features.md)** — File Explorer, Git Status, File Preview, Description, Todo
+- **[AI Chat](docs/ai-chat.md)** — sessions, images, the send queue, scheduling, slash commands
+- **[Accounts](docs/accounts.md)** — multiple Claude logins, plan usage, cost and tokens
+- **[Remote Sessions](docs/remote-sessions.md)** — driving one machine's agents from another
+- **[Settings](docs/settings.md)** — app, workspace and project settings, sounds, themes, updates, logs
+
+Release notes for every version live in [`docs/release-notes/`](docs/release-notes).
 
 ---
 
 ## Contributing
 
 Contributions are welcome. Please [open an issue](https://github.com/develorem/agent-dock/issues) first to discuss what you'd like to change.
+
+**If a pull request adds or changes a user-facing feature, update the docs in the same PR.** The topic pages under [`docs/`](docs) are the user manual, not a changelog — a release note describing a feature is not a substitute for the page that explains how to use it.
 
 ## License
 

@@ -147,7 +147,10 @@ public sealed class RemoteProjectPublisher : IDisposable
             settings.Name,
             settings.Description,
             settings.DescriptionFontSize,
-            settings.TodoItems?.Select(t => new RemoteTodoItem(t.Text, t.IsCompleted)).ToList() ?? []);
+            settings.TodoItems?.Select(t => new RemoteTodoItem(t.Text, t.IsCompleted)).ToList() ?? [],
+            settings.SoundOnSessionStart,
+            settings.SoundOnAgentWaiting,
+            settings.SoundOnSessionEnd);
     }
 
     private PermissionRequestMsg ToPermissionMsg(ClaudePermissionRequest request) => new(

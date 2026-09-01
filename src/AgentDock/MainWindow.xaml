@@ -51,6 +51,10 @@
                 </StackPanel>
 
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button x:Name="RemoteStripAddressButton" Content="Copy address"
+                            Margin="0,0,8,0" Padding="10,2" FontSize="11" Cursor="Hand"
+                            ToolTip="Copy this machine's address:port for the Connect to Server dialog"
+                            Click="RemoteCopyAddress_Click" />
                     <Button x:Name="RemoteStripCopyButton" Content="Copy code"
                             Margin="0,0,8,0" Padding="10,2" FontSize="11" Cursor="Hand"
                             Click="RemoteCopyCode_Click" />
@@ -274,6 +278,55 @@
                            VerticalAlignment="Center"
                            HorizontalAlignment="Center" />
 
+                <!-- Remote-mode badge. In the title bar because it has to be visible from across
+                     a room and from a glance at a maximised window: the status strip at the
+                     bottom edge is exactly where someone returning to the machine won't look.
+                     Clicking it leaves whichever mode is live. -->
+                <Button x:Name="RemoteModeBadge" Grid.Column="4"
+                        Visibility="Collapsed"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Center"
+                        Height="22"
+                        Margin="0,0,10,0"
+                        Padding="9,0"
+                        Cursor="Hand"
+                        Click="ExitRemoteMode_Click"
+                        WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Button.Template>
+                        <ControlTemplate TargetType="{x:Type Button}">
+                            <Border x:Name="Bd"
+                                    Background="{DynamicResource RemoteBadgeBackground}"
+                                    BorderBrush="{DynamicResource RemoteBadgeBorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="3"
+                                    Padding="{TemplateBinding Padding}">
+                                <ContentPresenter VerticalAlignment="Center"
+                                                  HorizontalAlignment="Center" />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Bd" Property="BorderBrush"
+                                            Value="{DynamicResource RemoteBadgeForeground}" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE968;"
+                                   FontFamily="Segoe MDL2 Assets"
+                                   FontSize="10"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource RemoteBadgeForeground}"
+                                   Margin="0,0,6,0" />
+                        <TextBlock x:Name="RemoteModeBadgeText"
+                                   Text="SERVER MODE"
+                                   FontSize="10"
+                                   FontWeight="Bold"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource RemoteBadgeForeground}" />
+                    </StackPanel>
+                </Button>
+
                 <!-- Usage indicator (5-hour session — click for details) -->
                 <Button x:Name="UsageButton" Grid.Column="5"
                         Click="UsageButton_Click"
@@ -409,6 +462,65 @@
                             VerticalAlignment="Bottom"
                             Background="{DynamicResource TabButtonActiveBorderBrush}" />
                     <DockPanel LastChildFill="False">
+                        <!-- Remote-mode pill. Declared before ActiveGroupHost so the DockPanel
+                             gives it the outer right edge, putting it immediately beside the
+                             Active tab: while hosting, that tab is the published set, and this
+                             is the one click that hands the machine back. -->
+                        <Border x:Name="ServerModePill"
+                                DockPanel.Dock="Right"
+                                Visibility="Collapsed"
+                                VerticalAlignment="Bottom"
+                                Margin="8,0,6,3"
+                                Padding="8,3"
+                                CornerRadius="3"
+                                Background="{DynamicResource RemoteBadgeBackground}"
+                                BorderBrush="{DynamicResource RemoteBadgeBorderBrush}"
+                                BorderThickness="1">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE968;"
+                                           FontFamily="Segoe MDL2 Assets"
+                                           FontSize="11"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource RemoteBadgeForeground}"
+                                           Margin="0,0,6,0" />
+                                <TextBlock x:Name="ServerModePillText"
+                                           Text="Server mode"
+                                           FontSize="11"
+                                           FontWeight="SemiBold"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource RemoteBadgeForeground}"
+                                           Margin="0,0,8,0" />
+                                <Button x:Name="ServerModePillButton"
+                                        Content="Stop"
+                                        FontSize="10"
+                                        FontWeight="Bold"
+                                        Padding="8,1"
+                                        Cursor="Hand"
+                                        Click="ExitRemoteMode_Click">
+                                    <Button.Template>
+                                        <ControlTemplate TargetType="{x:Type Button}">
+                                            <Border x:Name="Bd"
+                                                    Background="Transparent"
+                                                    BorderBrush="{DynamicResource RemoteBadgeForeground}"
+                                                    BorderThickness="1"
+                                                    CornerRadius="2"
+                                                    Padding="{TemplateBinding Padding}">
+                                                <ContentPresenter VerticalAlignment="Center"
+                                                                  HorizontalAlignment="Center"
+                                                                  TextBlock.Foreground="{DynamicResource RemoteBadgeForeground}" />
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="Bd" Property="Background"
+                                                            Value="{DynamicResource MenuHighlightBackground}" />
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Button.Template>
+                                </Button>
+                            </StackPanel>
+                        </Border>
+
                         <!-- Dynamic "Active Projects" group — docked far right, set apart
                              from the real groups. Populated in code; empty otherwise. -->
                         <ContentControl x:Name="ActiveGroupHost"

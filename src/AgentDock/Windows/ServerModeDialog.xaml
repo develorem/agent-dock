@@ -110,12 +110,28 @@
                 <TextBlock x:Name="PortHint" Style="{StaticResource HintText}"
                            Text="The port is checked before the server starts." />
 
+                <!-- The address to type on the other machine, shown up front rather than only
+                     after starting: a Windows machine name resolves on plenty of networks and
+                     fails on plenty of others, and an IPv4 literal always works. -->
+                <TextBlock Text="This machine's address" Style="{StaticResource FieldLabel}" />
+                <TextBox x:Name="AddressBox"
+                         Height="28"
+                         FontSize="13"
+                         FontFamily="Cascadia Code, Consolas, Courier New"
+                         VerticalContentAlignment="Center"
+                         IsReadOnly="True"
+                         Margin="0,0,0,4" />
+                <TextBlock x:Name="AddressHint" Style="{StaticResource HintText}"
+                           Text="Enter this in Connect to Server on the other machine." />
+
                 <CheckBox x:Name="AllInterfacesCheck"
                           Content="Allow connections from other machines"
                           FontSize="12"
                           Foreground="{DynamicResource HelpForeground}"
                           IsChecked="True"
-                          Margin="0,0,0,4" />
+                          Margin="0,0,0,4"
+                          Checked="Scope_Changed"
+                          Unchecked="Scope_Changed" />
                 <TextBlock Style="{StaticResource HintText}"
                            Text="Unchecked, the server accepts connections from this machine only — useful for testing two instances on one box. Windows Firewall may prompt the first time you host." />
 

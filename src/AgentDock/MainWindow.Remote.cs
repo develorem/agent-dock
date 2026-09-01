@@ -63,11 +63,31 @@ public partial class MainWindow : IRemoteServerProjects
         return publishers;
     }
 
+    /// <summary>True while this machine is hosting its sessions for a remote Agent Dock.</summary>
+    private bool IsHostingRemote => _remoteServer.IsRunning;
+
+    /// <summary>
+    /// The lock currently in force, remembered so a tab opened *while* hosting starts out locked
+    /// too. Without this, adding a project after Start Server would hand back a live composer on
+    /// a machine that is supposed to be driven from elsewhere.
+    /// </summary>
+    private (bool Composer, bool Prompts) _agentInputLock;
+
     /// <inheritdoc />
-    public void SetAgentInputLocked(bool locked)
+    public void SetAgentInputLocked(bool composerLocked, bool promptsLocked)
     {
+        _agentInputLock = (composerLocked, promptsLocked);
+
         foreach (var chat in _projectChatControls.Values)
-            chat.SetAgentInputLocked(locked);
+            chat.SetAgentInputLocked(composerLocked, promptsLocked);
+    }
+
+    /// <summary>Applies the current lock to a freshly built chat panel. Called from AddProjectCore.</summary>
+    private void ApplyAgentInputLock(AiChatControl chat)
+    {
+        if (!_agentInputLock.Composer && !_agentInputLock.Prompts) return;
+
+        chat.SetAgentInputLocked(_agentInputLock.Composer, _agentInputLock.Prompts);
     }
 
     private void StartServer_Click(object sender, RoutedEventArgs e)
@@ -90,7 +110,15 @@ public partial class MainWindow : IRemoteServerProjects
             return;
         }
 
-        _log.Info($"MainWindow: server mode started on port {outcome.Port}");
+        _log.Info($"MainWindow: server mode started on port {outcome.Port} " +
+                  $"({_remoteServer.ConnectEndpoint})");
+
+        // Server mode publishes exactly the projects with a live session, so that is what the
+        // window should be showing: switching to the Active Projects view makes the local screen
+        // agree with what the client will see, and puts the Stop Server control next to it.
+        if (GetActiveProjects().Count > 0)
+            SetActiveGroup(ActiveProjectsGroupId);
+
         RefreshRemoteUi();
     }
 
@@ -98,6 +126,19 @@ public partial class MainWindow : IRemoteServerProjects
     {
         _remoteServer.Stop();
         RefreshRemoteUi();
+    }
+
+    /// <summary>
+    /// The one-click exit from server mode, wherever it is clicked from — the title-bar badge, the
+    /// pill beside the Active tab, or the status strip. Whichever role is live is the one it ends,
+    /// so the user never has to work out which of the two they are in before they can get out.
+    /// </summary>
+    private void ExitRemoteMode_Click(object sender, RoutedEventArgs e)
+    {
+        if (_remoteServer.IsRunning)
+            StopServer_Click(sender, e);
+        else if (_remoteClient.State != RemoteClientState.Disconnected || IsRemoteSession)
+            DisconnectRemote_Click(sender, e);
     }
 
     private void KickClient_Click(object sender, RoutedEventArgs e)
@@ -137,6 +178,26 @@ public partial class MainWindow : IRemoteServerProjects
         catch (Exception ex)
         {
             _log.Warn($"MainWindow: could not copy pairing code — {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Copies the <c>address:port</c> the other machine has to type. Separate from the pairing-code
+    /// button because the two go into different fields on the client, and pasting one where the
+    /// other belongs is the most likely way a first pairing fails.
+    /// </summary>
+    private void RemoteCopyAddress_Click(object sender, RoutedEventArgs e)
+    {
+        var endpoint = _remoteServer.ConnectEndpoint;
+        if (string.IsNullOrEmpty(endpoint)) return;
+
+        try
+        {
+            Clipboard.SetText(endpoint);
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"MainWindow: could not copy server address — {ex.Message}");
         }
     }
 
@@ -336,6 +397,12 @@ public partial class MainWindow : IRemoteServerProjects
         var project = FindRemoteProject(projectId);
         if (project == null) return;
 
+        // The notifications for this project belong to this machine now — the host is silent while
+        // it hosts — so its toggles come across with the settings rather than being re-read from a
+        // folder that lives on the other box.
+        _remoteSoundSettings[project] = new SoundToggles(
+            settings.SoundOnSessionStart, settings.SoundOnAgentWaiting, settings.SoundOnSessionEnd);
+
         if (_projectTodoListControls.TryGetValue(project, out var todo))
             todo.ApplyRemoteItems(settings.TodoItems);
 
@@ -442,6 +509,7 @@ public partial class MainWindow : IRemoteServerProjects
         {
             RemoteStrip.Visibility = Visibility.Visible;
             RemoteStripCopyButton.Visibility = Visibility.Visible;
+            RemoteStripAddressButton.Visibility = Visibility.Visible;
             RemoteStripStopButton.Visibility = Visibility.Visible;
             RemoteStripDisconnectButton.Visibility = Visibility.Collapsed;
             RemoteStripKickButton.Visibility = _remoteServer.HasClient ? Visibility.Visible : Visibility.Collapsed;
@@ -449,20 +517,28 @@ public partial class MainWindow : IRemoteServerProjects
             var code = _remoteServer.PairingCodeValue;
             RemoteStripCode.Text = code == null ? "" : PairingCode.Format(code);
 
+            // The address, not the machine name: the name is what this box calls itself, and it
+            // only resolves on the other machine if something on the network is publishing it.
+            var endpoint = _remoteServer.ConnectEndpoint ?? $"{_remoteServer.HostName}:{_remoteServer.Port}";
+
             RemoteStripText.Text = _remoteServer.HasClient
-                ? $"Server mode · {_remoteServer.HostName}:{_remoteServer.Port} · " +
+                ? $"Server mode · {endpoint} · " +
                   $"{_remoteServer.ConnectedClientName} is connected and driving these sessions · code"
-                : $"Server mode · {_remoteServer.HostName}:{_remoteServer.Port} " +
+                : $"Server mode · {endpoint} " +
                   $"({_remoteServer.BoundAddressDescription}) · waiting for a client · code";
+
+            RemoteStrip.ToolTip = DescribeServerAddresses();
         }
         else if (connected)
         {
             RemoteStrip.Visibility = Visibility.Visible;
             RemoteStripCopyButton.Visibility = Visibility.Collapsed;
+            RemoteStripAddressButton.Visibility = Visibility.Collapsed;
             RemoteStripKickButton.Visibility = Visibility.Collapsed;
             RemoteStripStopButton.Visibility = Visibility.Collapsed;
             RemoteStripDisconnectButton.Visibility = Visibility.Visible;
             RemoteStripCode.Text = "";
+            RemoteStrip.ToolTip = null;
 
             RemoteStripText.Text = _remoteClient.State switch
             {
@@ -481,18 +557,118 @@ public partial class MainWindow : IRemoteServerProjects
             // no explanation of why nothing responds. Disconnect tears the group down.
             RemoteStrip.Visibility = Visibility.Visible;
             RemoteStripCopyButton.Visibility = Visibility.Collapsed;
+            RemoteStripAddressButton.Visibility = Visibility.Collapsed;
             RemoteStripKickButton.Visibility = Visibility.Collapsed;
             RemoteStripStopButton.Visibility = Visibility.Collapsed;
             RemoteStripDisconnectButton.Visibility = Visibility.Visible;
             RemoteStripCode.Text = "";
+            RemoteStrip.ToolTip = null;
             RemoteStripText.Text = _lastRemoteDisconnectMessage ?? "Disconnected from the server.";
         }
         else
         {
             RemoteStrip.Visibility = Visibility.Collapsed;
+            RemoteStrip.ToolTip = null;
         }
 
+        RefreshRemoteBadges();
         UpdateWindowTitleForRemote();
+    }
+
+    /// <summary>
+    /// Every address the client could use, for the strip's tooltip. A developer box usually has
+    /// more than one and only the machine's owner can say which network the other machine is on,
+    /// so the primary is shown inline and the rest are one hover away.
+    /// </summary>
+    private string DescribeServerAddresses()
+    {
+        var addresses = _remoteServer.ConnectAddresses;
+        var port = _remoteServer.Port;
+
+        if (addresses.Count == 0)
+            return $"Listening on port {port}.";
+
+        var lines = addresses.Select(a => $"    {a}:{port}");
+        return addresses.Count == 1
+            ? $"Connect from the other machine using:\n{string.Join('\n', lines)}"
+            : "Connect from the other machine using one of:\n" + string.Join('\n', lines) +
+              "\n\nThe first is the most likely to work; try another if this machine is on more " +
+              "than one network.";
+    }
+
+    /// <summary>
+    /// Drives the two always-on-screen remote indicators: the title-bar badge and the pill beside
+    /// the Active tab. Both say the same thing and both exit the mode when clicked — the status
+    /// strip alone sits at the bottom edge of a maximised window, which is exactly where a user
+    /// who has been away from the machine will not look.
+    /// </summary>
+    private void RefreshRemoteBadges()
+    {
+        var hosting = _remoteServer.IsRunning;
+        var connected = _remoteClient.State != RemoteClientState.Disconnected || IsRemoteSession;
+
+        if (hosting)
+        {
+            var endpoint = _remoteServer.ConnectEndpoint ?? $"port {_remoteServer.Port}";
+
+            RemoteModeBadge.Visibility = Visibility.Visible;
+            RemoteModeBadgeText.Text = _remoteServer.HasClient ? "SERVER MODE · IN USE" : "SERVER MODE";
+            RemoteModeBadge.ToolTip = _remoteServer.HasClient
+                ? $"Hosting on {endpoint}. '{_remoteServer.ConnectedClientName}' is driving these " +
+                  "sessions and input is disabled here. Click to stop hosting."
+                : $"Hosting on {endpoint}, waiting for a client. Input is disabled here. " +
+                  "Click to stop hosting.";
+
+            ServerModePill.Visibility = Visibility.Visible;
+            ServerModePillText.Text = _remoteServer.HasClient
+                ? $"Server mode · {_remoteServer.ConnectedClientName}"
+                : "Server mode";
+            ServerModePillButton.Content = "Stop";
+            ServerModePillButton.ToolTip = "Stop hosting and re-enable input on this machine";
+        }
+        else if (connected)
+        {
+            RemoteModeBadge.Visibility = Visibility.Visible;
+            RemoteModeBadgeText.Text = "REMOTE";
+            RemoteModeBadge.ToolTip =
+                $"Driving {_remoteClient.ServerName ?? _remoteClient.Endpoint}. All work runs on " +
+                "that machine. Click to disconnect.";
+
+            ServerModePill.Visibility = Visibility.Visible;
+            ServerModePillText.Text = $"Remote · {_remoteClient.ServerName ?? _remoteClient.Endpoint}";
+            ServerModePillButton.Content = "Disconnect";
+            ServerModePillButton.ToolTip = "Disconnect and close this machine's remote tabs";
+        }
+        else
+        {
+            RemoteModeBadge.Visibility = Visibility.Collapsed;
+            ServerModePill.Visibility = Visibility.Collapsed;
+        }
+
+        // Hosting can force the Active Projects view on even when the workspace setting has it off.
+        // Leaving it selected after hosting ends would filter the project tabs to the live sessions
+        // with no tab on screen explaining why, so it hands back to a real group.
+        if (!hosting && _activeGroupId == ActiveProjectsGroupId
+            && (!_showActiveProjectsGroup || _groups.Count < 2))
+        {
+            // SetActiveGroup rather than assigning the field: it also moves off a project that the
+            // fallback group doesn't contain, which is the whole point of not leaving the sentinel
+            // selected. With no groups at all there is nothing to fall back to, and every tab shows.
+            if (GroupBehindActiveProjectsTab() is { } fallback)
+            {
+                SetActiveGroup(fallback);
+            }
+            else
+            {
+                _activeGroupId = null;
+                RefreshProjectTabVisibility();
+            }
+        }
+
+        // The pill lives on the group strip, which is normally hidden below two groups. Hosting
+        // forces it up (see UpdateGroupStripVisibility) so the pill has somewhere to sit and the
+        // Active tab is on screen.
+        RefreshMetaTabBar();
     }
 
     /// <summary>

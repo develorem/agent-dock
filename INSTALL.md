@@ -60,10 +60,14 @@ If this prints a version number, you're ready to go.
 For detailed usage, see the documentation:
 
 - **[Features overview](docs/features.md)** — what Agent Dock can do
-- **[Workspace](docs/workspace.md)** — saving, loading, themes, and settings
-- **[Projects](docs/projects.md)** — tabs, project settings, and panel layouts
-- **[Project features](docs/project-features.md)** — File Explorer, Git Status, and File Preview
-- **[AI Chat](docs/ai-chat.md)** — sessions, message types, and troubleshooting
+- **[Workspace](docs/workspace.md)** — saving, loading, and what a workspace stores
+- **[Tab Groups](docs/groups.md)** — groups and the Active Projects tab
+- **[Projects](docs/projects.md)** — tabs, status indicators, project settings, panel layouts
+- **[Panels](docs/project-features.md)** — File Explorer, Git Status, File Preview, and more
+- **[AI Chat](docs/ai-chat.md)** — sessions, images, queueing, scheduling, slash commands
+- **[Accounts](docs/accounts.md)** — multiple Claude logins, plan usage, cost
+- **[Remote Sessions](docs/remote-sessions.md)** — driving one machine's agents from another
+- **[Settings](docs/settings.md)** — app, workspace and project settings
 
 ---
 

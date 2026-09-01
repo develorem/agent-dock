@@ -69,15 +69,59 @@ public class RemoteSessionIntegrationTests : IAsyncLifetime
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Cursor for handing out test ports. Randomised per run so two runs on one machine don't
+    /// collide, then advanced monotonically so two *tests* can't collide with each other.
+    ///
+    /// A plain random pick per test is not enough: <see cref="RemoteServerService.FindFreePort"/>
+    /// probes a port and immediately releases it, so a port reported free can be taken by the time
+    /// the caller binds — by a listener an earlier test in the run has not finished releasing, or
+    /// by a second search that started from the same place. That produced an intermittent failure
+    /// in a different test on each run.
+    /// </summary>
+    private static int _portCursor = Random.Shared.Next(20000, 40000);
+
+    /// <summary>A port no other test in this run has been handed.</summary>
     private static int FreePort()
-        => RemoteServerService.FindFreePort(IPAddress.Loopback, Random.Shared.Next(20000, 45000))
-           ?? throw new InvalidOperationException("no free port");
+    {
+        // Stride wider than the search window, so one call's search can never wander into the
+        // range the next call will be given.
+        const int stride = 64;
+        const int attempts = 32;
+
+        var start = Interlocked.Add(ref _portCursor, stride);
+
+        return RemoteServerService.FindFreePort(IPAddress.Loopback, start, attempts)
+               ?? throw new InvalidOperationException("no free port");
+    }
 
     private RemoteClientService NewClient(string? settingsDir = null)
         => new(new NullLog(), new RemoteIdentity(new NullLog(), new FakeSettings(settingsDir ?? _settingsDir)));
 
     private RemoteServerService.StartResult StartServer(int port)
-        => _server.Start(port, RemoteBindScope.LoopbackOnly, new StubProjects(), _dispatcher);
+        => StartServer(port, new StubProjects());
+
+    private RemoteServerService.StartResult StartServer(int port, StubProjects projects)
+        => _server.Start(port, RemoteBindScope.LoopbackOnly, projects, _dispatcher);
+
+    /// <summary>
+    /// Waits for a lock state to settle. The server pushes locks through the dispatcher, so
+    /// asserting immediately after a start or a disconnect would race the marshalling.
+    /// </summary>
+    private static async Task AssertLockAsync(
+        StubProjects projects, bool composer, bool prompts)
+    {
+        var deadline = DateTime.UtcNow + Timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (projects.LastLockState == composer && projects.LastPromptLockState == prompts)
+                return;
+
+            await Task.Delay(20);
+        }
+
+        Assert.Equal((composer, prompts), (projects.LastLockState, projects.LastPromptLockState));
+    }
 
     // ---------------------------------------------------------------- happy path
 
@@ -159,6 +203,108 @@ public class RemoteSessionIntegrationTests : IAsyncLifetime
 
         Assert.True(paired.Success, paired.Message);
         client.Disconnect();
+    }
+
+    // ---------------------------------------------------------------- input locking
+
+    /// <summary>
+    /// The composer locks the moment hosting starts, not when a client turns up. A host that still
+    /// accepts typing between Start Server and the first connection is a host whose owner can type
+    /// a message nobody will send, on a machine they are walking away from.
+    /// </summary>
+    [Fact]
+    public async Task StartingTheServerLocksTheComposerBeforeAnyClientConnects()
+    {
+        var projects = new StubProjects();
+        var start = StartServer(FreePort(), projects);
+
+        Assert.True(start.Success, start.Error);
+        await AssertLockAsync(projects, composer: true, prompts: false);
+    }
+
+    /// <summary>
+    /// Prompts stay answerable until someone is actually connected. Locking them at start would
+    /// park a permission request with no one able to answer it on either machine.
+    /// </summary>
+    [Fact]
+    public async Task PromptsLockOnlyOnceAClientIsAttached()
+    {
+        var projects = new StubProjects();
+        var port = FreePort();
+        var start = StartServer(port, projects);
+        var client = NewClient();
+
+        await AssertLockAsync(projects, composer: true, prompts: false);
+
+        await client.ConnectAsync("127.0.0.1", port, _dispatcher);
+        var paired = await client.SubmitCodeAsync(start.Code!);
+        Assert.True(paired.Success, paired.Message);
+
+        await AssertLockAsync(projects, composer: true, prompts: true);
+
+        // Losing the client leaves this machine hosting but unattended-by-proxy: the composer stays
+        // locked, and prompts come back because here is once again the only place to answer them.
+        client.Disconnect();
+        await AssertLockAsync(projects, composer: true, prompts: false);
+    }
+
+    [Fact]
+    public async Task StoppingTheServerUnlocksEverything()
+    {
+        var projects = new StubProjects();
+        StartServer(FreePort(), projects);
+
+        await AssertLockAsync(projects, composer: true, prompts: false);
+
+        _server.Stop();
+
+        await AssertLockAsync(projects, composer: false, prompts: false);
+    }
+
+    // ---------------------------------------------------------------- advertised address
+
+    /// <summary>
+    /// The address shown to the user has to be one another machine can reach. A machine name only
+    /// resolves if something on the network publishes it, which is why an IPv4 literal is offered
+    /// instead — see <see cref="RemoteServerService.ConnectAddress"/>.
+    /// </summary>
+    [Fact]
+    public void DiscoveredAddressesAreRoutableIPv4Literals()
+    {
+        foreach (var address in RemoteServerService.DiscoverLocalAddresses())
+        {
+            Assert.True(IPAddress.TryParse(address, out var parsed), $"'{address}' is not an IP literal");
+            Assert.Equal(System.Net.Sockets.AddressFamily.InterNetwork, parsed!.AddressFamily);
+            Assert.False(IPAddress.IsLoopback(parsed));
+
+            // A link-local address exists but routes nowhere — offering one sends the user off to
+            // debug a firewall when the real problem is that DHCP never answered.
+            Assert.DoesNotContain("169.254.", address);
+        }
+    }
+
+    [Fact]
+    public void LoopbackHostingAdvertisesLoopbackRatherThanTheLanAddress()
+    {
+        var port = FreePort();
+        var start = _server.Start(port, RemoteBindScope.LoopbackOnly, new StubProjects(), _dispatcher);
+
+        Assert.True(start.Success, start.Error);
+        Assert.Equal("127.0.0.1", _server.ConnectAddress);
+        Assert.Equal($"127.0.0.1:{port}", _server.ConnectEndpoint);
+    }
+
+    [Fact]
+    public void StoppingClearsTheAdvertisedAddress()
+    {
+        StartServer(FreePort());
+        Assert.NotNull(_server.ConnectAddress);
+
+        _server.Stop();
+
+        Assert.Null(_server.ConnectAddress);
+        Assert.Null(_server.ConnectEndpoint);
+        Assert.Empty(_server.ConnectAddresses);
     }
 
     // ---------------------------------------------------------------- rejection paths
@@ -343,9 +489,15 @@ public class RemoteSessionIntegrationTests : IAsyncLifetime
         // about. Replication itself is covered by the protocol round-trip tests.
         public IReadOnlyList<RemoteProjectPublisher> CreatePublishers() => [];
 
-        public void SetAgentInputLocked(bool locked) => LastLockState = locked;
+        public void SetAgentInputLocked(bool composerLocked, bool promptsLocked)
+        {
+            LastLockState = composerLocked;
+            LastPromptLockState = promptsLocked;
+        }
 
         public bool? LastLockState { get; private set; }
+
+        public bool? LastPromptLockState { get; private set; }
 
         public void RaiseChanged() => ActiveProjectsChanged?.Invoke();
     }

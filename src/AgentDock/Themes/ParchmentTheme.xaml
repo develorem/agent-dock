@@ -30,6 +30,14 @@
     <SolidColorBrush x:Key="GroupTabActiveBackground" Color="#F0E8DC" />
     <SolidColorBrush x:Key="ActiveGroupAccentForeground" Color="#B5179E" />
 
+    <!-- Remote-session badge (title-bar chip + group-strip pill). A background/border/
+         foreground triple rather than the accent used as a fill: the accent is tuned to be
+         legible *on* the chrome, so text painted in the chrome colour on top of it drops to
+         around 2.5:1 on the light themes. -->
+    <SolidColorBrush x:Key="RemoteBadgeBackground" Color="#F2E4BE" />
+    <SolidColorBrush x:Key="RemoteBadgeBorderBrush" Color="#B89030" />
+    <SolidColorBrush x:Key="RemoteBadgeForeground" Color="#6B5010" />
+
     <!-- Taskbar icon accent bar -->
     <SolidColorBrush x:Key="TaskbarAccentColor" Color="#E8DCA0" />
 

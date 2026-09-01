@@ -37,7 +37,49 @@ public partial class ServerModeDialog : Window
         var alreadyAcknowledged = _appSettings.GetString(AcknowledgedKey) == "true";
         AcknowledgeCheck.IsChecked = alreadyAcknowledged;
 
+        RefreshAddress();
         UpdateStartEnabled();
+    }
+
+    /// <summary>
+    /// Shows the address the other machine has to type, and keeps it in step with the port and the
+    /// bind scope. Loopback-only hosting deliberately shows 127.0.0.1 rather than the LAN address:
+    /// in that mode the LAN address is not listening, and offering it would send the user off to
+    /// debug a firewall that is not the problem.
+    /// </summary>
+    /// <summary>
+    /// Discovered once per dialog rather than per keystroke: this runs on every port edit, and
+    /// enumerating network interfaces is far more work than the answer changes.
+    /// </summary>
+    private List<string>? _localAddresses;
+
+    private void RefreshAddress()
+    {
+        if (AddressBox == null) return;
+
+        var portText = TryReadPort(out var port) ? $":{port}" : "";
+
+        if (AllInterfacesCheck.IsChecked != true)
+        {
+            AddressBox.Text = $"127.0.0.1{portText}";
+            AddressHint.Text = "Loopback only — reachable from a second Agent Dock on this machine.";
+            return;
+        }
+
+        var addresses = _localAddresses ??= RemoteServerService.DiscoverLocalAddresses();
+
+        if (addresses.Count == 0)
+        {
+            AddressBox.Text = "(no network address found)";
+            AddressHint.Text = "This machine has no usable network address — check it is connected to a network.";
+            return;
+        }
+
+        AddressBox.Text = $"{addresses[0]}{portText}";
+        AddressHint.Text = addresses.Count == 1
+            ? "Enter this in Connect to Server on the other machine."
+            : "Enter this in Connect to Server on the other machine. Also available: " +
+              string.Join(", ", addresses.Skip(1).Select(a => $"{a}{portText}"));
     }
 
     public static Result? Show(Window owner, IAppSettingsStore appSettings, int defaultPort)
@@ -58,10 +100,13 @@ public partial class ServerModeDialog : Window
             PortBox.CaretIndex = Math.Min(caret, cleaned.Length);
         }
 
+        RefreshAddress();
         UpdateStartEnabled();
     }
 
     private void Acknowledge_Changed(object sender, RoutedEventArgs e) => UpdateStartEnabled();
+
+    private void Scope_Changed(object sender, RoutedEventArgs e) => RefreshAddress();
 
     private void UpdateStartEnabled()
     {

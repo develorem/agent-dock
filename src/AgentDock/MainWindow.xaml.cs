@@ -995,6 +995,10 @@ public partial class MainWindow : Window
         _projectGitControls[project] = gitControl;
         _projectDescriptionControls[project] = descControl;
         _projectTodoListControls[project] = todoControl;
+        // A tab opened while this machine is hosting inherits the host lock, rather than arriving
+        // with a live composer nobody is at the keyboard to use.
+        ApplyAgentInputLock(chatControl);
+
         chatControl.SessionStateChanged += state => UpdateTabIcon(project, state);
         // A session starting or ending changes which tabs a connected client should see.
         chatControl.SessionStateChanged += _ => ActiveProjectsChanged?.Invoke();
@@ -1767,8 +1771,9 @@ public partial class MainWindow : Window
 
         // A remote session always shows its group tab, even though it is the only group: the
         // name is how the user knows which machine they are driving, which matters more here
-        // than the tidiness of hiding a single-group bar.
-        if (_groups.Count < 2 && !IsRemoteSession)
+        // than the tidiness of hiding a single-group bar. Hosting forces the strip up for the
+        // same reason plus one more — it carries the Active tab and the Stop Server pill.
+        if (_groups.Count < 2 && !IsRemoteSession && !IsHostingRemote)
         {
             ActiveGroupHost.Content = null;
             _activeGroupButton = null;
@@ -1799,9 +1804,10 @@ public partial class MainWindow : Window
     /// </summary>
     private void UpdateGroupStripVisibility()
     {
-        MetaTabBorder.Visibility = (_groups.Count >= 2 || IsRemoteSession) && _projects.Count > 0
-            ? Visibility.Visible
-            : Visibility.Collapsed;
+        MetaTabBorder.Visibility =
+            (_groups.Count >= 2 || IsRemoteSession || IsHostingRemote) && _projects.Count > 0
+                ? Visibility.Visible
+                : Visibility.Collapsed;
         UpdateGroupFrame();
         // The project strip's top gap only applies while the group strip is showing.
         UpdateProjectFrame();
@@ -1973,7 +1979,10 @@ public partial class MainWindow : Window
     /// </summary>
     private void RenderActiveGroupButton()
     {
-        if (_groups.Count < 2 || !_showActiveProjectsGroup)
+        // While hosting, the Active tab is shown whatever the workspace setting says: it is the
+        // exact set of projects being published, so it is the only view that matches what the
+        // client sees. Hiding it would leave the server's own screen disagreeing with the remote.
+        if (!IsHostingRemote && (_groups.Count < 2 || !_showActiveProjectsGroup))
         {
             ActiveGroupHost.Content = null;
             _activeGroupButton = null;
@@ -3321,6 +3330,7 @@ public partial class MainWindow : Window
         _projectTodoListControls.Remove(project);
         _projectNewResponse.Remove(project);
         _projectLastActivity.Remove(project);
+        _remoteSoundSettings.Remove(project);
 
         // Remove content
         _projectContents.Remove(project);
@@ -3536,6 +3546,73 @@ public partial class MainWindow : Window
             desc.SetDescription(settings.Description);
     }
 
+    // --- Session state sounds ---
+
+    /// <summary>
+    /// Chimes for a session-state transition, if this machine is the one that should be heard.
+    ///
+    /// A hosting machine stays silent. The point of server mode is that nobody is in the room with
+    /// it: a chime there reaches nobody who can act on it, and if the user happens to be within
+    /// earshot of both machines they hear every notification twice. The client is where the human
+    /// is, and it runs this same method — a replicated <c>SessionStateMsg</c> arrives at
+    /// <see cref="Controls.AiChatControl.ApplyRemoteSessionState"/>, which raises
+    /// <c>SessionStateChanged</c>, which lands in <see cref="UpdateTabIcon"/> exactly as a local
+    /// session's would. Which sounds play is decided by the host's per-project settings, shipped
+    /// in the project snapshot (see <see cref="SoundToggles"/>), so moving to the remote
+    /// does not silently reset preferences to defaults.
+    /// </summary>
+    private void PlayStateTransitionSound(
+        ProjectInfo project, ClaudeSessionState state, ClaudeSessionState prevState)
+    {
+        if (IsHostingRemote) return;
+
+        var soundSettings = SoundSettingsFor(project);
+
+        switch (state)
+        {
+            case ClaudeSessionState.Initializing when soundSettings.OnSessionStart:
+                _sound.PlayDeviceConnect();
+                break;
+            case ClaudeSessionState.Idle
+                when soundSettings.OnAgentWaiting
+                     && prevState is ClaudeSessionState.Working or ClaudeSessionState.WaitingForPermission:
+                _sound.PlayMessageNudge();
+                break;
+            // A question (AskUserQuestion) or tool-permission prompt parks the turn here,
+            // which is just as much "waiting for input" as returning to Idle — without this
+            // the prompt appears silently and only chimes once the whole turn finishes.
+            // Its own sound, so a blocked turn is audibly distinct from a finished one.
+            case ClaudeSessionState.WaitingForPermission when soundSettings.OnAgentWaiting:
+                _sound.PlayQuestionPrompt();
+                break;
+            case ClaudeSessionState.Exited when soundSettings.OnSessionEnd:
+                _sound.PlayDeviceDisconnect();
+                break;
+        }
+    }
+
+    /// <summary>The three sound toggles, from wherever this project's settings actually live.</summary>
+    private readonly record struct SoundToggles(
+        bool OnSessionStart, bool OnAgentWaiting, bool OnSessionEnd);
+
+    /// <summary>
+    /// Resolves a project's sound toggles. A remote tab's folder is on the other machine, so
+    /// reading <c>.agentdock/settings.json</c> here would find nothing and silently fall back to
+    /// the defaults — the host's replicated values are used instead.
+    /// </summary>
+    private SoundToggles SoundSettingsFor(ProjectInfo project)
+    {
+        if (_remoteSoundSettings.TryGetValue(project, out var replicated))
+            return replicated;
+
+        var settings = _projectSettings.Load(project.FolderPath);
+        return new SoundToggles(
+            settings.SoundOnSessionStart, settings.SoundOnAgentWaiting, settings.SoundOnSessionEnd);
+    }
+
+    /// <summary>Sound toggles replicated from the host, for remote tabs only.</summary>
+    private readonly Dictionary<ProjectInfo, SoundToggles> _remoteSoundSettings = [];
+
     // --- Tab Icon Updates ---
 
     private void UpdateTabIcon(ProjectInfo project, ClaudeSessionState state)
@@ -3551,28 +3628,7 @@ public partial class MainWindow : Window
         _previousTabStates.TryGetValue(project, out var prevState);
         _previousTabStates[project] = state;
 
-        var soundSettings = _projectSettings.Load(project.FolderPath);
-        switch (state)
-        {
-            case ClaudeSessionState.Initializing when soundSettings.SoundOnSessionStart:
-                _sound.PlayDeviceConnect();
-                break;
-            case ClaudeSessionState.Idle
-                when soundSettings.SoundOnAgentWaiting
-                     && prevState is ClaudeSessionState.Working or ClaudeSessionState.WaitingForPermission:
-                _sound.PlayMessageNudge();
-                break;
-            // A question (AskUserQuestion) or tool-permission prompt parks the turn here,
-            // which is just as much "waiting for input" as returning to Idle — without this
-            // the prompt appears silently and only chimes once the whole turn finishes.
-            // Its own sound, so a blocked turn is audibly distinct from a finished one.
-            case ClaudeSessionState.WaitingForPermission when soundSettings.SoundOnAgentWaiting:
-                _sound.PlayQuestionPrompt();
-                break;
-            case ClaudeSessionState.Exited when soundSettings.SoundOnSessionEnd:
-                _sound.PlayDeviceDisconnect();
-                break;
-        }
+        PlayStateTransitionSound(project, state, prevState);
 
         var diamondIcon = (TextBlock)statusGrid.Children[0];
         var statusBadge = (TextBlock)statusGrid.Children[1];

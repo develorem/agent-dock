@@ -211,7 +211,13 @@ public sealed record ProjectSettingsSnapshot(
     string? Name,
     string? Description,
     double? DescriptionFontSize,
-    List<RemoteTodoItem> TodoItems);
+    List<RemoteTodoItem> TodoItems,
+    // The notification toggles travel with the project because the client is where they are
+    // audible: the host goes silent while it is hosting, and a client reading its own
+    // .agentdock/settings.json would find no folder there and quietly use the defaults.
+    bool SoundOnSessionStart = true,
+    bool SoundOnAgentWaiting = true,
+    bool SoundOnSessionEnd = true);
 
 public sealed record ProjectSettingsMsg(string ProjectId, ProjectSettingsSnapshot Settings) : RemoteFrame;
 

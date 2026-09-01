@@ -741,6 +741,31 @@
                 </StackPanel>
             </Border>
 
+            <!-- Why the composer below is dead. Declared after InputPanel so the DockPanel
+                 places it *above* it (the first bottom-docked child takes the outer edge),
+                 and outside InputPanel so it stays legible while that panel is disabled. -->
+            <Border x:Name="AgentLockNotice"
+                    DockPanel.Dock="Bottom"
+                    Visibility="Collapsed"
+                    Background="{DynamicResource RemoteBadgeBackground}"
+                    BorderBrush="{DynamicResource RemoteBadgeBorderBrush}"
+                    BorderThickness="0,1,0,1"
+                    Padding="10,5">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="&#xE72E;"
+                               FontFamily="Segoe MDL2 Assets"
+                               FontSize="11"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource RemoteBadgeForeground}"
+                               Margin="0,0,7,0" />
+                    <TextBlock x:Name="AgentLockNoticeText"
+                               FontSize="11"
+                               TextWrapping="Wrap"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource RemoteBadgeForeground}" />
+                </StackPanel>
+            </Border>
+
             <!-- Message list — virtualized. Past messages are immutable record-ish
                  VMs; only the currently-streaming / currently-building entries
                  carry INPC. The ItemsControl template wraps the items panel in

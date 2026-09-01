@@ -42,30 +42,40 @@ public partial class AiChatControl
     private bool _agentInputLocked;
 
     /// <summary>
-    /// True while this panel is hosting a remote client and all agent interaction therefore
+    /// True while this panel is being hosted for a remote client and the composer therefore
     /// belongs to that client.
     /// </summary>
     public bool IsAgentInputLocked => _agentInputLocked;
 
     /// <summary>
-    /// Locks or unlocks every path that can speak to the agent: the composer, send, the queue
-    /// and schedule affordances, and the inline permission and question panels.
+    /// Locks or unlocks the paths that can speak to the agent.
     ///
-    /// The permission panels are included deliberately. Leaving them live would put a control
-    /// on screen that nobody is present to click, and would create two possible answerers for
-    /// one question. Stop Server is not agent interaction and stays available, which is how a
-    /// user who returns to this machine reclaims control.
+    /// <paramref name="composerLocked"/> is set for the whole time this machine is hosting, from
+    /// Start Server rather than from the first client connecting: the point of server mode is that
+    /// the keyboard is somewhere else, and a composer that still accepts text is a composer whose
+    /// contents nobody will ever send. It is greyed out *and* explained — see
+    /// <c>AgentLockNotice</c> — because a dead input with no reason given reads as a bug.
+    ///
+    /// <paramref name="promptsLocked"/> is set only once a client has actually attached. A blocked
+    /// turn has to be answerable from somewhere: with nobody connected, that somewhere is here.
+    ///
+    /// The start panel stays live in both cases — bringing a new session up is not driving one, and
+    /// it is the only way to add a tab to the hosted set. Stop Server likewise stays available,
+    /// which is how a user who walks back to this machine reclaims it.
     /// </summary>
-    public void SetAgentInputLocked(bool locked)
+    public void SetAgentInputLocked(bool composerLocked, bool promptsLocked)
     {
-        _agentInputLocked = locked;
+        _agentInputLocked = composerLocked;
 
-        InputPanel.IsEnabled = !locked;
-        PermissionPanel.IsEnabled = !locked;
-        QuestionPanel.IsEnabled = !locked;
+        InputPanel.IsEnabled = !composerLocked;
+        PermissionPanel.IsEnabled = !promptsLocked;
+        QuestionPanel.IsEnabled = !promptsLocked;
 
-        // The start panel stays live: hosting a client should not stop the server's owner from
-        // bringing a new session up before they walk away from the machine.
+        AgentLockNotice.Visibility = composerLocked ? Visibility.Visible : Visibility.Collapsed;
+        AgentLockNoticeText.Text = promptsLocked
+            ? "Server mode — this session is being driven from the connected machine. Input is disabled here."
+            : "Server mode — input is disabled here. Connect from another machine to drive this session.";
+
         RemoteStateChanged?.Invoke();
     }
 

@@ -19,8 +19,19 @@ public interface IRemoteServerProjects
     /// </summary>
     IReadOnlyList<RemoteProjectPublisher> CreatePublishers();
 
-    /// <summary>Locks or unlocks agent input across every project tab.</summary>
-    void SetAgentInputLocked(bool locked);
+    /// <summary>
+    /// Locks or unlocks agent input across every project tab.
+    ///
+    /// <paramref name="composerLocked"/> covers everything that starts work — the composer, send,
+    /// the queue and the schedule affordances — and is set for as long as this machine is hosting,
+    /// whether or not a client has attached yet: a host that still accepts typing is a host two
+    /// people can drive.
+    ///
+    /// <paramref name="promptsLocked"/> covers the inline permission and question panels, and is
+    /// set only once a client is actually attached. Locking those while nobody is connected would
+    /// park a blocked turn with no one able to answer it, on either machine.
+    /// </summary>
+    void SetAgentInputLocked(bool composerLocked, bool promptsLocked);
 
     /// <summary>Raised when a session starts or ends, so the client's tab set can follow.</summary>
     event Action? ActiveProjectsChanged;
@@ -97,6 +108,20 @@ public sealed class RemoteServerService(
     public string? CertificateFingerprint { get; private set; }
     public string? BoundAddressDescription { get; private set; }
 
+    /// <summary>
+    /// The address to type on the other machine, and the reason this is shown in preference to
+    /// <see cref="HostName"/>: a Windows machine name only resolves if the client's network hands
+    /// out matching NetBIOS/mDNS names, which plenty of home routers, guest VLANs and VPN links
+    /// do not. An IPv4 literal always resolves. Null until the server starts.
+    /// </summary>
+    public string? ConnectAddress { get; private set; }
+
+    /// <summary>Every address the server can be reached on, primary first. Empty when stopped.</summary>
+    public IReadOnlyList<string> ConnectAddresses { get; private set; } = [];
+
+    /// <summary>The full <c>address:port</c> pair, ready to paste into Connect to Server.</summary>
+    public string? ConnectEndpoint => ConnectAddress == null ? null : $"{ConnectAddress}:{Port}";
+
     public bool IsRunning => State != RemoteServerState.Stopped;
     public bool HasClient => State == RemoteServerState.ClientConnected;
 
@@ -136,6 +161,77 @@ public sealed class RemoteServerService(
                 return port;
 
         return null;
+    }
+
+    /// <summary>
+    /// The IPv4 addresses another machine can reach this one on, best candidate first.
+    ///
+    /// Filtered and ordered rather than just listed, because a developer machine typically has
+    /// several: Hyper-V and WSL switches, Docker bridges, VPN adapters and disconnected Wi-Fi all
+    /// contribute addresses, and offering the wrong one first is how "I typed what it told me and
+    /// nothing happened" happens.
+    ///
+    /// Interfaces that are down, loopback, non-IPv4 or link-local are dropped outright. The rest
+    /// are ranked, most significant first: having a **default gateway** (the adapter actually
+    /// carrying traffic off this machine), being **real Ethernet or Wi-Fi**, and not being a
+    /// **named virtual switch**.
+    /// </summary>
+    public static List<string> DiscoverLocalAddresses()
+    {
+        var candidates = new List<(string Address, int Rank)>();
+
+        try
+        {
+            foreach (var nic in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (nic.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up) continue;
+                if (nic.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Loopback) continue;
+
+                var properties = nic.GetIPProperties();
+                var hasGateway = properties.GatewayAddresses
+                    .Any(g => g.Address is { } a
+                              && a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
+                              && !a.Equals(IPAddress.Any));
+
+                var isPhysical = nic.NetworkInterfaceType
+                    is System.Net.NetworkInformation.NetworkInterfaceType.Ethernet
+                    or System.Net.NetworkInformation.NetworkInterfaceType.GigabitEthernet
+                    or System.Net.NetworkInformation.NetworkInterfaceType.Wireless80211;
+
+                // Virtual switches name themselves; the interface type does not distinguish them.
+                var looksVirtual = nic.Description.Contains("virtual", StringComparison.OrdinalIgnoreCase)
+                                   || nic.Description.Contains("hyper-v", StringComparison.OrdinalIgnoreCase)
+                                   || nic.Description.Contains("vethernet", StringComparison.OrdinalIgnoreCase)
+                                   || nic.Name.Contains("wsl", StringComparison.OrdinalIgnoreCase)
+                                   || nic.Description.Contains("docker", StringComparison.OrdinalIgnoreCase);
+
+                var rank = (hasGateway ? 0 : 4) + (isPhysical ? 0 : 2) + (looksVirtual ? 1 : 0);
+
+                foreach (var unicast in properties.UnicastAddresses)
+                {
+                    if (unicast.Address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork) continue;
+                    if (IPAddress.IsLoopback(unicast.Address)) continue;
+
+                    var text = unicast.Address.ToString();
+
+                    // 169.254.x.x means DHCP never answered — the address exists but routes nowhere.
+                    if (text.StartsWith("169.254.", StringComparison.Ordinal)) continue;
+
+                    candidates.Add((text, rank));
+                }
+            }
+        }
+        catch
+        {
+            // Address discovery is a convenience on top of a server that is already listening on
+            // every interface — a failure here must not stop hosting.
+        }
+
+        return candidates
+            .OrderBy(c => c.Rank)
+            .Select(c => c.Address)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     public sealed record StartResult(bool Success, string? Error, int Port, string? Code);
@@ -184,6 +280,20 @@ public sealed class RemoteServerService(
                 BoundAddressDescription = scope == RemoteBindScope.AllInterfaces
                     ? "all interfaces"
                     : "this machine only (loopback)";
+
+                if (scope == RemoteBindScope.AllInterfaces)
+                {
+                    ConnectAddresses = DiscoverLocalAddresses();
+                    // Falling back to the machine name is better than showing nothing, and is the
+                    // only thing left to offer if every adapter was filtered out.
+                    ConnectAddress = ConnectAddresses.FirstOrDefault() ?? HostName;
+                }
+                else
+                {
+                    ConnectAddresses = ["127.0.0.1"];
+                    ConnectAddress = "127.0.0.1";
+                }
+
                 State = RemoteServerState.Listening;
 
                 _cts = new CancellationTokenSource();
@@ -192,6 +302,12 @@ public sealed class RemoteServerService(
                 SetThreadExecutionState(EsContinuous | EsSystemRequired);
 
                 provider.ActiveProjectsChanged += OnActiveProjectsChanged;
+
+                // Hosting locks the composer immediately, not on the first client. The user starts
+                // server mode because they are about to walk away from this machine; leaving the
+                // input live until someone connects means the window they are still looking at
+                // accepts typing it will then have to reconcile with a second driver.
+                RunOnUi(() => provider.SetAgentInputLocked(true, promptsLocked: false));
 
                 log.Info($"RemoteServer: listening on {address}:{port} ({BoundAddressDescription}), " +
                          $"code {PairingCode.Format(PairingCodeValue)}, fingerprint {CertificateFingerprint}");
@@ -261,6 +377,8 @@ public sealed class RemoteServerService(
             State = RemoteServerState.Stopped;
             ConnectedClientName = null;
             PairingCodeValue = null;
+            ConnectAddress = null;
+            ConnectAddresses = [];
 
             try { _cts?.Cancel(); } catch { }
             try { _listener?.Stop(); } catch { }
@@ -278,7 +396,7 @@ public sealed class RemoteServerService(
         if (provider != null)
         {
             provider.ActiveProjectsChanged -= OnActiveProjectsChanged;
-            RunOnUi(() => provider.SetAgentInputLocked(false));
+            RunOnUi(() => provider.SetAgentInputLocked(false, promptsLocked: false));
         }
 
         DisposePublishers();
@@ -487,10 +605,10 @@ public sealed class RemoteServerService(
         {
             BuildPublishers(connection);
 
-            // Entering hosted mode makes agent interaction inert on this machine: the human is at
-            // the other end. Stop Server is not agent interaction and stays live, which is how a
-            // returning user reclaims control.
-            _provider?.SetAgentInputLocked(true);
+            // With a client attached the prompts lock too: the human is at the other end, and two
+            // live answerers for one question is a race. Stop Server is not agent interaction and
+            // stays live, which is how a returning user reclaims control.
+            _provider?.SetAgentInputLocked(true, promptsLocked: true);
 
             SendHostSnapshot(connection);
             RaiseStateChanged();
@@ -514,7 +632,9 @@ public sealed class RemoteServerService(
         RunOnUi(() =>
         {
             DisposePublishers();
-            _provider?.SetAgentInputLocked(false);
+            // Still hosting, so the composer stays locked; the prompts come back, because this
+            // machine is once again the only place they can be answered.
+            _provider?.SetAgentInputLocked(true, promptsLocked: false);
             RaiseStateChanged();
         });
     }
@@ -565,7 +685,7 @@ public sealed class RemoteServerService(
         RunOnUi(() =>
         {
             BuildPublishers(connection);
-            _provider?.SetAgentInputLocked(true);
+            _provider?.SetAgentInputLocked(true, promptsLocked: true);
             SendHostSnapshot(connection);
         });
     }
