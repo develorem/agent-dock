@@ -9,12 +9,32 @@ namespace AgentDock.Services;
 /// executions vs. the final answer) and emits already-classified <see cref="ChatOp"/>s.
 ///
 /// Classification is DEFERRED: a text block can't be identified as commentary or as
-/// the final answer until we see what follows it (a tool call / more text → it was
-/// commentary; end-of-turn → it was the answer). So a text block is BUFFERED and
-/// only emitted once the next block (or the result) classifies it. This places each
-/// piece of content correctly the first time — nothing is rendered then moved.
-/// Live thinking still streams as it arrives (its placement is never ambiguous);
-/// the final answer appears, complete, when the turn ends.
+/// the final answer until we see what follows it. So a text block is BUFFERED and only
+/// emitted once the next block (or the result) classifies it. This places each piece of
+/// content correctly the first time — nothing is rendered then moved. Live thinking still
+/// streams as it arrives (its placement is never ambiguous); the final answer appears,
+/// complete, when the turn ends.
+///
+/// The classification table, which is what the tests in <c>ChatTurnProcessorTests</c> pin:
+///
+/// <list type="table">
+/// <listheader><term>Text is followed by…</term><description>…so it is</description></listheader>
+/// <item><term>an ordinary tool call (Bash, Edit, Read…)</term>
+///   <description>commentary — folded into the collapsed activity bubble</description></item>
+/// <item><term>a human-facing prompt (AskUserQuestion, ExitPlanMode)</term>
+///   <description>posted visibly — the user needs it to answer</description></item>
+/// <item><term>more text, with no tool call in between</term>
+///   <description>the same answer continued — appended, not demoted</description></item>
+/// <item><term>end of turn</term>
+///   <description>the final answer — posted as a standalone bubble</description></item>
+/// </list>
+///
+/// Two of those rules are corrections, and both were losing text outright rather than
+/// merely misplacing it. Text sharing a message with a tool call was never read at all
+/// (the tool branch returned first), and text followed by more text was demoted to
+/// commentary, so a two-part answer showed only its second part. If you change this
+/// method, run those tests: every past regression here was a placement rule that looked
+/// obviously right in isolation.
 ///
 /// CRUCIALLY this runs on the session's background read-loop thread — no UI work
 /// here, no WPF objects, just classification state and plain-data ops. The session
@@ -84,7 +104,7 @@ public sealed class ChatTurnProcessor
             Ops?.Invoke(ops);
     }
 
-    private void OnStreamDelta(ClaudeStreamDelta delta)
+    internal void OnStreamDelta(ClaudeStreamDelta delta)
     {
         var ops = new List<ChatOp> { new RemoveInactivityOp() };
 
@@ -123,7 +143,7 @@ public sealed class ChatTurnProcessor
         Emit(ops);
     }
 
-    private void OnAssistantMessage(ClaudeAssistantMessage msg)
+    internal void OnAssistantMessage(ClaudeAssistantMessage msg)
     {
         // Messages produced by a subagent carry the spawning Agent tool's id. Their
         // internal tool calls still don't belong in the top-level transcript (they'd leak
@@ -138,15 +158,48 @@ public sealed class ChatTurnProcessor
 
         var ops = new List<ChatOp> { new RemoveInactivityOp() };
 
+        // This message's own text. Read BEFORE the tool branch decides anything, because a
+        // single assistant message routinely carries both — content: [text, tool_use] is the
+        // ordinary shape for "here's what I'm about to do" followed by the call. The tool
+        // branch used to return without ever looking at these blocks, so that text was not
+        // folded into the activity bubble, not posted, not logged: dropped outright.
+        var messageText = ConcatText(msg.Content);
+
         var toolBlocks = msg.Content.Where(c => c.Type == "tool_use").ToList();
         if (toolBlocks.Count > 0)
         {
-            // A tool call follows — so any buffered text was intermediate commentary.
-            FlushPendingAsCommentary(ops);
+            // Everything we're holding: the block buffered from an earlier message, plus this
+            // message's own text. Both precede the call, so both are classified the same way.
+            var precedingText = Combine(_pendingText, messageText);
+            _pendingText = "";
+            _pendingHasText = false;
 
-            // Collapse the thinking window (now incl. that commentary) and start /
-            // extend the execution bubble.
-            ops.Add(new FinalizeThinkingOp());
+            // A prompt that stops to ask the human something is not a step in the agent's
+            // work — it is the agent addressing the user, and the text leading up to it is
+            // what the user needs in order to answer. Folding that into a collapsed grey
+            // block puts the question on screen and the reason for it out of sight.
+            if (toolBlocks.Any(b => IsHumanPrompt(b.Name)))
+            {
+                ops.Add(new FinalizeThinkingOp());
+
+                if (precedingText.Length > 0)
+                {
+                    // Seal only when there is actually something to insert between the
+                    // bubbles. With no text to post there is no ordering to preserve, and
+                    // sealing would split one turn's activity into two bubbles for nothing.
+                    ops.Add(new SealActivityOp());
+                    ops.Add(new PostAnswerOp(precedingText));
+                }
+            }
+            else
+            {
+                // Text followed by a tool call is intermediate commentary. Added before the
+                // thinking window is closed so it lands inside the open grey block.
+                if (precedingText.Length > 0)
+                    ops.Add(new CommentaryOp(precedingText));
+                ops.Add(new FinalizeThinkingOp());
+            }
+
             _thinkingOpen = false;
             _lastThinkingBlockIndex = -1;
             ops.Add(new EnsureExecutionOp());
@@ -173,24 +226,53 @@ public sealed class ChatTurnProcessor
             return;
         }
 
-        var fullText = string.Concat(msg.Content
-            .Where(c => c.Type == "text" && c.Text != null)
-            .Select(c => c.Text));
-
-        if (fullText.Length > 0)
+        if (messageText.Length > 0)
         {
-            // A completed text block. We can't tell yet whether it's the answer or
-            // commentary, so buffer it. If we were already holding a text block, the
-            // arrival of this one means the previous was NOT the answer — fold it.
-            FlushPendingAsCommentary(ops);
-            _pendingText = fullText;
+            // A completed text block with no tool call in this message. Still can't tell
+            // whether it's the answer or commentary, so buffer it.
+            //
+            // If we were already holding text, this is NOT a demotion. Text followed by more
+            // text, with no tool call in between, is one answer arriving in several messages —
+            // which is what the CLI does when a reply spans stop-reason boundaries. Treating
+            // the earlier block as commentary hid the first half of every two-part answer
+            // inside the collapsed activity bubble and showed only the last part.
+            _pendingText = Combine(_pendingText, messageText);
             _pendingHasText = true;
         }
 
         Emit(ops);
     }
 
-    private void OnResult(ClaudeResultMessage result)
+    /// <summary>All the text blocks of a message, in order, concatenated.</summary>
+    private static string ConcatText(List<ClaudeContentBlock> content)
+        => string.Concat(content
+            .Where(c => c.Type == "text" && c.Text != null)
+            .Select(c => c.Text));
+
+    /// <summary>
+    /// Joins two text runs with a blank line, tolerating either being empty. Separate blocks
+    /// are separate paragraphs — concatenating them raw would run the last sentence of one
+    /// into the first heading of the next and break markdown rendering.
+    /// </summary>
+    private static string Combine(string first, string second)
+    {
+        if (first.Length == 0) return second;
+        if (second.Length == 0) return first;
+        return first + "\n\n" + second;
+    }
+
+    /// <summary>
+    /// Tools that stop the turn to ask the human something, rather than doing work.
+    ///
+    /// <c>AskUserQuestion</c> puts a question and its options on screen; <c>ExitPlanMode</c>
+    /// puts a plan up for approval. In both cases the agent has just written the context the
+    /// user needs to decide, so that text is posted visibly instead of being folded away.
+    /// Ordinary tools — Bash, Edit, Read — are work, and the text before them is commentary.
+    /// </summary>
+    private static bool IsHumanPrompt(string? toolName)
+        => toolName is "AskUserQuestion" or "ExitPlanMode";
+
+    internal void OnResult(ClaudeResultMessage result)
     {
         var ops = new List<ChatOp>
         {
@@ -214,7 +296,7 @@ public sealed class ChatTurnProcessor
     // feed the "N subagents · M background tasks" suffix on the working status line, so the
     // user can see what kind of work is still in flight even after the main agent's text
     // returns.
-    private void OnTaskEvent(ClaudeTaskEvent evt)
+    internal void OnTaskEvent(ClaudeTaskEvent evt)
     {
         var ops = new List<ChatOp>();
 
@@ -273,9 +355,7 @@ public sealed class ChatTurnProcessor
         if (msg.Model != null)
             report.Model = msg.Model;
 
-        var text = string.Concat(msg.Content
-            .Where(c => c.Type == "text" && c.Text != null)
-            .Select(c => c.Text));
+        var text = ConcatText(msg.Content);
         if (text.Length > 0)
             report.LatestText = text;
     }
@@ -307,14 +387,6 @@ public sealed class ChatTurnProcessor
             }
         }
         return new ActivityCountsOp(subagents, background, workflows);
-    }
-
-    private void FlushPendingAsCommentary(List<ChatOp> ops)
-    {
-        if (!_pendingHasText) return;
-        ops.Add(new CommentaryOp(_pendingText));
-        _pendingText = "";
-        _pendingHasText = false;
     }
 
     internal static string FormatToolInput(JsonElement input)

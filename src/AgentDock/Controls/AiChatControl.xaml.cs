@@ -492,6 +492,10 @@ public partial class AiChatControl : UserControl
                 RefreshWorkingStatus();
                 break;
             case FinalizeExecutionOp: break; // no-op — see TurnComplete
+            // Close the bubble mid-turn so the answer posted next sits below it, and the work
+            // that resumes after the user answers opens a fresh bubble below that. Reuses the
+            // turn-end path, which already drops the bubble when it has no entries.
+            case SealActivityOp: FinalizeActivity(null); break;
             case PostAnswerOp p: ApplyPostAnswer(p.Text); break;
             case TurnCompleteOp tc: ApplyTurnComplete(tc.Result); break;
         }

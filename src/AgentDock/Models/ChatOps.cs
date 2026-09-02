@@ -28,6 +28,7 @@ namespace AgentDock.Models;
 [System.Text.Json.Serialization.JsonDerivedType(typeof(AddSubagentReportOp), "subagentReport")]
 [System.Text.Json.Serialization.JsonDerivedType(typeof(ActivityCountsOp), "counts")]
 [System.Text.Json.Serialization.JsonDerivedType(typeof(FinalizeExecutionOp), "finExec")]
+[System.Text.Json.Serialization.JsonDerivedType(typeof(SealActivityOp), "sealActivity")]
 [System.Text.Json.Serialization.JsonDerivedType(typeof(PostAnswerOp), "answer")]
 [System.Text.Json.Serialization.JsonDerivedType(typeof(TurnCompleteOp), "turnComplete")]
 public abstract record ChatOp;
@@ -73,6 +74,20 @@ public sealed record ActivityCountsOp(int Subagents, int BackgroundTasks, int Wo
 
 /// <summary>Finalize the execution bubble into its immutable form.</summary>
 public sealed record FinalizeExecutionOp : ChatOp;
+
+/// <summary>
+/// Close off the turn's activity bubble mid-turn, so anything that follows starts a fresh
+/// one below whatever is posted next.
+///
+/// Emitted only before a prompt that stops and asks the human something (see
+/// <see cref="PostAnswerOp"/> and the AskUserQuestion / ExitPlanMode path in
+/// <c>ChatTurnProcessor</c>). Normally there is exactly one activity bubble per turn, and it
+/// is finalized at <see cref="TurnCompleteOp"/> — but a turn that parks on a question posts a
+/// visible answer bubble in the middle of itself, and the work that resumes afterwards would
+/// otherwise land in a bubble sitting *above* that text. Sealing keeps the transcript in the
+/// order things actually happened.
+/// </summary>
+public sealed record SealActivityOp : ChatOp;
 
 /// <summary>The buffered text block was the final answer (end-of-turn followed it).
 /// Post it as a standalone, always-shown assistant bubble.</summary>

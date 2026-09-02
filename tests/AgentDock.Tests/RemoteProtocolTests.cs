@@ -42,6 +42,7 @@ public class RemoteProtocolTests
         new AddSubagentReportOp("Explore", "claude-sonnet-5", "report body"),
         new ActivityCountsOp(2, 1, 0),
         new FinalizeExecutionOp(),
+        new SealActivityOp(),
         new PostAnswerOp("the answer"),
         new TurnCompleteOp(new ClaudeResultMessage
         {

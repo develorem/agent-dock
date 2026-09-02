@@ -179,6 +179,19 @@ The bubble body has a **bounded height with its own scrollbar**, so expanding it
 
 **Intermediate commentary folds into the activity bubble.** Text that arrives alongside tool calls ("Let me check that file…") isn't the answer, so it's collapsed. Only executions and the **final answer** — the last assistant text, with no tool calls after it — stay expanded.
 
+### Where each piece of text ends up
+
+Agent Dock decides by looking at what *follows* a block of text, which is the only way to tell narration from an answer:
+
+| Text is followed by… | So it is shown as |
+|----------------------|-------------------|
+| An ordinary tool call (Bash, Edit, Read…) | Commentary, folded into the collapsed activity bubble |
+| A question or a plan approval | A visible bubble — you need it to answer |
+| More text, with no tool call in between | The same answer, continued — the parts are joined |
+| The end of the turn | The final answer, as a standalone bubble |
+
+The third row matters when a long reply arrives in several pieces: all of it is one answer, and none of it is hidden.
+
 Content is **classified before it's placed**, so nothing appears and then jumps somewhere else. The trade-off, by design: the final answer appears complete when the turn finishes rather than typing out token by token. Tool executions still appear as they happen.
 
 ### The answer
@@ -238,6 +251,10 @@ When the agent asks a question (`AskUserQuestion`), the composer is replaced wit
 - a free-form text box for a custom answer, which accepts **multiple lines**
 
 Your answer is added to the transcript as a user message, so there's a record of what you chose.
+
+**Whatever the agent wrote leading up to the question stays visible** above it, as its own bubble — the findings, the trade-offs, the code it's asking about. That text is the reason the question is being asked, so it isn't folded into the collapsed activity bubble. The same applies to a plan put up for approval.
+
+Work that resumes after you answer opens a **new** activity bubble below that text, so the transcript reads in the order things happened.
 
 ---
 
