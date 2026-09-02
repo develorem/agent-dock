@@ -141,6 +141,11 @@
                                            Foreground="{DynamicResource MenuIconForeground}" />
                             </MenuItem.Icon>
                         </MenuItem>
+                        <!-- Recent workspaces. The items are inserted at runtime immediately
+                             after the header (see PopulateRecentWorkspacesMenu) — both the
+                             separator and the header hide when there are none. Anything added
+                             below must stay below the separator that follows, or it reads as
+                             one of the recent files. -->
                         <Separator x:Name="RecentWorkspacesSeparator" Visibility="Collapsed" />
                         <MenuItem x:Name="RecentWorkspacesHeader" Header="Recent Workspaces"
                                   IsEnabled="False" Visibility="Collapsed" />

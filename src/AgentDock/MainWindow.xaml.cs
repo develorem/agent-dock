@@ -4390,8 +4390,11 @@ public partial class MainWindow : Window
             RecentWorkspacesSeparator.Visibility = Visibility.Visible;
             RecentWorkspacesHeader.Visibility = Visibility.Visible;
 
-            // Insert recent items between RecentWorkspacesHeader and ExitSeparator
-            var insertIndex = FileMenu.Items.IndexOf(ExitSeparator);
+            // Insert directly after the header the items belong under. Anchoring to a
+            // trailing element instead (this used to insert before ExitSeparator) breaks the
+            // moment anything is added in between — the Remote submenu landed there, so the
+            // recent files rendered *below* it, reading as though Remote were one of them.
+            var insertIndex = FileMenu.Items.IndexOf(RecentWorkspacesHeader) + 1;
             foreach (var path in shown)
             {
                 var item = new MenuItem
