@@ -7,9 +7,6 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
-using AgentDock.Models;
-using AgentDock.Services;
-
 using AgentDock.Services.Abstractions;
 
 namespace AgentDock.Controls;
@@ -26,7 +23,6 @@ public partial class FileExplorerControl : UserControl
     /// </summary>
     public event Action? ProjectSettingsChanged;
 
-    private GitIgnoreFilter? _gitIgnoreFilter;
     private string _rootPath = string.Empty;
 
     /// <summary>
@@ -56,7 +52,6 @@ public partial class FileExplorerControl : UserControl
     public void LoadDirectory(string rootPath)
     {
         _rootPath = rootPath;
-        _gitIgnoreFilter = new GitIgnoreFilter(rootPath);
 
         // Toggle VS Code toolbar button visibility
         VsCodeButton.Visibility = AvailableTools.Contains("VS Code")
@@ -164,10 +159,17 @@ public partial class FileExplorerControl : UserControl
         return null;
     }
     /// <summary>
-    /// Re-reads the tree in place. Patches rather than rebuilding, so expansion state,
+    /// Re-reads the tree in place from disk. Patches rather than rebuilding, so expansion state,
     /// selection and scroll position survive — the collect-rebuild-restore version of this
-    /// flickered every time the agent touched a file, since it is wired to the git watcher.
+    /// flickered every time the agent touched a file.
     /// </summary>
+    /// <remarks>
+    /// This reports what is on disk and answers to nothing else. In particular it does not consult
+    /// git: a folder with no repository under it refreshes exactly like one that has a repository,
+    /// and a file the agent added shows up whether or not git has an opinion about it. The refresh
+    /// used to be driven off the git panel's status delta, which is why it silently did nothing in
+    /// both of those cases.
+    /// </remarks>
     public void Refresh() => RefreshIncremental();
 
     /// <summary>
@@ -179,15 +181,6 @@ public partial class FileExplorerControl : UserControl
     {
         if (parentNode.FullPath == null) return;
         SyncChildren(parentNode.Children, BuildLocalChildren(parentNode.FullPath));
-    }
-
-    private bool IsIgnored(string fullPath, bool isDirectory)
-    {
-        if (_gitIgnoreFilter == null)
-            return false;
-
-        var relativePath = Path.GetRelativePath(_rootPath, fullPath);
-        return _gitIgnoreFilter.IsIgnored(relativePath, isDirectory);
     }
 
     private void TreeViewItem_Expanded(object sender, RoutedEventArgs e)

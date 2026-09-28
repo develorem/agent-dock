@@ -14,8 +14,7 @@ namespace AgentDock.Services.Remote;
 /// <item><b>Size cap</b> — a client cannot make the server allocate an arbitrarily large frame
 /// by asking for a multi-gigabyte file.</item>
 /// </list>
-/// Listings reuse the server's own <see cref="GitIgnoreFilter"/>, so the remote tree hides
-/// exactly what the local tree hides.
+/// Listings are unfiltered, so the remote tree shows exactly what the local tree shows.
 /// </summary>
 public sealed class RemoteFileAccess(
     string projectRoot,
@@ -23,7 +22,6 @@ public sealed class RemoteFileAccess(
     IPerfDiagnostics perf)
 {
     private readonly string _root = Path.GetFullPath(projectRoot);
-    private readonly GitIgnoreFilter _ignoreFilter = new(projectRoot);
 
     /// <summary>Text files above this are served truncated rather than refused.</summary>
     private const int TextPreviewCap = 2 * 1024 * 1024;
@@ -96,17 +94,16 @@ public sealed class RemoteFileAccess(
         {
             var entries = new List<RemoteFileEntry>();
 
+            // Unfiltered, to match the local explorer: a remote file explorer is still a file
+            // explorer, and hiding ignored entries here would make the same file visible or
+            // invisible depending only on which machine the user happened to be sitting at.
+            // Containment and the size cap below are the security boundary; the ignore filter
+            // never was one.
             foreach (var dir in Directory.GetDirectories(full).OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
-            {
-                if (_ignoreFilter.IsIgnored(ToRelative(dir), isDirectory: true)) continue;
                 entries.Add(new RemoteFileEntry(Path.GetFileName(dir), ToRelative(dir), IsDirectory: true));
-            }
 
             foreach (var file in Directory.GetFiles(full).OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
-            {
-                if (_ignoreFilter.IsIgnored(ToRelative(file), isDirectory: false)) continue;
                 entries.Add(new RemoteFileEntry(Path.GetFileName(file), ToRelative(file), IsDirectory: false));
-            }
 
             return new DirectoryListingMsg(projectId, requestId, relativePath, entries, null);
         }

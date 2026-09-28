@@ -287,7 +287,7 @@ wrong one for anything trust-related.
 
 | Key | Type | Scope | | Notes |
 |---|---|---|---|---|
-| `explorer.respectGitignore` | bool | project | + | `GitIgnoreFilter` exists, no toggle |
+| `explorer.respectGitignore` | bool | project | + | Explorer lists everything on disk; filtering removed |
 | `explorer.showHiddenFiles` | bool | project | + | |
 | `explorer.excludeGlobs` | array | project | + | Array **replaces**, never merges |
 | `git.refreshIntervalSeconds` | int | project | + | |

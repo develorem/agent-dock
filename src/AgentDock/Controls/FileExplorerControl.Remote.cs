@@ -10,9 +10,8 @@ namespace AgentDock.Controls;
 ///
 /// <b>Incremental patching.</b> <c>Refresh</c> used to clear the tree, rebuild it, and then try to
 /// put the expansion state back — the collect-rebuild-restore dance is the tell that a wholesale
-/// rebuild destroys UI state. Because it is wired to the git watcher, the agent editing files made
-/// the local tree flicker. Patching in place fixes that for the local case and is a precondition
-/// for the remote one.
+/// rebuild destroys UI state, and the agent editing files made the local tree flicker. Patching in
+/// place fixes that for the local case and is a precondition for the remote one.
 ///
 /// <b>Remote mode.</b> Children arrive from the server instead of the disk, fetched when a node is
 /// expanded and then pinned, so the replica stays proportional to what the user is looking at
@@ -125,7 +124,14 @@ public partial class FileExplorerControl
             RefreshExpandedRecursive(child);
     }
 
-    /// <summary>Builds the child nodes for one directory from disk, gitignore-filtered.</summary>
+    /// <summary>
+    /// Builds the child nodes for one directory from disk. Unfiltered: this panel is a file
+    /// explorer, so it lists what the directory actually contains. It used to run every entry
+    /// through the project's .gitignore, which meant anything the repository ignored — build
+    /// output, logs, artifacts, and in practice a good share of what an agent generates — was
+    /// invisible here no matter how often the tree refreshed. Hiding a file the agent just wrote
+    /// is a worse failure than a noisy root.
+    /// </summary>
     private List<FileNode> BuildLocalChildren(string directoryPath)
     {
         var result = new List<FileNode>();
@@ -135,7 +141,6 @@ public partial class FileExplorerControl
             var info = new DirectoryInfo(directoryPath);
 
             foreach (var dir in info.GetDirectories()
-                         .Where(d => !IsIgnored(d.FullName, isDirectory: true))
                          .OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase))
             {
                 var node = new FileNode(_theme)
@@ -150,7 +155,6 @@ public partial class FileExplorerControl
             }
 
             foreach (var file in info.GetFiles()
-                         .Where(f => !IsIgnored(f.FullName, isDirectory: false))
                          .OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase))
             {
                 result.Add(new FileNode(_theme)

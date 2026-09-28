@@ -2728,9 +2728,6 @@ public partial class MainWindow : Window
             fileExplorerControl.RevealAndSelect(path);
         };
 
-        // Refresh file explorer when file system changes (reuses git status watcher)
-        gitStatusControl.FileSystemChanged += () => fileExplorerControl.Refresh();
-
         var aiChatControl = new AiChatControl(
             _log, _perf, _theme, _projectSettings, _accounts,
             _sessionFactory, _claudeEnvironment, _markdown, _images);
@@ -2744,10 +2741,38 @@ public partial class MainWindow : Window
             aiChatControl.Initialize(project.FolderPath);
         }
 
-        // Refresh git status when Claude finishes working (transitions to Idle)
+        // The explorer and the git panel answer two different questions — "what is on disk" and
+        // "what has changed against HEAD" — so they get two independent subscriptions. They are
+        // deliberately NOT one handler with two calls: the explorer must not inherit any of the
+        // git panel's preconditions, of which there are several (it is a no-op without a
+        // repository, and on a non-active tab).
+        //
+        // The explorer's tree is whatever the directory walk finds, so refresh it whenever a turn
+        // comes to rest, unconditionally. It used to be driven by gitStatusControl's
+        // FileSystemChanged, which despite the name is a git-status *delta* event, not a
+        // filesystem one — it fires only when the set of status rows changes. That coupling made
+        // the tree miss exactly the cases the explorer exists to show: a folder with no
+        // repository under it (the watcher is never even started), a file rewritten while already
+        // listed as modified, and the last change being committed away.
+        //
+        // WaitingForPermission counts as coming to rest: a turn parked on a question or a
+        // permission prompt has usually already written the files the user is about to look for.
+        //
+        // Remote explorers are excluded — the host pushes invalidations for the directories the
+        // client pinned (see FileExplorerControl.ApplyRemoteInvalidation), and refreshing from
+        // here would only re-list the root.
         aiChatControl.SessionStateChanged += state =>
         {
-            if (state == ClaudeSessionState.Idle)
+            if (IsTurnAtRest(state) && !fileExplorerControl.IsRemote)
+                fileExplorerControl.Refresh();
+        };
+
+        // Refresh git status on the same trigger, but on its own subscription. This one is a
+        // no-op when the folder is not a repository, which is precisely why the explorer above
+        // does not share a code path with it.
+        aiChatControl.SessionStateChanged += state =>
+        {
+            if (IsTurnAtRest(state))
                 gitStatusControl.RefreshStatus();
         };
 
@@ -2906,6 +2931,18 @@ public partial class MainWindow : Window
         _log.Info("CreateDockingLayout: complete");
         return (dockingManager, aiChatControl, gitStatusControl, descriptionControl, todoListControl);
     }
+
+    /// <summary>
+    /// True once a turn has stopped running and the agent's writes have landed on disk. Covers the
+    /// ways a turn can stop, not just the happy one: a turn that errored or whose session exited
+    /// has usually still written files, and a turn parked on a question or permission prompt has
+    /// too. Panels that mirror disk state refresh on this.
+    /// </summary>
+    private static bool IsTurnAtRest(ClaudeSessionState state) =>
+        state is ClaudeSessionState.Idle
+            or ClaudeSessionState.WaitingForPermission
+            or ClaudeSessionState.Exited
+            or ClaudeSessionState.Error;
 
     private void BuildDefaultLayout(
         DockingManager dockingManager,
