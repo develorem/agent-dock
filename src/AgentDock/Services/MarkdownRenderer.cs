@@ -70,6 +70,13 @@ public sealed partial class MarkdownRenderer(ILogService log, IPerfDiagnostics p
     [GeneratedRegex(@"\Ghttps?://[^\s<>""'`()\[\]{}|\\^*]+", RegexOptions.IgnoreCase)]
     private static partial Regex UrlCandidateRegex();
 
+    // Bare URL inside a fenced code block. Unanchored (UrlCandidateRegex is \G-anchored for the
+    // LinkifyPaths scanner and can't be used with Matches), and more permissive: nothing inside a
+    // fence is markdown, so parens and brackets don't need excluding to keep generated markdown
+    // well-formed. Trailing sentence punctuation is still trimmed via TrimUrlTrailing.
+    [GeneratedRegex(@"https?://[^\s<>""'`|\\^]+", RegexOptions.IgnoreCase)]
+    private static partial Regex CodeUrlRegex();
+
     public const string FileLinkScheme = "agentdock-file";
     private const string FileLinkPrefix = "agentdock-file:///";
 
@@ -188,9 +195,28 @@ public sealed partial class MarkdownRenderer(ILogService log, IPerfDiagnostics p
         => LeadingVersionHeadingRegex().Replace(markdown, "", 1);
 
     /// <summary>
-    /// Applies theme colors to fenced code blocks in a rendered MdXaml FlowDocument.
-    /// MdXaml renders these as BlockUIContainer containing an AvalonEdit TextEditor
-    /// with default (white) colors.
+    /// Replaces every fenced code block in a rendered MdXaml FlowDocument with an equivalent
+    /// native <see cref="Paragraph"/>.
+    ///
+    /// WHY: MdXaml renders a fence as a <see cref="BlockUIContainer"/> hosting an AvalonEdit
+    /// <see cref="TextEditor"/>, and that one choice caused three separate user-visible defects.
+    /// A BlockUIContainer is a UI island, so each fence owned its own independent text selection
+    /// — four consecutive code blocks could not be selected and copied as one, because the
+    /// document's selection cannot reach inside them. Each editor also brought its own
+    /// ScrollViewer, so a long line (a URL, typically) produced a horizontal scrollbar *per
+    /// block* instead of wrapping. And AvalonEdit auto-linkifies URLs using its own
+    /// <c>LinkTextForegroundBrush</c>, which defaults to a hardcoded <see cref="Brushes.Blue"/>
+    /// that nothing here ever overrode — near-black on a dark theme, while every theme already
+    /// defines a readable <c>MarkdownLinkForeground</c> that ordinary links outside fences use.
+    ///
+    /// A native Paragraph is part of the document's own text flow, which fixes all three at once:
+    /// selection spans freely across fences and the prose between them, text wraps instead of
+    /// scrolling, and links are real <see cref="Hyperlink"/>s picking up the theme brush.
+    ///
+    /// Nothing is lost in the swap: the chat never assigned <c>SyntaxHighlighting</c> to these
+    /// editors (only <c>FilePreviewControl</c> does, on its own editor), so the TextEditor was
+    /// only ever acting as a monospace text box. Dropping it also takes a live AvalonEdit control
+    /// per code block out of the visual tree — see the instrumentation note in BuildDocument.
     /// </summary>
     public void ApplyCodeBlockTheme(FlowDocument? doc)
     {
@@ -199,9 +225,112 @@ public sealed partial class MarkdownRenderer(ILogService log, IPerfDiagnostics p
         var codeBg = theme.GetBrush("MarkdownCodeBackground");
         var codeFg = theme.GetBrush("PreviewForeground");
 
-        foreach (var block in doc.Blocks)
-            ApplyCodeBlockStyle(block, codeBg, codeFg);
+        ConvertCodeBlocksInBlocks(doc.Blocks, codeBg, codeFg);
     }
+
+    private void ConvertCodeBlocksInBlocks(BlockCollection blocks, Brush bg, Brush fg)
+    {
+        // Snapshot first: the collection is mutated (insert/remove) while walking it, exactly
+        // as ConvertTablesInBlocks does.
+        foreach (var block in blocks.ToList())
+        {
+            switch (block)
+            {
+                case BlockUIContainer { Child: TextEditor editor }:
+                    blocks.InsertAfter(block, BuildCodeParagraph(editor.Text, bg, fg));
+                    blocks.Remove(block);
+                    break;
+                case Section section:
+                    ConvertCodeBlocksInBlocks(section.Blocks, bg, fg);
+                    break;
+                case List list:
+                    foreach (var item in list.ListItems)
+                        ConvertCodeBlocksInBlocks(item.Blocks, bg, fg);
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Builds the native replacement for one fenced code block. Newlines become explicit
+    /// <see cref="LineBreak"/>s (a Run renders embedded newlines as nothing), and bare URLs
+    /// become themed, clickable <see cref="Hyperlink"/>s.
+    /// </summary>
+    private Paragraph BuildCodeParagraph(string text, Brush bg, Brush fg)
+    {
+        var paragraph = new Paragraph
+        {
+            FontFamily = CodeFontFamily,
+            FontSize = 11.9,
+            Background = bg,
+            Foreground = fg,
+            Padding = new Thickness(8, 6, 8, 6),
+            Margin = new Thickness(0, 4, 0, 4),
+        };
+
+        // MdXaml hands back the fence body; drop the trailing newline it usually carries so the
+        // block doesn't render with a blank last line.
+        var lines = text.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (i > 0) paragraph.Inlines.Add(new LineBreak());
+            AppendCodeLine(paragraph, lines[i]);
+        }
+
+        return paragraph;
+    }
+
+    /// <summary>Appends one line of code text, splitting bare URLs out as hyperlinks.</summary>
+    private void AppendCodeLine(Paragraph paragraph, string line)
+    {
+        var cursor = 0;
+
+        foreach (Match match in CodeUrlRegex().Matches(line))
+        {
+            var url = TrimUrlTrailing(match.Value);
+            if (url.Length == 0) continue;
+
+            if (match.Index > cursor)
+                paragraph.Inlines.Add(new Run(line[cursor..match.Index]));
+
+            paragraph.Inlines.Add(BuildCodeLink(url));
+            cursor = match.Index + url.Length;
+        }
+
+        if (cursor < line.Length)
+            paragraph.Inlines.Add(new Run(line[cursor..]));
+    }
+
+    private Hyperlink BuildCodeLink(string url)
+    {
+        var link = new Hyperlink(new Run(url))
+        {
+            // The one record of the link's target on the Hyperlink itself, which is what
+            // GetLinkTarget reads when a copied selection is rewritten as markdown. Matches
+            // where MdXaml puts it, so EnableMarkdownLinkCopy needs no special case.
+            CommandParameter = url,
+            Cursor = Cursors.Hand,
+            TextDecorations = null,
+        };
+
+        // A resource reference rather than a fixed brush, so the link recolors with the theme.
+        link.SetResourceReference(Hyperlink.ForegroundProperty, "MarkdownLinkForeground");
+
+        // Wired here rather than left to WireLinks, because RenderTo (the file-preview path)
+        // never calls WireLinks — it relies on the CommandBinding MdXaml installs, which these
+        // hand-built links do not have. WireLinks skips anything carrying this flag, so the
+        // BuildDocument path doesn't end up opening the browser twice per click.
+        link.SetValue(CodeLinkWiredProperty, true);
+        link.Click += (_, _) => OpenInBrowser(url);
+
+        return link;
+    }
+
+    // Marks a Hyperlink this class built and already attached a click handler to.
+    private static readonly DependencyProperty CodeLinkWiredProperty =
+        DependencyProperty.RegisterAttached(
+            "CodeLinkWired", typeof(bool), typeof(MarkdownRenderer), new PropertyMetadata(false));
 
     /// <summary>
     /// Convenience method: pre-processes markdown, sets it on the viewer,
@@ -757,29 +886,6 @@ public sealed partial class MarkdownRenderer(ILogService log, IPerfDiagnostics p
         }
     }
 
-    private void ApplyCodeBlockStyle(
-        Block block, System.Windows.Media.Brush bg, System.Windows.Media.Brush fg)
-    {
-        if (block is BlockUIContainer container && container.Child is TextEditor editor)
-        {
-            editor.Background = bg;
-            editor.Foreground = fg;
-            return;
-        }
-
-        if (block is Section section)
-        {
-            foreach (var child in section.Blocks)
-                ApplyCodeBlockStyle(child, bg, fg);
-        }
-        else if (block is List list)
-        {
-            foreach (var item in list.ListItems)
-                foreach (var child in item.Blocks)
-                    ApplyCodeBlockStyle(child, bg, fg);
-        }
-    }
-
     /// <summary>
     /// Rewrites references in <paramref name="markdown"/> as markdown links.
     /// File-path references that resolve to an existing file (under
@@ -921,6 +1027,11 @@ public sealed partial class MarkdownRenderer(ILogService log, IPerfDiagnostics p
         if (doc == null) return;
         foreach (var link in EnumerateHyperlinks(doc))
         {
+            // Links built by BuildCodeLink already carry a click handler (they have to, because
+            // the file-preview path never reaches WireLinks). Wiring them again would open the
+            // browser twice per click.
+            if ((bool)link.GetValue(CodeLinkWiredProperty)) continue;
+
             // MdXaml does NOT set NavigateUri on the hyperlinks it generates. It stores the
             // target in CommandParameter and sets Command = NavigationCommands.GoToPage. We
             // host the built document by assigning FlowDocumentScrollViewer.Document directly
