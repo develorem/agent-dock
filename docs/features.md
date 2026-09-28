@@ -1,6 +1,6 @@
 # Features
 
-**Features** · [Workspace](workspace.md) · [Groups](groups.md) · [Projects](projects.md) · [Panels](project-features.md) · [AI Chat](ai-chat.md) · [Accounts](accounts.md) · [Remote Sessions](remote-sessions.md) · [Settings](settings.md)
+**Features** · [Workspace](workspace.md) · [Groups](groups.md) · [Projects](projects.md) · [Panels](project-features.md) · [AI Chat](ai-chat.md) · [Accounts](accounts.md) · [Remote Sessions](remote-sessions.md) · [Autopilot](autopilot.md) · [Settings](settings.md)
 
 ---
 
@@ -58,6 +58,12 @@ Hold more than one Claude login, pick which one a session signs in as, and see e
 Host this machine's live sessions for a second copy of Agent Dock on another machine, and drive them from there — chat, files, git and diffs all come from the host. TLS with a pinned certificate, an eight-character pairing code, one driver at a time.
 
 [Remote Sessions →](remote-sessions.md)
+
+## Autopilot
+
+Between times you choose, sessions you choose are nudged to carry on by themselves whenever they come to rest with nothing waiting on you. It scales what it asks for to the quota left, sends nothing below 5%, never answers a permission or a question for you, and parks a session that says three times running it has nothing left to do.
+
+[Autopilot →](autopilot.md)
 
 ## Themes
 

@@ -194,6 +194,63 @@ public partial class AiChatControl : UserControl
     /// </summary>
     public bool HasBackgroundWork => _session?.HasBackgroundWork ?? false;
 
+    /// <summary>
+    /// Running total of tool-use blocks this session has emitted. Autopilot reads it before and
+    /// after a nudge to tell a turn that did work from one that answered "nothing to do" — the
+    /// latter is the loop it has to break out of, and a turn that touched no tools is the only
+    /// reliable signal of it that does not involve reading the agent's prose.
+    /// </summary>
+    public long ToolUseCount => Interlocked.Read(ref _toolUseCount);
+
+    private long _toolUseCount;
+
+    /// <summary>
+    /// Running total of messages the user sent by hand. Autopilot watches this to notice a human
+    /// has arrived: anything it had concluded about a session stops being true once someone gives
+    /// it fresh instructions. Deliberately not incremented by autopilot's own sends.
+    /// </summary>
+    public long HumanMessageCount { get; private set; }
+
+    /// <summary>
+    /// True while this panel is waiting on a human — a permission request or an
+    /// <see cref="AskUserQuestion"/>-style prompt. Autopilot must never satisfy either: answering a
+    /// permission grant or a design question on the user's behalf is exactly the authority it was
+    /// not given.
+    /// </summary>
+    public bool HasPendingPrompt =>
+        _pendingQuestionText != null
+        || QuestionPanel.Visibility == Visibility.Visible
+        || PermissionPanel.Visibility == Visibility.Visible;
+
+    /// <summary>
+    /// True when nothing is queued ahead of a nudge. A non-empty queue means the user has already
+    /// decided what this session does next, and autopilot does not get to jump that.
+    /// </summary>
+    public bool IsSendQueueEmpty => _queue.IsEmpty;
+
+    /// <summary>
+    /// Sends an autopilot nudge, preceded by a system line naming it as one.
+    ///
+    /// The notice matters more than it looks: the whole point of reading the transcript in the
+    /// morning is working out which turns you asked for and which the machine started by itself,
+    /// and a nudge that renders as an ordinary user message is indistinguishable from one you typed
+    /// before going to bed.
+    ///
+    /// Goes through the send queue rather than straight to <c>Dispatch</c>, so it obeys the same
+    /// FIFO rule as everything else — if the user is mid-send at that instant, their message wins.
+    /// </summary>
+    public void SendAutopilotNudge(string text, string notice)
+    {
+        if (_session == null || IsRemote) return;
+
+        AddSystemMessage(notice);
+
+        if (_session.State == ClaudeSessionState.Idle && _queue.IsEmpty)
+            Dispatch(text, [], null);
+        else
+            _queue.Enqueue(new QueuedMessage { Text = text, Attachments = [] });
+    }
+
     private readonly ILogService _log;
     private readonly IPerfDiagnostics _perf;
     private readonly IThemeService _theme;
@@ -444,6 +501,21 @@ public partial class AiChatControl : UserControl
         _session.ProcessExited += code => Post(() => OnProcessExited(code));
         _session.InactivityTimeout += () => Post(OnInactivityTimeout);
         _session.BackgroundWorkChanged += () => Post(() => SessionBackgroundWorkChanged?.Invoke());
+
+        // Counted off the raw session stream rather than the classified transcript ops, because the
+        // question autopilot asks is "did this turn do anything", and a subagent's tool calls count
+        // towards that just as much as the main agent's — the ops deliberately keep subagent-internal
+        // activity out of the top-level transcript.
+        // Applied with Interlocked on the read-loop thread rather than posted to the dispatcher like
+        // everything else here. The counter is read synchronously by autopilot alongside
+        // CurrentState, which is also read straight off the session — so a posted increment could
+        // still be sitting in the dispatcher queue when a turn is graded, and a turn that did real
+        // work would be scored as having done none.
+        _session.AssistantMessageReceived += msg =>
+        {
+            var tools = msg.Content.Count(b => b.Type == "tool_use");
+            if (tools > 0) Interlocked.Add(ref _toolUseCount, tools);
+        };
 
         // Transcript classification (thinking / commentary / execution / answer)
         // runs on the session's background read-loop thread via the processor — no
@@ -748,10 +820,18 @@ public partial class AiChatControl : UserControl
 
     // --- Slash Command Autocomplete ---
 
+    /// <summary>
+    /// Raised while the user is typing into the composer. Autopilot listens so a nudge that is
+    /// seconds from firing steps back rather than landing on top of someone who is clearly about to
+    /// say something themselves.
+    /// </summary>
+    public event Action? ComposerActivity;
+
     private void InputBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         var text = InputBox.Text;
         UpdateComposerButtons();
+        ComposerActivity?.Invoke();
 
         if (!text.StartsWith('/') || text.Any(char.IsWhiteSpace))
         {
@@ -894,6 +974,11 @@ public partial class AiChatControl : UserControl
         var hasImages = PendingAttachments.Count > 0;
         if (string.IsNullOrEmpty(text) && !hasImages)
             return;
+
+        // Counted before the local-command and empty-session early-returns below: autopilot reads
+        // this only to notice that a human is present, and someone typing /clear is as present as
+        // someone typing a paragraph.
+        HumanMessageCount++;
 
         // Local commands are handled regardless of session state and are never queued;
         // consume the input. Images force a real send — a slash command can't carry them.
@@ -1645,6 +1730,11 @@ public partial class AiChatControl : UserControl
 
     private void SubmitQuestionAnswer(string answer)
     {
+        // Answering a question is a human at the keyboard just as much as typing a message is, and
+        // it is the more meaningful of the two for autopilot: a session that was parked and has now
+        // had a design question answered has been handed a direction it did not have before.
+        HumanMessageCount++;
+
         if (TryAnswerQuestionRemote(_pendingQuestionText ?? "", answer)) return;
 
         if (_session == null || _pendingQuestionText == null)

@@ -1,6 +1,6 @@
 # Settings
 
-[Features](features.md) · [Workspace](workspace.md) · [Groups](groups.md) · [Projects](projects.md) · [Panels](project-features.md) · [AI Chat](ai-chat.md) · [Accounts](accounts.md) · [Remote Sessions](remote-sessions.md) · **Settings**
+[Features](features.md) · [Workspace](workspace.md) · [Groups](groups.md) · [Projects](projects.md) · [Panels](project-features.md) · [AI Chat](ai-chat.md) · [Accounts](accounts.md) · [Remote Sessions](remote-sessions.md) · [Autopilot](autopilot.md) · **Settings**
 
 ---
 
@@ -13,6 +13,8 @@ Agent Dock has three levels of settings, each stored somewhere different:
 | **Project** | Right-click a tab → Project Settings… | `.agentdock/settings.json` inside the project folder | That one project |
 
 The narrower level wins. A workspace's theme overrides the app default theme.
+
+**Settings → Set Mode** is not one of those levels — it isn't a preference but a switch between the four things this copy of Agent Dock can be doing right now: **Standard**, [**Server Mode**](remote-sessions.md), [**Autopilot**](autopilot.md) and [**Remote**](remote-sessions.md). Only one is ever in force, and the title bar names it. Autopilot's own schedule is stored at app level, so a repeating one survives a restart.
 
 **Contents**
 

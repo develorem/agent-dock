@@ -1,6 +1,6 @@
 # AI Chat
 
-[Features](features.md) · [Workspace](workspace.md) · [Groups](groups.md) · [Projects](projects.md) · [Panels](project-features.md) · **AI Chat** · [Accounts](accounts.md) · [Remote Sessions](remote-sessions.md) · [Settings](settings.md)
+[Features](features.md) · [Workspace](workspace.md) · [Groups](groups.md) · [Projects](projects.md) · [Panels](project-features.md) · **AI Chat** · [Accounts](accounts.md) · [Remote Sessions](remote-sessions.md) · [Autopilot](autopilot.md) · [Settings](settings.md)
 
 ---
 

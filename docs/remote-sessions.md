@@ -1,6 +1,6 @@
 # Remote Sessions
 
-[Features](features.md) · [Workspace](workspace.md) · [Groups](groups.md) · [Projects](projects.md) · [Panels](project-features.md) · [AI Chat](ai-chat.md) · [Accounts](accounts.md) · **Remote Sessions** · [Settings](settings.md)
+[Features](features.md) · [Workspace](workspace.md) · [Groups](groups.md) · [Projects](projects.md) · [Panels](project-features.md) · [AI Chat](ai-chat.md) · [Accounts](accounts.md) · **Remote Sessions** · [Autopilot](autopilot.md) · [Settings](settings.md)
 
 ---
 
@@ -26,10 +26,14 @@ Typical use: your desktop is mid-task on four projects, and you want to keep dri
 
 | Role | What it means | Where you start it |
 |------|---------------|--------------------|
-| **Server** (host) | This machine runs the agents and publishes them | **File → Remote → Enter Server Mode…** |
-| **Client** (remote) | This machine drives the other one's sessions | **File → Remote → Connect to Server…** |
+| **Server** (host) | This machine runs the agents and publishes them | **Settings → Set Mode → Server Mode…** |
+| **Client** (remote) | This machine drives the other one's sessions | **Settings → Set Mode → Remote…** |
 
-The two are mutually exclusive. A machine that is hosting cannot connect out, and a machine that is connected cannot host — the menu items disable each other, and trying anyway explains why.
+Both are modes, alongside Standard and [Autopilot](autopilot.md), and only one can be in force at a time. Choosing one leaves the current one for you, so you don't have to stop hosting before you can connect out. The title bar always names the mode you're in.
+
+**File → Remote** still holds the same two entries plus the operational commands that aren't mode switches — Stop Server, Regenerate Pairing Code, Take Back Control, Disconnect.
+
+Remote is the only mode that can end without you choosing to leave it: the link drops, or the host takes back control, and the machine falls back to Standard on its own.
 
 Only the **hosting** machine needs an agent installed and a Claude login. The client needs neither.
 

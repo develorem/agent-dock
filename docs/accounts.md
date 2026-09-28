@@ -1,6 +1,6 @@
 # Accounts, Usage & Cost
 
-[Features](features.md) · [Workspace](workspace.md) · [Groups](groups.md) · [Projects](projects.md) · [Panels](project-features.md) · [AI Chat](ai-chat.md) · **Accounts** · [Remote Sessions](remote-sessions.md) · [Settings](settings.md)
+[Features](features.md) · [Workspace](workspace.md) · [Groups](groups.md) · [Projects](projects.md) · [Panels](project-features.md) · [AI Chat](ai-chat.md) · **Accounts** · [Remote Sessions](remote-sessions.md) · [Autopilot](autopilot.md) · [Settings](settings.md)
 
 ---
 

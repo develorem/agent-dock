@@ -261,6 +261,10 @@ public partial class MainWindow : Window
         // Start fetching Claude Code plan usage for the title bar indicator
         Loaded += (_, _) => InitializeUsageIndicator();
 
+        // Autopilot's saved schedule is read before the remote wiring, so that the mode menu and
+        // badge RefreshRemoteUi paints below already know what the window it describes is.
+        InitializeAutopilot();
+
         // Remote roles are wired last so the status strip and menu reflect any state the
         // services already hold.
         InitializeRemote();
@@ -2741,6 +2745,8 @@ public partial class MainWindow : Window
             aiChatControl.Initialize(project.FolderPath);
         }
 
+        WireAutopilot(project, aiChatControl);
+
         // The explorer and the git panel answer two different questions — "what is on disk" and
         // "what has changed against HEAD" — so they get two independent subscriptions. They are
         // deliberately NOT one handler with two calls: the explorer must not inherit any of the
@@ -4674,6 +4680,16 @@ public partial class MainWindow : Window
         public string? ConfigDir;                   // null = ~/.claude
         public UsageFetchResult? LastResult;
         public UsageSummary? LastSuccess;
+
+        /// <summary>
+        /// When <see cref="LastSuccess"/> was actually obtained — which is not when it was last
+        /// asked for. The display is happy to show an old figure indefinitely while refreshes fail,
+        /// but autopilot gates real decisions on this number, and "we tried ten seconds ago" says
+        /// nothing about how old the answer is. A token that went stale at 23:05 would otherwise let
+        /// a four-hour-old quota reading authorise a nudge at 03:00.
+        /// </summary>
+        public DateTime? LastSuccessAt;
+
         public DateTime? RetryAfterUtc;             // set on HTTP 429 — don't re-fetch until this passes
     }
 
@@ -4779,6 +4795,7 @@ public partial class MainWindow : Window
             if (result.Status == UsageFetchStatus.Success && result.Summary != null)
             {
                 acct.LastSuccess = result.Summary;
+                acct.LastSuccessAt = DateTime.Now;
                 acct.RetryAfterUtc = null;
             }
             else if (result.Status == UsageFetchStatus.RateLimited)

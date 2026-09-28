@@ -1,6 +1,6 @@
 # Panels
 
-[Features](features.md) · [Workspace](workspace.md) · [Groups](groups.md) · [Projects](projects.md) · **Panels** · [AI Chat](ai-chat.md) · [Accounts](accounts.md) · [Remote Sessions](remote-sessions.md) · [Settings](settings.md)
+[Features](features.md) · [Workspace](workspace.md) · [Groups](groups.md) · [Projects](projects.md) · **Panels** · [AI Chat](ai-chat.md) · [Accounts](accounts.md) · [Remote Sessions](remote-sessions.md) · [Autopilot](autopilot.md) · [Settings](settings.md)
 
 ---
 
