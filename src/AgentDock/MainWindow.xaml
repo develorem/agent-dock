@@ -83,6 +83,7 @@
                     <ColumnDefinition Width="Auto" /> <!-- Menu -->
                     <ColumnDefinition Width="Auto" /> <!-- Add button -->
                     <ColumnDefinition Width="*" />    <!-- Title (fills) -->
+                    <ColumnDefinition Width="Auto" /> <!-- Mode badge -->
                     <ColumnDefinition Width="Auto" /> <!-- Usage indicator -->
                     <ColumnDefinition Width="Auto" /> <!-- Total cost -->
                     <ColumnDefinition Width="Auto" /> <!-- Minimize -->
@@ -184,6 +185,29 @@
                         </MenuItem>
                     </MenuItem>
                     <MenuItem Header="S_ettings">
+                        <!-- Set Mode. Exactly one of these is in force at a time, so they read as
+                             a radio group rather than four independent switches. The tick is
+                             driven from MainWindow.Modes.RefreshModeUi rather than by the click,
+                             because Remote can end without anyone choosing to leave it. -->
+                        <MenuItem Header="Set _Mode">
+                            <MenuItem.Icon>
+                                <TextBlock Text="&#xE9CE;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                           Foreground="{DynamicResource MenuIconForeground}" />
+                            </MenuItem.Icon>
+                            <MenuItem x:Name="ModeStandardItem" Header="_Standard"
+                                      IsCheckable="True" IsChecked="True"
+                                      Click="SetModeStandard_Click" />
+                            <MenuItem x:Name="ModeServerItem" Header="Se_rver Mode..."
+                                      IsCheckable="True"
+                                      Click="SetModeServer_Click" />
+                            <MenuItem x:Name="ModeAutopilotItem" Header="_Autopilot..."
+                                      IsCheckable="True"
+                                      Click="SetModeAutopilot_Click" />
+                            <MenuItem x:Name="ModeRemoteItem" Header="R_emote..."
+                                      IsCheckable="True"
+                                      Click="SetModeRemote_Click" />
+                        </MenuItem>
+                        <Separator />
                         <MenuItem Header="_Workspace Settings..." Click="WorkspaceSettings_Click">
                             <MenuItem.Icon>
                                 <TextBlock Text="&#xE821;" FontFamily="Segoe MDL2 Assets" FontSize="12"
@@ -287,7 +311,7 @@
                      a room and from a glance at a maximised window: the status strip at the
                      bottom edge is exactly where someone returning to the machine won't look.
                      Clicking it leaves whichever mode is live. -->
-                <Button x:Name="RemoteModeBadge" Grid.Column="4"
+                <Button x:Name="ModeBadge" Grid.Column="5"
                         Visibility="Collapsed"
                         HorizontalAlignment="Right"
                         VerticalAlignment="Center"
@@ -295,7 +319,7 @@
                         Margin="0,0,10,0"
                         Padding="9,0"
                         Cursor="Hand"
-                        Click="ExitRemoteMode_Click"
+                        Click="ModeBadge_Click"
                         WindowChrome.IsHitTestVisibleInChrome="True">
                     <Button.Template>
                         <ControlTemplate TargetType="{x:Type Button}">
@@ -323,7 +347,7 @@
                                    VerticalAlignment="Center"
                                    Foreground="{DynamicResource RemoteBadgeForeground}"
                                    Margin="0,0,6,0" />
-                        <TextBlock x:Name="RemoteModeBadgeText"
+                        <TextBlock x:Name="ModeBadgeText"
                                    Text="SERVER MODE"
                                    FontSize="10"
                                    FontWeight="Bold"
@@ -333,7 +357,7 @@
                 </Button>
 
                 <!-- Usage indicator (5-hour session — click for details) -->
-                <Button x:Name="UsageButton" Grid.Column="5"
+                <Button x:Name="UsageButton" Grid.Column="6"
                         Click="UsageButton_Click"
                         ToolTip="Click for full Claude Code usage details"
                         Height="26"
@@ -408,7 +432,7 @@
                 </Popup>
 
                 <!-- Total cost across all projects -->
-                <TextBlock x:Name="TotalCostText" Grid.Column="6"
+                <TextBlock x:Name="TotalCostText" Grid.Column="7"
                            Text=""
                            FontSize="11"
                            Foreground="{DynamicResource TitleBarForeground}"
@@ -416,7 +440,7 @@
                            Margin="0,0,8,0" />
 
                 <!-- Window buttons (right side) -->
-                <Button Grid.Column="7"
+                <Button Grid.Column="8"
                         Style="{StaticResource TitleBarButtonStyle}"
                         Click="MinimizeButton_Click"
                         ToolTip="Minimize"
@@ -427,7 +451,7 @@
                                Foreground="{DynamicResource TitleBarForeground}" />
                 </Button>
 
-                <Button x:Name="MaximizeButton" Grid.Column="8"
+                <Button x:Name="MaximizeButton" Grid.Column="9"
                         Style="{StaticResource TitleBarButtonStyle}"
                         Click="MaximizeButton_Click"
                         ToolTip="Maximize"
@@ -439,7 +463,7 @@
                                Foreground="{DynamicResource TitleBarForeground}" />
                 </Button>
 
-                <Button Grid.Column="9"
+                <Button Grid.Column="10"
                         Style="{StaticResource TitleBarCloseButtonStyle}"
                         Click="CloseButton_Click"
                         ToolTip="Close"
@@ -501,7 +525,7 @@
                                         FontWeight="Bold"
                                         Padding="8,1"
                                         Cursor="Hand"
-                                        Click="ExitRemoteMode_Click">
+                                        Click="ModeBadge_Click">
                                     <Button.Template>
                                         <ControlTemplate TargetType="{x:Type Button}">
                                             <Border x:Name="Bd"

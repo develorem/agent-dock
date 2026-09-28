@@ -572,6 +572,13 @@ public partial class MainWindow : IRemoteServerProjects
         }
 
         RefreshRemoteBadges();
+
+        // Ticks the mode menu, and paints the badge for the two local modes — the remote roles have
+        // already written their own text above, and RefreshModeBadge leaves theirs alone. Driven
+        // from here rather than from the menu handlers because both remote roles can end without
+        // anyone choosing to leave them.
+        RefreshModeUi();
+
         UpdateWindowTitleForRemote();
     }
 
@@ -611,9 +618,9 @@ public partial class MainWindow : IRemoteServerProjects
         {
             var endpoint = _remoteServer.ConnectEndpoint ?? $"port {_remoteServer.Port}";
 
-            RemoteModeBadge.Visibility = Visibility.Visible;
-            RemoteModeBadgeText.Text = _remoteServer.HasClient ? "SERVER MODE · IN USE" : "SERVER MODE";
-            RemoteModeBadge.ToolTip = _remoteServer.HasClient
+            ModeBadge.Visibility = Visibility.Visible;
+            ModeBadgeText.Text = _remoteServer.HasClient ? "SERVER MODE · IN USE" : "SERVER MODE";
+            ModeBadge.ToolTip = _remoteServer.HasClient
                 ? $"Hosting on {endpoint}. '{_remoteServer.ConnectedClientName}' is driving these " +
                   "sessions and input is disabled here. Click to stop hosting."
                 : $"Hosting on {endpoint}, waiting for a client. Input is disabled here. " +
@@ -628,9 +635,9 @@ public partial class MainWindow : IRemoteServerProjects
         }
         else if (connected)
         {
-            RemoteModeBadge.Visibility = Visibility.Visible;
-            RemoteModeBadgeText.Text = "REMOTE";
-            RemoteModeBadge.ToolTip =
+            ModeBadge.Visibility = Visibility.Visible;
+            ModeBadgeText.Text = "REMOTE";
+            ModeBadge.ToolTip =
                 $"Driving {_remoteClient.ServerName ?? _remoteClient.Endpoint}. All work runs on " +
                 "that machine. Click to disconnect.";
 
@@ -641,7 +648,10 @@ public partial class MainWindow : IRemoteServerProjects
         }
         else
         {
-            RemoteModeBadge.Visibility = Visibility.Collapsed;
+            // Neither remote role is live, so the badge falls to whichever local mode is — Standard
+            // or Autopilot. It is no longer hidden here: the badge names the current mode at all
+            // times, which is the only way an armed-but-waiting Autopilot window is distinguishable
+            // from an ordinary one.
             ServerModePill.Visibility = Visibility.Collapsed;
         }
 
