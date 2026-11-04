@@ -92,7 +92,7 @@ public sealed class RemoteServerService(
     private IRemoteServerProjects? _provider;
     private Dispatcher? _dispatcher;
 
-    private FramedConnection? _connection;
+    private IRemoteConnection? _connection;
     private readonly List<RemoteProjectPublisher> _publishers = [];
     private readonly ConcurrentDictionary<string, RemoteProjectPublisher> _byId = new();
 
@@ -333,7 +333,7 @@ public sealed class RemoteServerService(
     /// <summary>Removes the connected client but keeps listening.</summary>
     public void KickClient()
     {
-        FramedConnection? connection;
+        IRemoteConnection? connection;
         lock (_gate) connection = _connection;
 
         connection?.Close(DisconnectReason.Kicked, "The server took back control.");
@@ -345,7 +345,7 @@ public sealed class RemoteServerService(
     /// </summary>
     public string RegenerateCode()
     {
-        FramedConnection? connection;
+        IRemoteConnection? connection;
         lock (_gate)
         {
             PairingCodeValue = PairingCode.Generate();
@@ -363,7 +363,7 @@ public sealed class RemoteServerService(
 
     private void StopInternal(DisconnectReason reason, string message)
     {
-        FramedConnection? connection;
+        IRemoteConnection? connection;
         IRemoteServerProjects? provider;
 
         lock (_gate)
@@ -588,7 +588,7 @@ public sealed class RemoteServerService(
 
     // ------------------------------------------------------------------ attached client
 
-    private void AttachClient(FramedConnection connection, string clientName, string peer)
+    private void AttachClient(IRemoteConnection connection, string clientName, string peer)
     {
         lock (_gate)
         {
@@ -615,7 +615,7 @@ public sealed class RemoteServerService(
         });
     }
 
-    private void OnClientClosed(FramedConnection connection, DisconnectReason reason, string? message)
+    private void OnClientClosed(IRemoteConnection connection, DisconnectReason reason, string? message)
     {
         lock (_gate)
         {
@@ -639,7 +639,7 @@ public sealed class RemoteServerService(
         });
     }
 
-    private void BuildPublishers(FramedConnection connection)
+    private void BuildPublishers(IRemoteConnection connection)
     {
         DisposePublishers();
 
@@ -661,7 +661,7 @@ public sealed class RemoteServerService(
         _byId.Clear();
     }
 
-    private void SendHostSnapshot(FramedConnection connection)
+    private void SendHostSnapshot(IRemoteConnection connection)
     {
         connection.Send(new HostSnapshotMsg(
             HostName,
@@ -678,7 +678,7 @@ public sealed class RemoteServerService(
     /// </summary>
     private void OnActiveProjectsChanged()
     {
-        FramedConnection? connection;
+        IRemoteConnection? connection;
         lock (_gate) connection = _connection;
         if (connection == null) return;
 
@@ -690,7 +690,7 @@ public sealed class RemoteServerService(
         });
     }
 
-    private void HandleCommand(FramedConnection connection, RemoteFrame frame)
+    private void HandleCommand(IRemoteConnection connection, RemoteFrame frame)
     {
         try
         {

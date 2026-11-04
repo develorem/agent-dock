@@ -24,9 +24,9 @@ namespace AgentDock.Services.Remote;
 /// Coalescing of chat text deltas is deliberately *not* here — it belongs to the producer that
 /// knows which ops may be merged and which must never be.
 /// </summary>
-public sealed class FramedConnection : IDisposable
+public sealed class FramedConnection : IRemoteConnection, IDisposable
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    internal static readonly JsonSerializerOptions JsonOptions = new()
     {
         // Frames are machine-to-machine; indentation would just cost bandwidth.
         WriteIndented = false,
@@ -62,6 +62,8 @@ public sealed class FramedConnection : IDisposable
         _log = log;
         _label = label;
     }
+
+    public string Label => _label;
 
     public void Start()
     {
