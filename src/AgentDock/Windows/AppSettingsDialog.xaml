@@ -181,6 +181,14 @@
                             </ComboBox>
                             <TextBlock Text="Where the project tab toolbar sits in the main window."
                                        Style="{StaticResource FieldHint}" />
+
+                            <CheckBox x:Name="ColorChatHeadersByAccountCheck"
+                                      Content="Color chat panel headers by account"
+                                      Foreground="{DynamicResource HelpForeground}"
+                                      FontSize="13"
+                                      Margin="0,4,0,4" />
+                            <TextBlock Text="Tints each chat panel's header with the same accent colour that account gets on the usage bar, so it's obvious at a glance which login a session is using. Off uses the plain theme colour for every panel."
+                                       Style="{StaticResource FieldHint}" />
                         </StackPanel>
 
                         <!-- Integrations -->

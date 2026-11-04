@@ -389,6 +389,10 @@ public partial class AiChatControl : UserControl
     /// </summary>
     private string? _sessionAccountId;
 
+    /// <summary>Public read of <see cref="_sessionAccountId"/> — the stable key for matching
+    /// this session's account against the usage bar's per-account accent colors.</summary>
+    public string? AccountId => _sessionAccountId;
+
     /// <summary>
     /// The account id remembered for this project (persisted in .agentdock/settings.json).
     /// Seeds the picker on load and is rewritten whenever the user picks a different login.

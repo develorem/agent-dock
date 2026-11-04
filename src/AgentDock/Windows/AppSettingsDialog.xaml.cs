@@ -17,6 +17,7 @@ public partial class AppSettingsDialog : Window
     {
         public string ThemeId { get; set; } = "";
         public string ToolbarPosition { get; set; } = "Top";
+        public bool ColorChatHeadersByAccount { get; set; } = true;
         public string ClaudePath { get; set; } = "";
         public UpdateChannel UpdateChannel { get; set; } = UpdateChannel.Stable;
     }
@@ -35,6 +36,7 @@ public partial class AppSettingsDialog : Window
         ILogService log,
         string currentThemeId,
         string currentToolbarPosition,
+        bool currentColorChatHeadersByAccount,
         string currentClaudePath,
         UpdateChannel currentChannel)
     {
@@ -57,6 +59,8 @@ public partial class AppSettingsDialog : Window
         }
         if (ToolbarPositionCombo.SelectedItem == null)
             ToolbarPositionCombo.SelectedIndex = 0;
+
+        ColorChatHeadersByAccountCheck.IsChecked = currentColorChatHeadersByAccount;
 
         // Empty / "claude" means default — show empty so the user knows it's the default.
         ClaudePathTextBox.Text = currentClaudePath is "" or "claude" ? "" : currentClaudePath;
@@ -85,11 +89,13 @@ public partial class AppSettingsDialog : Window
         Window owner,
         string currentThemeId,
         string currentToolbarPosition,
+        bool currentColorChatHeadersByAccount,
         string currentClaudePath,
         UpdateChannel currentChannel)
     {
         var dlg = new AppSettingsDialog(
-            themeRegistry, log, currentThemeId, currentToolbarPosition, currentClaudePath, currentChannel)
+            themeRegistry, log, currentThemeId, currentToolbarPosition, currentColorChatHeadersByAccount,
+            currentClaudePath, currentChannel)
         { Owner = owner };
         return dlg.ShowDialog() == true ? dlg.Outcome : null;
     }
@@ -168,6 +174,7 @@ public partial class AppSettingsDialog : Window
         {
             ThemeId = theme.Id,
             ToolbarPosition = toolbar,
+            ColorChatHeadersByAccount = ColorChatHeadersByAccountCheck.IsChecked == true,
             ClaudePath = ClaudePathTextBox.Text.Trim(),
             UpdateChannel = channel
         };

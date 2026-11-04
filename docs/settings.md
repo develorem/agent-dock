@@ -38,6 +38,7 @@ The narrower level wins. A workspace's theme overrides the app default theme.
 |---------|-------|
 | **Default Theme** | Used when launching without a workspace, and as the starting point for new workspaces |
 | **Default Toolbar Position** | Where the project tab toolbar sits: Top, Left, Right or Bottom |
+| **Color chat panel headers by account** | On by default. Tints each chat panel's header with the same accent colour that [account](accounts.md) gets on the usage bar, so it's obvious at a glance which login a session is using. Off restores the plain theme colour for every panel |
 
 ### Integrations
 

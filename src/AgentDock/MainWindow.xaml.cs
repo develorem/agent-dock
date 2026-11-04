@@ -38,6 +38,7 @@ public partial class MainWindow : Window
     private const double TabCornerRadius = 5;
 
     private string _currentToolbarPosition = "Top";
+    private bool _colorChatHeadersByAccount = true;
 
     private readonly List<ProjectInfo> _projects = [];
     private readonly Dictionary<ProjectInfo, Button> _projectTabButtons = [];
@@ -227,6 +228,8 @@ public partial class MainWindow : Window
         var savedPosition = _appSettings.GetString("ToolbarPosition", "Top");
         if (savedPosition != "Top")
             SetToolbarPosition(savedPosition);
+
+        _colorChatHeadersByAccount = _appSettings.GetString("ColorChatHeadersByAccount", "true") == "true";
 
         // Restore saved Claude path override
         var savedClaudePath = _appSettings.GetString("ClaudePath", "");
@@ -533,6 +536,7 @@ public partial class MainWindow : Window
             this,
             _theme.CurrentTheme.Id,
             _currentToolbarPosition,
+            _colorChatHeadersByAccount,
             currentClaudePath,
             currentChannel);
 
@@ -545,6 +549,20 @@ public partial class MainWindow : Window
         {
             SetToolbarPosition(result.ToolbarPosition);
             _appSettings.SetString("ToolbarPosition", result.ToolbarPosition);
+        }
+
+        if (result.ColorChatHeadersByAccount != _colorChatHeadersByAccount)
+        {
+            _colorChatHeadersByAccount = result.ColorChatHeadersByAccount;
+            _appSettings.SetString("ColorChatHeadersByAccount", _colorChatHeadersByAccount ? "true" : "false");
+
+            // Applies or clears immediately, same reapply loop OnThemeChanged uses - no need
+            // to wait for the next status/model/stats change to pick the toggle up.
+            foreach (var (project, dm) in _projectDockingManagers)
+            {
+                if (_projectChatControls.TryGetValue(project, out var chat))
+                    ApplyAccountAccent(dm, chat.AccountId);
+            }
         }
 
         var newClaudePath = string.IsNullOrEmpty(result.ClaudePath) ? "claude" : result.ClaudePath;
@@ -3265,6 +3283,11 @@ public partial class MainWindow : Window
         if (!_projectDockingManagers.TryGetValue(project, out var dm))
             return;
 
+        // Keyed off the session's resolved account, which is null until a session actually
+        // starts - this call already fires on SessionStatusChanged, which covers that moment,
+        // so no separate hook is needed just for the color.
+        ApplyAccountAccent(dm, ctrl.AccountId);
+
         var anchorable = dm.Layout.Descendents().OfType<LayoutAnchorable>()
             .FirstOrDefault(a => a.ContentId == AiChatId);
         if (anchorable == null)
@@ -4738,8 +4761,17 @@ public partial class MainWindow : Window
             ? (Theme)new Vs2013DarkTheme()
             : new Vs2013LightTheme();
 
-        foreach (var dm in _projectDockingManagers.Values)
+        foreach (var (project, dm) in _projectDockingManagers)
+        {
             dm.Theme = dockTheme;
+
+            // Reassigning .Theme only touches AvalonDock's own merged dictionary; direct keys
+            // on dm.Resources always win regardless. Re-applying here anyway rather than relying
+            // on that - cheap, and it means a .Theme setter that ever starts clearing Resources
+            // first can't silently drop the per-account tint.
+            if (_projectChatControls.TryGetValue(project, out var chat))
+                ApplyAccountAccent(dm, chat.AccountId);
+        }
 
         // Re-apply tab button colors
         foreach (var (project, button) in _projectTabButtons)
@@ -5008,6 +5040,53 @@ public partial class MainWindow : Window
     {
         var c = AccountAccentColor(index);
         var brush = new SolidColorBrush(Color.FromArgb(0x22, c.R, c.G, c.B));
+        brush.Freeze();
+        return brush;
+    }
+
+    // AvalonDock's VS2013 theme (Dirkster.AvalonDock.Themes.VS2013) exposes the active
+    // document tab/header bar as plain string-keyed resources, not typed constants - there is
+    // no public AvalonDock.Themes.ResourceKeys class to reference, these are x:Key values the
+    // theme's own compiled dictionary declares. Overriding them directly on a DockingManager's
+    // own Resources wins over anything its merged .Theme dictionary supplies, and the theme
+    // resolves them via DynamicResource - the same mechanism OnThemeChanged already relies on
+    // to retint every open panel live when the light/dark theme changes.
+    private const string DocumentHeaderBackgroundKey = "DocumentWellTabSelectedActiveBackground";
+    private const string DocumentHeaderForegroundKey = "DocumentWellTabSelectedActiveText";
+
+    /// <summary>
+    /// Tints a project's chat panel header with its account's accent colour - the same colour
+    /// that account gets on the usage bar - or clears the override back to the plain theme
+    /// colour when the setting is off or the account can't be resolved (not yet started, or a
+    /// saved account id that no longer exists). Cheap and idempotent: safe to call on every
+    /// status/model/stats change rather than threading a separate "did this change" check
+    /// through every caller.
+    /// </summary>
+    private void ApplyAccountAccent(DockingManager dockingManager, string? accountId)
+    {
+        var index = _colorChatHeadersByAccount && accountId != null
+            ? _usageAccounts.FindIndex(a => a.Id == accountId)
+            : -1;
+
+        if (index < 0)
+        {
+            dockingManager.Resources.Remove(DocumentHeaderBackgroundKey);
+            dockingManager.Resources.Remove(DocumentHeaderForegroundKey);
+            return;
+        }
+
+        dockingManager.Resources[DocumentHeaderBackgroundKey] = AccountAccentBrush(index);
+        dockingManager.Resources[DocumentHeaderForegroundKey] = ReadableTextBrush(AccountAccentColor(index));
+    }
+
+    /// <summary>Black or white, whichever reads better on <paramref name="background"/> - a
+    /// plain relative-luminance threshold, not a full WCAG contrast computation. The account
+    /// accent colours span light (amber) to dark (purple) hues, so the header text can't
+    /// assume one fixed color works against all of them.</summary>
+    private static Brush ReadableTextBrush(Color background)
+    {
+        var luminance = (0.299 * background.R + 0.587 * background.G + 0.114 * background.B) / 255.0;
+        var brush = new SolidColorBrush(luminance > 0.55 ? Colors.Black : Colors.White);
         brush.Freeze();
         return brush;
     }

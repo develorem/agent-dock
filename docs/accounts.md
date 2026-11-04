@@ -74,6 +74,8 @@ The title bar shows your Claude Code plan usage. Click it for the full breakdown
 | One login | `5h: 24% · resets in 2h 14m` — the 5-hour window and its countdown |
 | Several logins | One bracket per login, e.g. `[Default 57%] [Work 23%]`, each tinted with that account's accent colour so it lines up with its group box in the popup |
 
+The same accent colour also tints that account's chat panel header, so it's obvious at a glance which login a session is using without reading the title text — see [Color chat panel headers by account](settings.md#app-settings).
+
 Other states it can show:
 
 | Text | Meaning |
