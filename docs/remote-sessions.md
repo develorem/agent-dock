@@ -4,15 +4,16 @@
 
 ---
 
-Agent Dock can host its live sessions for a second copy of Agent Dock running on another machine. The machine that hosts keeps doing all the work — it owns the agent processes, the files and the git repositories. The second machine is a remote screen and keyboard for it.
+Agent Dock can host its live sessions for a second copy of Agent Dock running on another machine — or for a plain web browser. The machine that hosts keeps doing all the work — it owns the agent processes, the files and the git repositories. The other side, whichever kind it is, is a remote screen and keyboard for it.
 
-Typical use: your desktop is mid-task on four projects, and you want to keep driving it from a laptop in another room without leaving anything running twice.
+Typical use: your desktop is mid-task on four projects, and you want to keep driving it from a laptop in another room without leaving anything running twice — or you're out and want to check in and nudge an agent along from your phone.
 
 **Contents**
 
 - [The two roles](#the-two-roles)
 - [Hosting a machine (server mode)](#hosting-a-machine-server-mode)
 - [Connecting from the other machine](#connecting-from-the-other-machine)
+- [Connecting from a browser](#connecting-from-a-browser)
 - [What the client can see and do](#what-the-client-can-see-and-do)
 - [Only one driver at a time](#only-one-driver-at-a-time)
 - [Notification sounds](#notification-sounds)
@@ -68,7 +69,7 @@ Server mode · 192.168.1.42:7420 (all interfaces) · waiting for a client · cod
 
 - **Copy address** copies `192.168.1.42:7420` — the *Where is the server?* field on the client
 - **Copy code** copies the eight-character pairing code — the *Pairing code* field on the client
-- Hover the strip to see **every** address this machine can be reached on. A developer machine usually has several (Wi-Fi, Ethernet, Hyper-V, WSL, Docker, VPN); the one shown inline is the best guess, and the rest are one hover away
+- Hover the strip to see **every** address this machine can be reached on, and the URL for a browser — see [Connecting from a browser](#connecting-from-a-browser). A developer machine usually has several native addresses (Wi-Fi, Ethernet, Hyper-V, WSL, Docker, VPN); the one shown inline is the best guess, and the rest are one hover away
 
 The pairing code uses an alphabet with no `0`/`O`, `1`/`I`/`L` or `U` — the glyphs people misread copying a code from one screen to another. It is accepted however you type it: with or without the dash, in any case.
 
@@ -123,6 +124,32 @@ The client builds a **single group named after the host machine**, holding one t
 The layout is yours. It is your window, not a mirror of the host's — rearrange, float and tab the panels however you like.
 
 The window title and the status strip both name the machine you are driving. A remote window that looked identical to a local one would be a way to run the wrong command on the wrong machine.
+
+---
+
+## Connecting from a browser
+
+Open `http://<address>:<web port>/` — shown on the host's status strip and in its tooltip, right alongside the native address — on any device with a browser: a phone, a tablet, another computer. No Agent Dock install needed there, same as the native client.
+
+### 1. Enter the pairing code
+
+The page asks for the same pairing code the native client uses. Typing it is the only step — there is no separate app to open first.
+
+### 2. What you get
+
+A reduced, chat-focused view: the tab list with the same status indicators the desktop uses (flashing blue while working, flashing green for a response you haven't seen yet, solid green once you have), the message history, a composer, and the same permission and question prompts a native client gets — including Claude's multiple-choice questions, with a button for each option and a field for a free-text reply instead.
+
+It does **not** get the file explorer, git diffs, the todo list, or scheduled/queued messages — those stay native-client-only. A list of changed files travels along for free, since that data is already part of what gets sent regardless.
+
+### 3. No TLS of its own
+
+This is the one place the browser path differs from the native one in a way worth being direct about: **the native protocol is TLS end to end, even on your own LAN. The browser listener is plain HTTP — Agent Dock does not manage certificates.** On a trusted home network that's an ordinary trade-off, the same one any unencrypted local service makes. It stops being fine the moment the network isn't trusted, or the moment you want to reach this from outside your LAN at all.
+
+For that, put a reverse proxy with real TLS in front of the browser port — [Caddy](https://caddyserver.com/) is one example, and a common one for exactly this. Agent Dock has no part in setting that up, and no opinion on which tool you use; it only ever listens in the clear, on your network, and leaves what happens in front of it to you.
+
+### 4. One driver, still
+
+The same "one at a time" rule applies, native or browser: whichever connects and pairs successfully takes the slot, and whoever held it before is disconnected — no refusal, no asking first. A phone that goes dark mid-session (locked, backgrounded, out of signal) is detected the same way a dropped native connection is: roughly 35 seconds of silence and the slot frees itself, whether or not anything new is waiting to take it.
 
 ---
 
@@ -207,6 +234,8 @@ There is deliberately **no "LAN only" bind option**. Reaching the server from an
 
 **Prefer a VPN over forwarding the port on your router.** This port is not something to expose to the internet.
 
+**The browser port is plainer still: it has no TLS at all.** Everything above about the pairing code and rate-limiting applies equally there, but the native listener encrypts the connection and the browser one does not — see [Connecting from a browser](#connecting-from-a-browser). Treat it like any other unencrypted local service: fine on a trusted LAN, not fine anywhere that network isn't trusted, and never exposed to the internet without your own TLS-terminating reverse proxy in front of it.
+
 ---
 
 ## Troubleshooting
@@ -235,6 +264,16 @@ Only projects with a **live agent session** are published. Start a session on th
 ### The host's input is still disabled after stopping
 
 Stopping the server re-enables it. If the window still looks locked, check the title bar: a `REMOTE` badge means this machine is a *client* of another one, which is a different mode — disconnect instead.
+
+### The browser URL isn't shown, or a browser can't reach it
+
+The native listener and the browser listener are independent — a failure in one does not stop the other. If the status strip shows a native address but no "browser:" URL, the web listener didn't bind. The most common reason on Windows is the "all interfaces" scope needing a one-time permission for that port, which the server's log line spells out as an exact command to run:
+
+```
+netsh http add urlacl url=http://+:<port>/ user=Everyone
+```
+
+Run that once (as administrator), then start Server Mode again. This isn't needed for loopback-only hosting.
 
 ### The fingerprint warning appeared
 
