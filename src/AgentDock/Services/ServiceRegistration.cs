@@ -52,6 +52,7 @@ public static class ServiceRegistration
         // Remote sessions. The server and client are singletons because a process hosts at
         // most one of each: one client at a time by design, and one listener per port.
         services.AddSingleton<RemoteIdentity>();
+        services.AddSingleton<RemoteWebListener>();
         services.AddSingleton<RemoteServerService>();
         services.AddSingleton<RemoteClientService>();
 

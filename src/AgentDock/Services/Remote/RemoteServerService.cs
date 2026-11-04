@@ -68,9 +68,10 @@ public enum RemoteBindScope
 /// certificate is pinned, file requests are containment-checked, and a connected client is always
 /// visible and one click from being removed.
 /// </summary>
-public sealed class RemoteServerService(
+public sealed partial class RemoteServerService(
     ILogService log,
-    RemoteIdentity identity) : IDisposable
+    RemoteIdentity identity,
+    RemoteWebListener webListener) : IDisposable
 {
     // Keeping the machine awake while hosting. An idle server laptop suspending mid-session is
     // the single most likely way this feature "randomly stops working"; the display is left free
@@ -118,6 +119,10 @@ public sealed class RemoteServerService(
 
     /// <summary>Every address the server can be reached on, primary first. Empty when stopped.</summary>
     public IReadOnlyList<string> ConnectAddresses { get; private set; } = [];
+
+    /// <summary>The URL to open in a browser. Null until the server starts, or if the web
+    /// listener failed to bind (the native listener still works either way).</summary>
+    public string? WebConnectEndpoint { get; private set; }
 
     /// <summary>The full <c>address:port</c> pair, ready to paste into Connect to Server.</summary>
     public string? ConnectEndpoint => ConnectAddress == null ? null : $"{ConnectAddress}:{Port}";
@@ -243,6 +248,7 @@ public sealed class RemoteServerService(
     /// </summary>
     public StartResult Start(
         int port,
+        int webPort,
         RemoteBindScope scope,
         IRemoteServerProjects provider,
         Dispatcher dispatcher)
@@ -298,6 +304,16 @@ public sealed class RemoteServerService(
 
                 _cts = new CancellationTokenSource();
                 _ = Task.Run(() => AcceptLoopAsync(_cts.Token));
+
+                // The web listener is a bonus, not a requirement: if it fails to bind (most
+                // likely the Windows URL-ACL case — see RemoteWebListener), the native listener
+                // still works and hosting is not all-or-nothing between the two protocols.
+                var webResult = webListener.Start(scope, webPort, HandleWebRequestAsync);
+                WebConnectEndpoint = webResult.Success
+                    ? $"http://{ConnectAddress}:{webPort}/"
+                    : null;
+                if (!webResult.Success)
+                    log.Warn($"RemoteServer: web listener did not start — {webResult.Error}");
 
                 SetThreadExecutionState(EsContinuous | EsSystemRequired);
 
@@ -379,11 +395,14 @@ public sealed class RemoteServerService(
             PairingCodeValue = null;
             ConnectAddress = null;
             ConnectAddresses = [];
+            WebConnectEndpoint = null;
 
             try { _cts?.Cancel(); } catch { }
             try { _listener?.Stop(); } catch { }
             _listener = null;
             _cts = null;
+
+            webListener.Stop();
 
             _certificate?.Dispose();
             _certificate = null;
@@ -482,19 +501,11 @@ public sealed class RemoteServerService(
                 return;
             }
 
-            // One client at a time: input ownership is then never ambiguous.
-            lock (_gate)
-            {
-                if (_connection != null)
-                {
-                    log.Info($"RemoteServer: refused {peer} — '{ConnectedClientName}' is already connected");
-                    connection.Close(
-                        DisconnectReason.AlreadyInUse,
-                        $"'{ConnectedClientName}' is already connected to this server.");
-                    return;
-                }
-            }
-
+            // One client at a time, but no longer enforced by refusing a second connection here:
+            // AttachClient boots whoever currently holds the slot, and only after this connection
+            // has already passed AuthenticateAsync below. An unauthenticated attempt never
+            // reaches AttachClient, so it can never evict an authenticated session — see
+            // AttachClient for where the boot actually happens.
             if (!await AuthenticateAsync(connection, hello, peer, ct).ConfigureAwait(false))
                 return;
 
@@ -519,16 +530,11 @@ public sealed class RemoteServerService(
         string peer,
         CancellationToken ct)
     {
-        lock (_gate)
+        if (TryCheckLockout(out var lockoutMessage))
         {
-            if (DateTime.UtcNow < _lockoutUntil)
-            {
-                var remaining = (int)(_lockoutUntil - DateTime.UtcNow).TotalSeconds;
-                log.Warn($"RemoteServer: {peer} rejected — pairing locked out for another {remaining}s");
-                connection.Close(DisconnectReason.AuthFailed,
-                    $"Too many failed attempts. Try again in {remaining} seconds.");
-                return false;
-            }
+            log.Warn($"RemoteServer: {peer} rejected — pairing locked out");
+            connection.Close(DisconnectReason.AuthFailed, lockoutMessage);
+            return false;
         }
 
         var nonce = PairingCode.NewNonce();
@@ -540,44 +546,15 @@ public sealed class RemoteServerService(
             return false;
         }
 
-        bool ok;
-        lock (_gate)
+        // A stored token lets a dropped Wi-Fi connection come back without re-prompting the
+        // human for a code they have already typed once.
+        if (!VerifyProofAndTrackFailures(nonce, proof.CodeProof, proof.SessionToken, peer))
         {
-            // A stored token lets a dropped Wi-Fi connection come back without re-prompting the
-            // human for a code they have already typed once.
-            ok = PairingCode.TokensMatch(_sessionToken, proof.SessionToken)
-                 || (PairingCodeValue != null && PairingCode.VerifyProof(PairingCodeValue, nonce, proof.CodeProof));
-        }
-
-        if (!ok)
-        {
-            int failures;
-            lock (_gate)
-            {
-                failures = ++_authFailures;
-                if (failures >= MaxAuthFailures)
-                {
-                    _lockoutUntil = DateTime.UtcNow.Add(AuthLockout);
-                    _authFailures = 0;
-                }
-            }
-
-            var note = $"Pairing attempt from {peer} was rejected ({failures}/{MaxAuthFailures}).";
-            log.Warn($"RemoteServer: {note}");
-            RunOnUi(() => AuthFailureReported?.Invoke(note));
-
             connection.Close(DisconnectReason.AuthFailed, "The pairing code was not accepted.");
             return false;
         }
 
-        string token;
-        lock (_gate)
-        {
-            _authFailures = 0;
-            _sessionToken = PairingCode.NewSessionToken();
-            token = _sessionToken;
-        }
-
+        var token = IssueSessionToken();
         await connection
             .SendDirectAsync(new AuthResultMsg(true, token, DisconnectReason.Unknown, null, null), ct)
             .ConfigureAwait(false);
@@ -586,16 +563,92 @@ public sealed class RemoteServerService(
         return true;
     }
 
+    /// <summary>
+    /// True if pairing is currently locked out. Shared by the native handshake and the browser
+    /// auth bridge (<see cref="RemoteServerService.Web"/>) so both draw on the one budget of
+    /// failed attempts, not two independent ones.
+    /// </summary>
+    private bool TryCheckLockout(out string? lockoutMessage)
+    {
+        lock (_gate)
+        {
+            if (DateTime.UtcNow < _lockoutUntil)
+            {
+                var remaining = (int)(_lockoutUntil - DateTime.UtcNow).TotalSeconds;
+                lockoutMessage = $"Too many failed attempts. Try again in {remaining} seconds.";
+                return true;
+            }
+        }
+
+        lockoutMessage = null;
+        return false;
+    }
+
+    /// <summary>
+    /// Verifies a proof (or a resumed session token) against the shared pairing state, and
+    /// tracks the shared failure count and lockout on rejection. Shared by both transports for
+    /// the same reason as <see cref="TryCheckLockout"/>.
+    /// </summary>
+    private bool VerifyProofAndTrackFailures(string nonce, string? codeProof, string? sessionToken, string peer)
+    {
+        bool ok;
+        lock (_gate)
+        {
+            ok = PairingCode.TokensMatch(_sessionToken, sessionToken)
+                 || (PairingCodeValue != null && PairingCode.VerifyProof(PairingCodeValue, nonce, codeProof));
+        }
+
+        if (ok)
+        {
+            lock (_gate) _authFailures = 0;
+            return true;
+        }
+
+        int failures;
+        lock (_gate)
+        {
+            failures = ++_authFailures;
+            if (failures >= MaxAuthFailures)
+            {
+                _lockoutUntil = DateTime.UtcNow.Add(AuthLockout);
+                _authFailures = 0;
+            }
+        }
+
+        var note = $"Pairing attempt from {peer} was rejected ({failures}/{MaxAuthFailures}).";
+        log.Warn($"RemoteServer: {note}");
+        RunOnUi(() => AuthFailureReported?.Invoke(note));
+        return false;
+    }
+
+    private string IssueSessionToken()
+    {
+        lock (_gate)
+        {
+            _sessionToken = PairingCode.NewSessionToken();
+            return _sessionToken;
+        }
+    }
+
     // ------------------------------------------------------------------ attached client
 
     private void AttachClient(IRemoteConnection connection, string clientName, string peer)
     {
+        IRemoteConnection? previous;
         lock (_gate)
         {
+            previous = _connection;
             _connection = connection;
             ConnectedClientName = string.IsNullOrWhiteSpace(clientName) ? peer : clientName;
             State = RemoteServerState.ClientConnected;
         }
+
+        // Booted after the gate is released and after this connection's own auth already
+        // succeeded - never before, and never racing a second attacher for the slot. A client
+        // that connects from a browser or another machine simply takes over; the one being
+        // replaced finds out why rather than just going dark.
+        if (previous != null && !ReferenceEquals(previous, connection))
+            previous.Close(DisconnectReason.Kicked, "Another client connected and took over.");
 
         connection.FrameReceived += frame => RunOnUi(() => HandleCommand(connection, frame));
         connection.Closed += (reason, message) => OnClientClosed(connection, reason, message);

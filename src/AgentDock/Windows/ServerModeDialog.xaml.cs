@@ -19,7 +19,7 @@ public partial class ServerModeDialog : Window
 {
     private const string AcknowledgedKey = "RemoteServerWarningAcknowledged";
 
-    public sealed record Result(int Port, RemoteBindScope Scope);
+    public sealed record Result(int Port, int WebPort, RemoteBindScope Scope);
 
     public Result? Outcome { get; private set; }
 
@@ -154,7 +154,12 @@ public partial class ServerModeDialog : Window
         if (AcknowledgeCheck.IsChecked == true)
             _appSettings.SetString(AcknowledgedKey, "true");
 
-        Outcome = new Result(port, scope);
+        // The web port is a bonus, not a requirement: probe for a free one near port+1 and move
+        // on. If none is found nearby, RemoteWebListener.Start fails gracefully on its own and
+        // native hosting still works - there is no "click Start again" dance for this one.
+        var webPort = RemoteServerService.FindFreePort(address, port + 1) ?? (port + 1);
+
+        Outcome = new Result(port, webPort, scope);
         DialogResult = true;
         Close();
     }

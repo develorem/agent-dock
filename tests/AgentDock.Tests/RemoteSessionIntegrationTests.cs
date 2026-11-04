@@ -55,7 +55,7 @@ public class RemoteSessionIntegrationTests : IAsyncLifetime
         Directory.CreateDirectory(_settingsDir);
 
         _serverIdentity = new RemoteIdentity(new NullLog(), new FakeSettings(_settingsDir));
-        _server = new RemoteServerService(new NullLog(), _serverIdentity);
+        _server = new RemoteServerService(new NullLog(), _serverIdentity, new RemoteWebListener(new NullLog()));
 
         return Task.CompletedTask;
     }
@@ -102,7 +102,7 @@ public class RemoteSessionIntegrationTests : IAsyncLifetime
         => StartServer(port, new StubProjects());
 
     private RemoteServerService.StartResult StartServer(int port, StubProjects projects)
-        => _server.Start(port, RemoteBindScope.LoopbackOnly, projects, _dispatcher);
+        => _server.Start(port, FreePort(), RemoteBindScope.LoopbackOnly, projects, _dispatcher);
 
     /// <summary>
     /// Waits for a lock state to settle. The server pushes locks through the dispatcher, so
@@ -287,7 +287,7 @@ public class RemoteSessionIntegrationTests : IAsyncLifetime
     public void LoopbackHostingAdvertisesLoopbackRatherThanTheLanAddress()
     {
         var port = FreePort();
-        var start = _server.Start(port, RemoteBindScope.LoopbackOnly, new StubProjects(), _dispatcher);
+        var start = _server.Start(port, FreePort(), RemoteBindScope.LoopbackOnly, new StubProjects(), _dispatcher);
 
         Assert.True(start.Success, start.Error);
         Assert.Equal("127.0.0.1", _server.ConnectAddress);

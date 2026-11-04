@@ -103,7 +103,7 @@ public partial class MainWindow : IRemoteServerProjects
         var result = Windows.ServerModeDialog.Show(this, _appSettings, RemoteProtocol.DefaultPort);
         if (result == null) return;
 
-        var outcome = _remoteServer.Start(result.Port, result.Scope, this, Dispatcher);
+        var outcome = _remoteServer.Start(result.Port, result.WebPort, result.Scope, this, Dispatcher);
         if (!outcome.Success)
         {
             ThemedMessageBox.Show(this, outcome.Error ?? "The server could not start.", "Server Mode");
@@ -519,11 +519,12 @@ public partial class MainWindow : IRemoteServerProjects
             // The address, not the machine name: the name is what this box calls itself, and it
             // only resolves on the other machine if something on the network is publishing it.
             var endpoint = _remoteServer.ConnectEndpoint ?? $"{_remoteServer.HostName}:{_remoteServer.Port}";
+            var webSuffix = _remoteServer.WebConnectEndpoint is { } webUrl ? $" · browser: {webUrl}" : "";
 
             RemoteStripText.Text = _remoteServer.HasClient
-                ? $"Server mode · {endpoint} · " +
+                ? $"Server mode · {endpoint}{webSuffix} · " +
                   $"{_remoteServer.ConnectedClientName} is connected and driving these sessions · code"
-                : $"Server mode · {endpoint} " +
+                : $"Server mode · {endpoint}{webSuffix} " +
                   $"({_remoteServer.BoundAddressDescription}) · waiting for a client · code";
 
             RemoteStrip.ToolTip = DescribeServerAddresses();
@@ -593,15 +594,19 @@ public partial class MainWindow : IRemoteServerProjects
         var addresses = _remoteServer.ConnectAddresses;
         var port = _remoteServer.Port;
 
+        var webLine = _remoteServer.WebConnectEndpoint is { } webUrl
+            ? $"\n\nOpen in a browser: {webUrl}"
+            : "";
+
         if (addresses.Count == 0)
-            return $"Listening on port {port}.";
+            return $"Listening on port {port}.{webLine}";
 
         var lines = addresses.Select(a => $"    {a}:{port}");
-        return addresses.Count == 1
+        return (addresses.Count == 1
             ? $"Connect from the other machine using:\n{string.Join('\n', lines)}"
             : "Connect from the other machine using one of:\n" + string.Join('\n', lines) +
               "\n\nThe first is the most likely to work; try another if this machine is on more " +
-              "than one network.";
+              "than one network.") + webLine;
     }
 
     /// <summary>
