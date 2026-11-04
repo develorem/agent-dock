@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agent Dock</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div id="login">
+  <form id="login-form">
+    <h1>Agent Dock</h1>
+    <div style="color: var(--muted); font-size: 13px;">Enter the pairing code shown on the host.</div>
+    <input type="text" id="code-input" placeholder="XXXX-XXXX" autocomplete="off" autocapitalize="characters" />
+    <button type="submit" class="primary" id="connect-button">Connect</button>
+    <div class="error" id="login-error"></div>
+  </form>
+</div>
+
+<div id="app" hidden>
+  <div id="tabs">
+    <div class="header">
+      <span id="host-name"></span>
+      <button id="theme-toggle" type="button">Theme</button>
+    </div>
+    <div id="tab-list"></div>
+  </div>
+
+  <div id="main">
+    <div class="header">
+      <strong id="project-name">—</strong>
+      <span class="status" id="project-status"></span>
+    </div>
+
+    <div id="transcript"></div>
+
+    <div id="changed-files" hidden></div>
+
+    <div id="qa" hidden>
+      <div class="question" id="qa-question"></div>
+      <div class="options" id="qa-options"></div>
+      <div class="custom">
+        <input type="text" id="qa-custom-input" placeholder="Or type a reply…" />
+        <button type="button" id="qa-custom-send">Send</button>
+      </div>
+    </div>
+
+    <div id="composer">
+      <textarea id="composer-input" placeholder="Message the agent…"></textarea>
+      <button type="button" class="primary" id="composer-send">Send</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -45,6 +45,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="..\..\docs\release-notes\v*.md" LogicalName="ReleaseNotes/%(Filename).md" />
+    <EmbeddedResource Include="WebClient\*" LogicalName="WebClient/%(Filename)%(Extension)" />
   </ItemGroup>
 
 </Project>

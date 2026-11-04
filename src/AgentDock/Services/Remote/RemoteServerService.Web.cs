@@ -84,7 +84,7 @@ public sealed partial class RemoteServerService
     {
         if (TryCheckLockout(out var lockoutMessage))
         {
-            await WriteJsonAsync(context, 429, new { error = lockoutMessage }).ConfigureAwait(false);
+            await WriteJsonAsync(context, 429, new { Error = lockoutMessage }).ConfigureAwait(false);
             return;
         }
 
@@ -94,7 +94,9 @@ public sealed partial class RemoteServerService
         var attemptId = Guid.NewGuid().ToString("N");
         _webAuthAttempts[attemptId] = (nonce, DateTime.UtcNow + WebAuthAttemptTtl);
 
-        await WriteJsonAsync(context, 200, new { attemptId, nonce }).ConfigureAwait(false);
+        // PascalCase, matching the WebSocket frames' own convention (no naming policy is set on
+        // FramedConnection.JsonOptions) - one casing to remember, not two.
+        await WriteJsonAsync(context, 200, new { AttemptId = attemptId, Nonce = nonce }).ConfigureAwait(false);
     }
 
     private async Task HandleAuthProofAsync(HttpListenerContext context)
@@ -106,14 +108,14 @@ public sealed partial class RemoteServerService
             || !_webAuthAttempts.TryRemove(body.AttemptId, out var attempt)
             || attempt.Expiry < DateTime.UtcNow)
         {
-            await WriteJsonAsync(context, 400, new { error = "Unknown or expired pairing attempt." })
+            await WriteJsonAsync(context, 400, new { Error = "Unknown or expired pairing attempt." })
                 .ConfigureAwait(false);
             return;
         }
 
         if (!VerifyProofAndTrackFailures(attempt.Nonce, body.Proof, sessionToken: null, peer))
         {
-            await WriteJsonAsync(context, 401, new { error = "The pairing code was not accepted." })
+            await WriteJsonAsync(context, 401, new { Error = "The pairing code was not accepted." })
                 .ConfigureAwait(false);
             return;
         }
@@ -127,7 +129,7 @@ public sealed partial class RemoteServerService
             "Set-Cookie", $"{SessionCookieName}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400");
 
         log.Info($"RemoteServer: {peer} paired over the browser bridge");
-        await WriteJsonAsync(context, 200, new { success = true }).ConfigureAwait(false);
+        await WriteJsonAsync(context, 200, new { Success = true }).ConfigureAwait(false);
     }
 
     private void PruneExpiredWebAuthAttempts()
