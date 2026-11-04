@@ -103,7 +103,8 @@ public partial class MainWindow : Window
     private Button? _tabDragSource;
     private Border? _tabDragIndicator; // visual insertion line shown during drag
 
-    // Toolbar add-project button (always last in ToolbarPanel)
+    // Toolbar add-project button. Pinned in ProjectNavCluster rather than sitting in the
+    // scrolling tab strip, so a full strip can't push it off the edge.
     private readonly Button _toolbarAddButton;
 
     // Panel ContentId constants (stable across app runs)
@@ -183,9 +184,10 @@ public partial class MainWindow : Window
 
         ProductNameText.Text = $"Agent Dock v{App.Version}";
 
-        // Create the + button for the project tab bar
+        // Create the + button for the project tab bar. It lives in the pinned cluster
+        // beside the scroll arrows, not in the scrolling strip — see InitializeTabScrolling.
         _toolbarAddButton = CreateToolbarAddButton();
-        ToolbarPanel.Children.Add(_toolbarAddButton);
+        InitializeTabScrolling();
 
         // ToolbarPanel handles drag-over/drop for tab reordering (provides full-panel hit area)
         ToolbarPanel.AllowDrop = true;
@@ -982,12 +984,7 @@ public partial class MainWindow : Window
         var tabButton = CreateProjectTabButton(project);
         _projectTabButtons[project] = tabButton;
 
-        // Add tab button to toolbar (before the + button, which is always last)
-        var addBtnIdx = ToolbarPanel.Children.IndexOf(_toolbarAddButton);
-        if (addBtnIdx >= 0)
-            ToolbarPanel.Children.Insert(addBtnIdx, tabButton);
-        else
-            ToolbarPanel.Children.Add(tabButton);
+        ToolbarPanel.Children.Add(tabButton);
         UpdateProjectStripVisibility();
         // Reopening the first project after closing them all brings the strip back.
         UpdateGroupStripVisibility();
@@ -1383,8 +1380,13 @@ public partial class MainWindow : Window
                 Math.Abs(diff.Y) > SystemParameters.MinimumVerticalDragDistance)
             {
                 _tabDragging = true;
-                DragDrop.DoDragDrop(button, new DataObject("ProjectTab", project), DragDropEffects.Move);
+
+                // Cleared before the drag, not after — see the matching comment on the group
+                // strip: DoDragDrop's nested message loop re-raises PreviewMouseMove on this
+                // button, and a still-set source would start a second drag inside the first.
                 _tabDragSource = null;
+
+                DragDrop.DoDragDrop(button, new DataObject("ProjectTab", project), DragDropEffects.Move);
                 RemoveTabDragIndicator();
             }
         };
@@ -1480,7 +1482,7 @@ public partial class MainWindow : Window
         {
             if (ToolbarPanel.Children[i] is not FrameworkElement child)
                 continue;
-            if (child == _toolbarAddButton || child == _tabDragIndicator || child.Tag is not ProjectInfo proj)
+            if (child == _tabDragIndicator || child.Tag is not ProjectInfo proj)
                 continue;
             if (child.Visibility != Visibility.Visible)
                 continue;
@@ -1488,6 +1490,11 @@ public partial class MainWindow : Window
             var pos = e.GetPosition(child);
             var midpoint = isHorizontal ? child.RenderSize.Width / 2 : child.RenderSize.Height / 2;
             var coord = isHorizontal ? pos.X : pos.Y;
+
+            // Not arranged yet (the strip was rebuilt and layout hasn't run): its coordinates
+            // mean nothing, and ranking against them answers "past the last tab" everywhere.
+            if (midpoint <= 0)
+                continue;
 
             if (coord < midpoint)
                 return _projects.IndexOf(proj);
@@ -1513,6 +1520,10 @@ public partial class MainWindow : Window
 
         e.Effects = DragDropEffects.Move;
         e.Handled = true;
+
+        // Dragging against either end of a scrolled strip walks it along, so a tab can be
+        // dropped past the edge of what's currently on screen.
+        AutoScrollDuringDrag(ToolbarPanel, e);
 
         // Show insertion indicator
         var insertIdx = GetTabInsertionIndex(e);
@@ -1544,10 +1555,7 @@ public partial class MainWindow : Window
         if (_projectTabButtons.TryGetValue(sourceProject, out var sourceBtn))
         {
             ToolbarPanel.Children.Remove(sourceBtn);
-            // Insert at the correct UI position (before the + button)
-            var addBtnIdx = ToolbarPanel.Children.IndexOf(_toolbarAddButton);
-            var uiIdx = Math.Min(targetIdx, addBtnIdx >= 0 ? addBtnIdx : ToolbarPanel.Children.Count);
-            ToolbarPanel.Children.Insert(uiIdx, sourceBtn);
+            ToolbarPanel.Children.Insert(Math.Min(targetIdx, ToolbarPanel.Children.Count), sourceBtn);
         }
 
         SetWorkspaceDirty();
@@ -1584,11 +1592,8 @@ public partial class MainWindow : Window
 
         // Remove from current position
         ToolbarPanel.Children.Remove(_tabDragIndicator);
-
-        // Find the UI insertion point (clamped before the + button)
-        var addBtnIdx = ToolbarPanel.Children.IndexOf(_toolbarAddButton);
-        var uiIdx = Math.Min(projectIndex, addBtnIdx >= 0 ? addBtnIdx : ToolbarPanel.Children.Count);
-        ToolbarPanel.Children.Insert(uiIdx, _tabDragIndicator);
+        ToolbarPanel.Children.Insert(
+            Math.Min(projectIndex, ToolbarPanel.Children.Count), _tabDragIndicator);
     }
 
     private void RemoveTabDragIndicator()
@@ -1619,6 +1624,12 @@ public partial class MainWindow : Window
                 child.Tag is not ProjectGroup g)
                 continue;
 
+            // A tab with no size has never been arranged — the strip was rebuilt and layout
+            // hasn't run yet. Its coordinates are meaningless, and ranking the mouse against
+            // them silently answers "past the last tab" for every position on the strip.
+            if (child.RenderSize.Width <= 0)
+                continue;
+
             var pos = e.GetPosition(child);
             if (pos.X < child.RenderSize.Width / 2)
                 return ordered.IndexOf(g);
@@ -1637,6 +1648,7 @@ public partial class MainWindow : Window
 
         e.Effects = DragDropEffects.Move;
         e.Handled = true;
+        AutoScrollDuringDrag(MetaTabPanel, e);
         ShowGroupDragIndicator(GetGroupInsertionIndex(e));
     }
 
@@ -1781,6 +1793,7 @@ public partial class MainWindow : Window
         {
             ActiveGroupHost.Content = null;
             _activeGroupButton = null;
+            SyncStickyTabs();
             UpdateGroupStripVisibility();
             return;
         }
@@ -1790,8 +1803,9 @@ public partial class MainWindow : Window
         foreach (var group in _groups.OrderBy(g => g.Order))
             MetaTabPanel.Children.Add(CreateMetaTabElement(group));
 
-        // Trailing "+" to create a new empty group (mirrors the project-tab add button).
-        MetaTabPanel.Children.Add(CreateMetaTabAddButton());
+        // "+" to create a new empty group, pinned beside the scroll arrows (mirrors the
+        // project-tab add button) so it stays put however many groups there are.
+        SetGroupAddButton(CreateMetaTabAddButton());
 
         // Apply the aggregate child indicator to each freshly-built group diamond.
         foreach (var group in _groups)
@@ -1799,6 +1813,9 @@ public partial class MainWindow : Window
 
         // The dynamic "Active Projects" group sits apart on the right.
         RenderActiveGroupButton();
+
+        // The strip was rebuilt, so the element the scroller must keep in view is new.
+        SyncStickyTabs();
     }
 
     /// <summary>
@@ -1913,7 +1930,9 @@ public partial class MainWindow : Window
         // the current tab still reads as continuous with the strip.
         var underGroupStrip = MetaTabBorder.Visibility == Visibility.Visible
                               && _currentToolbarPosition != "Bottom";
-        ToolbarPanel.Margin = new Thickness(0, underGroupStrip ? StripGap : 0, 0, 0);
+        // On the whole strip, not just the tabs: the pinned "+" and scroll arrows sit
+        // beside them and have to drop by the same amount.
+        ProjectStripDock.Margin = new Thickness(0, underGroupStrip ? StripGap : 0, 0, 0);
     }
 
     /// <summary>
@@ -2269,8 +2288,18 @@ public partial class MainWindow : Window
                 Math.Abs(diff.Y) > SystemParameters.MinimumVerticalDragDistance)
             {
                 _groupDragging = true;
-                DragDrop.DoDragDrop(button, new DataObject("GroupTab", group), DragDropEffects.Move);
+
+                // Release the source BEFORE starting the drag, not after. DoDragDrop runs a
+                // nested message loop, and every layout change inside it — the insertion
+                // indicator moving, the strip auto-scrolling — makes WPF re-hit-test and
+                // raise another PreviewMouseMove on this very button. With the source still
+                // set, that starts a second, nested drag; both loops then deliver a Drop, and
+                // the second one lands on a strip that RefreshMetaTabBar has just rebuilt but
+                // not yet laid out, so it drags the group straight back to the end. Clearing
+                // it here makes the re-entrant call fall out at the guard above.
                 _groupDragSource = null;
+
+                DragDrop.DoDragDrop(button, new DataObject("GroupTab", group), DragDropEffects.Move);
                 RemoveGroupDragIndicator();
             }
         };
@@ -2787,7 +2816,7 @@ public partial class MainWindow : Window
         aiChatControl.FileReferenceClicked += path =>
         {
             _log.Info($"FileReferenceClicked: {path}");
-            fileExplorerControl.RevealAndSelect(path);
+            OpenFileSystemReference(path, fileExplorerControl);
         };
 
         // Update AI Chat panel title when model is reported, when stats change, or when
@@ -3173,6 +3202,10 @@ public partial class MainWindow : Window
         if (_activeGroupId == ActiveProjectsGroupId)
             RefreshProjectTabVisibility();
 
+        // Hold the newly-active tab in view: it becomes the strip's sticky child, and is
+        // scrolled back on screen if the switch came from somewhere other than clicking it.
+        SyncStickyTabs();
+
         _log.Info($"SwitchToProject: '{project.FolderName}' — complete");
     }
 
@@ -3481,6 +3514,10 @@ public partial class MainWindow : Window
         _groupTabIcons.Remove(ActiveProjectsGroupId);
         ActiveGroupHost.Content = null;
         MetaTabPanel.Children.Clear();
+        // Nothing is active any more — drop both strips' sticky tab and scroll position.
+        SyncStickyTabs();
+        ToolbarPanel.Offset = 0;
+        MetaTabPanel.Offset = 0;
         UpdateGroupStripVisibility();
         ProjectContentHost.Content = null;
         ProjectContentHost.Visibility = Visibility.Collapsed;
@@ -3495,6 +3532,76 @@ public partial class MainWindow : Window
             FileName = project.FolderPath,
             UseShellExecute = true
         });
+    }
+
+    /// <summary>
+    /// Opens a file-system location clicked in the chat, choosing by what the location is
+    /// and what the panels can actually show:
+    /// <list type="bullet">
+    ///   <item>a <b>file</b> inside the project is revealed in the File Explorer panel, which
+    ///         also puts it in the File Preview — the behaviour that has always been here;</item>
+    ///   <item>a <b>folder</b> additionally opens a File Explorer window, because no panel
+    ///         shows a folder's contents and "selected in a tree" is a weak answer to a click;</item>
+    ///   <item>anything the panel can't reach — outside the project root, or filtered out of
+    ///         the tree — opens in File Explorer with the item selected.</item>
+    /// </list>
+    /// The point is that a click always does something visible. A link that looks clickable
+    /// and silently does nothing is worse than no link at all.
+    /// </summary>
+    private void OpenFileSystemReference(string path, FileExplorerControl explorer)
+    {
+        // A remote project's paths live on the host machine. Revealing them in the
+        // (remote-backed) panel is the only meaningful action — handing one to this
+        // machine's shell would open a stranger's folder, or nothing at all.
+        if (explorer.IsRemote)
+        {
+            explorer.RevealAndSelect(path);
+            return;
+        }
+
+        var isDirectory = Directory.Exists(path);
+        if (!isDirectory && !File.Exists(path))
+        {
+            _log.Warn($"FileReferenceClicked: no longer on disk — {path}");
+            return;
+        }
+
+        var revealed = explorer.RevealAndSelect(path);
+
+        if (isDirectory)
+            ShowInFileExplorer(path, selectItem: false);
+        else if (!revealed)
+            ShowInFileExplorer(path, selectItem: true);
+    }
+
+    /// <summary>
+    /// Opens Windows File Explorer on <paramref name="path"/>: at the folder itself, or at
+    /// its parent with the item selected when <paramref name="selectItem"/> is set.
+    /// </summary>
+    private void ShowInFileExplorer(string path, bool selectItem)
+    {
+        try
+        {
+            if (selectItem)
+            {
+                // /select, needs the comma with no space, and the path quoted — a space in
+                // the path otherwise reads as a second argument and Explorer opens Documents.
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "explorer.exe",
+                    Arguments = $"/select,\"{path}\"",
+                    UseShellExecute = true
+                });
+            }
+            else
+            {
+                Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true });
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Failed to open File Explorer at: {path}", ex);
+        }
     }
 
     private void OpenInConsole(ProjectInfo project)
@@ -3758,7 +3865,7 @@ public partial class MainWindow : Window
                 break;
         }
 
-        UpdateTabScheduleTooltip(project, scheduledUtc);
+        UpdateTabTooltip(project);
 
         // Roll the child's new state up into its group's aggregate diamond.
         RefreshGroupIndicator(project.GroupId);
@@ -3778,19 +3885,31 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Appends the scheduled fire time to the tab's tooltip while a message is parked,
-    /// reverting to just the folder path once it fires or is cancelled.
+    /// Rebuilds a project tab's tooltip — the folder path, plus anything about the tab's
+    /// current state you'd otherwise have to switch to it to find out: which Claude login
+    /// its session is running as, a parked scheduled message, background work still
+    /// draining. Each line drops away on its own when it stops being true.
+    ///
+    /// The account line exists because with more than one login configured, "which account
+    /// is this tab burning" was only answerable by switching to the tab and reading the
+    /// chat panel's title — the one thing hovering the tab is meant to avoid.
     /// </summary>
-    private void UpdateTabScheduleTooltip(ProjectInfo project, DateTime? scheduledUtc)
+    private void UpdateTabTooltip(ProjectInfo project)
     {
         if (!_projectTabButtons.TryGetValue(project, out var button))
             return;
 
+        _projectChatControls.TryGetValue(project, out var chat);
+
         var tip = project.FolderPath;
-        if (scheduledUtc is { } utc)
+
+        if (chat?.ActiveAccountLabel is { } account)
+            tip += $"\nAccount: {account}";
+
+        if (chat?.ScheduledFireTimeUtc is { } utc)
             tip += $"\nMessage scheduled for {utc.ToLocalTime():g}";
-        if (_projectChatControls.TryGetValue(project, out var chat) &&
-            chat.CurrentState == ClaudeSessionState.Idle && chat.HasBackgroundWork)
+
+        if (chat is { CurrentState: ClaudeSessionState.Idle, HasBackgroundWork: true })
             tip += "\nStill working in the background…";
 
         button.ToolTip = tip;
@@ -3909,7 +4028,7 @@ public partial class MainWindow : Window
                 ApplyScheduledVisual(diamondIcon);
         }
 
-        UpdateTabScheduleTooltip(project, chat.ScheduledFireTimeUtc);
+        UpdateTabTooltip(project);
         RefreshGroupIndicator(project.GroupId);
     }
 
@@ -4541,6 +4660,7 @@ public partial class MainWindow : Window
 
         DockPanel.SetDock(ToolbarBorder, dock);
         ToolbarPanel.Orientation = orientation;
+        ApplyTabStripOrientation(position);
         ApplyMetaTabLayoutForToolbarPosition(position);
         _currentToolbarPosition = position;
         // May drop the toolbar's outer rule when the group strip is already showing;
@@ -4652,8 +4772,9 @@ public partial class MainWindow : Window
                 UpdateTabIcon(project, chat.CurrentState);
         }
 
-        // Update toolbar + button accent
+        // Update toolbar + button accent, and the scroll arrows pinned beside it
         _toolbarAddButton.BorderBrush = _theme.GetBrush("AddButtonBorderBrush");
+        RefreshTabScrollTheme();
 
         // Rebuild meta tab strip so its colors pick up the new theme
         RefreshMetaTabBar();

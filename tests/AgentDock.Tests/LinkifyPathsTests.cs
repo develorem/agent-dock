@@ -27,9 +27,15 @@ public class LinkifyPathsTests : IDisposable
         // hosts; Path.GetRandomFileName is deterministic-enough and collision-safe.)
         _root = Path.Combine(Path.GetTempPath(), "agentdock-tests-" + Path.GetRandomFileName());
         Directory.CreateDirectory(Path.Combine(_root, "docs"));
+        // A nested folder, for folder references that name a path rather than ending in
+        // a separator ("docs/release-notes").
+        Directory.CreateDirectory(Path.Combine(_root, "docs", "release-notes"));
         // A file whose name contains an emphasis character (_) — the regression case
         // for label escaping: an unescaped underscore italicizes "permission..groups".
         File.WriteAllText(Path.Combine(_root, "docs", "permission_groups.cs"), "// test");
+        // An extensionless file: the old path pattern required a dotted extension and
+        // skipped these entirely.
+        File.WriteAllText(Path.Combine(_root, "docs", "LICENSE"), "MIT");
     }
 
     public void Dispose()
@@ -105,6 +111,93 @@ public class LinkifyPathsTests : IDisposable
         var output = MarkdownRenderer.LinkifyPaths(input, _root);
         Assert.DoesNotContain("agentdock-file", output);
         Assert.Contains("docs/permission_groups.cs", output);
+    }
+
+    // --- Folders are locations too ---
+
+    [Fact]
+    public void Linkify_WrapsExistingFolderPath()
+    {
+        var output = MarkdownRenderer.LinkifyPaths("Notes live in docs/release-notes now", _root);
+        Assert.Contains("[docs/release-notes](agentdock-file:///", output);
+    }
+
+    [Fact]
+    public void Linkify_WrapsFolderWrittenWithTrailingSeparator()
+    {
+        var output = MarkdownRenderer.LinkifyPaths("I created docs/ for you", _root);
+        Assert.Contains("[docs/](agentdock-file:///", output);
+    }
+
+    [Fact]
+    public void Linkify_WrapsAbsoluteFolderPath()
+    {
+        var folder = Path.Combine(_root, "docs");
+        var output = MarkdownRenderer.LinkifyPaths($"Output went to {folder}", _root);
+        Assert.Contains("](agentdock-file:///", output);
+        Assert.StartsWith("Output went to [", output);
+    }
+
+    [Fact]
+    public void Linkify_WrapsExtensionlessFile()
+    {
+        var output = MarkdownRenderer.LinkifyPaths("Read docs/LICENSE first", _root);
+        Assert.Contains("[docs/LICENSE](agentdock-file:///", output);
+    }
+
+    // "and/or" has a separator and two plausible segments, but resolves to nothing —
+    // the file system, not the pattern, is what decides a match.
+    [Fact]
+    public void Linkify_SlashedProseWord_LeftAsIs()
+    {
+        const string input = "Use one and/or the other";
+        Assert.Equal(input, MarkdownRenderer.LinkifyPaths(input, _root));
+    }
+
+    // Windows resolves "docs." to "docs", so a sentence-ending full stop would otherwise
+    // be swallowed into the link label.
+    [Fact]
+    public void Linkify_TrailingSentencePunctuation_StaysOutsideTheLink()
+    {
+        var output = MarkdownRenderer.LinkifyPaths("Everything is in docs/release-notes.", _root);
+        Assert.Contains("[docs/release-notes](agentdock-file:///", output);
+        Assert.EndsWith(").", output);
+    }
+
+    // --- file:// URIs ---
+
+    [Fact]
+    public void Linkify_WrapsBareFileUri()
+    {
+        var uri = new Uri(Path.Combine(_root, "docs")).AbsoluteUri;
+        var output = MarkdownRenderer.LinkifyPaths($"Open {uri} to see it", _root);
+        Assert.Contains($"[{uri}](agentdock-file:///", output);
+    }
+
+    [Fact]
+    public void Linkify_FileUriForMissingPath_LeftAsIs()
+    {
+        var input = "Open " + new Uri(Path.Combine(_root, "nope", "gone")).AbsoluteUri;
+        Assert.Equal(input, MarkdownRenderer.LinkifyPaths(input, _root));
+    }
+
+    // --- Resolution without a project root ---
+
+    // An absolute path carries its own root, so it links with or without a project.
+    [Fact]
+    public void Linkify_AbsolutePath_LinksWithoutProjectRoot()
+    {
+        var folder = Path.Combine(_root, "docs");
+        Assert.Contains("](agentdock-file:///", MarkdownRenderer.LinkifyPaths(folder, ""));
+    }
+
+    // A relative path without a root would resolve against the process working directory —
+    // i.e. link to whatever happens to be there. It must stay plain text.
+    [Fact]
+    public void Linkify_RelativePath_LeftAsIsWithoutProjectRoot()
+    {
+        const string input = "Edit docs/permission_groups.cs to fix";
+        Assert.Equal(input, MarkdownRenderer.LinkifyPaths(input, ""));
     }
 
     // --- The combined pipeline, in the same order BuildDocument runs it ---

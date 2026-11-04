@@ -1,4 +1,12 @@
 {
+  "name": null,
   "icon": "assets\\agentdock.png",
-  "iconColor": null
+  "iconColor": null,
+  "description": null,
+  "descriptionFontSize": null,
+  "todoItems": null,
+  "soundOnSessionStart": true,
+  "soundOnAgentWaiting": true,
+  "soundOnSessionEnd": true,
+  "claudeAccountId": "de0dd063"
 }

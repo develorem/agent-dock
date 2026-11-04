@@ -56,10 +56,23 @@ public sealed partial class MarkdownRenderer(ILogService log, IPerfDiagnostics p
     [GeneratedRegex(@"^(\s*)(.*?)(\s*)$", RegexOptions.Singleline)]
     private static partial Regex TrimWsRegex();
 
-    // Path candidate: optional ./ or .\ prefix, optional drive letter, one or more
-    // separator-terminated segments, then a final filename with extension, optional :line ref.
-    [GeneratedRegex(@"\G(?:\.[\\/])?(?:[A-Za-z]:[\\/])?(?:[\w.\-]+[\\/])+[\w\-.]+\.[A-Za-z][\w]*(?::\d+)?")]
+    // Path candidate: optional ./ or .\ prefix, then either a drive prefix (C:\) or at
+    // least one separator-terminated segment, then any number of further segments, an
+    // optional final segment, and an optional :line ref. The final segment is optional
+    // and needs no extension on purpose: a reference to a *folder* ("src/AgentDock",
+    // "docs/") is exactly as worth linking as one to a file, and plenty of real files
+    // have no extension. Nothing here decides what a match means — TryResolvePath does,
+    // by asking the file system, so the looseness costs an existence check and nothing
+    // else. See TrimPathTrailing for the sentence punctuation this deliberately absorbs.
+    [GeneratedRegex(@"\G(?:\.[\\/])?(?:[A-Za-z]:[\\/]|(?:[\w.\-]+[\\/])+)(?:[\w.\-]+[\\/])*[\w\-.]*(?::\d+)?")]
     private static partial Regex PathCandidateRegex();
+
+    // Bare file:// URI. Agents reach for this form precisely when they mean "this is a
+    // location you can open", so it is the one spelling that must never render as inert
+    // text. Excludes the same markdown-active characters as UrlCandidateRegex so the
+    // generated link stays well-formed.
+    [GeneratedRegex(@"\Gfile://[^\s<>""'`()\[\]{}|^*]+", RegexOptions.IgnoreCase)]
+    private static partial Regex FileUriCandidateRegex();
 
     // Bare http/https URL. Stops at whitespace, quotes, brackets, and parens so the
     // generated [url](url) markdown stays well-formed; trailing sentence punctuation
@@ -322,7 +335,7 @@ public sealed partial class MarkdownRenderer(ILogService log, IPerfDiagnostics p
         // hand-built links do not have. WireLinks skips anything carrying this flag, so the
         // BuildDocument path doesn't end up opening the browser twice per click.
         link.SetValue(CodeLinkWiredProperty, true);
-        link.Click += (_, _) => OpenInBrowser(url);
+        link.Click += (_, _) => OpenWithShell(url);
 
         return link;
     }
@@ -888,10 +901,11 @@ public sealed partial class MarkdownRenderer(ILogService log, IPerfDiagnostics p
 
     /// <summary>
     /// Rewrites references in <paramref name="markdown"/> as markdown links.
-    /// File-path references that resolve to an existing file (under
-    /// <paramref name="projectRoot"/> or absolute) become <c>agentdock-file://</c>
-    /// links; bare <c>http(s)</c> URLs become ordinary web links. Path linking is
-    /// skipped when <paramref name="projectRoot"/> is empty; URL linking always runs.
+    /// File-system references that resolve to an existing file <em>or folder</em> (under
+    /// <paramref name="projectRoot"/>, absolute, or written as a <c>file://</c> URI)
+    /// become <c>agentdock-file://</c> links; bare <c>http(s)</c> URLs become ordinary
+    /// web links. Relative paths need <paramref name="projectRoot"/> to mean anything
+    /// and are skipped without one; every other form resolves on its own.
     /// Skips fenced code blocks, inline code, and existing markdown links.
     /// </summary>
     public static string LinkifyPaths(string markdown, string projectRoot)
@@ -950,7 +964,13 @@ public sealed partial class MarkdownRenderer(ILogService log, IPerfDiagnostics p
                 if (endTick > i && (nlIdx < 0 || endTick < nlIdx))
                 {
                     var inner = markdown.Substring(i + 1, endTick - i - 1);
-                    if (TryResolvePath(inner.Trim(), projectRoot, out var abs))
+                    var innerText = inner.Trim();
+                    // A code span is the usual way an agent quotes a location, so it gets
+                    // both spellings: a path, or a file:// URI.
+                    var resolvedInner = TryResolvePath(innerText, projectRoot, out var abs)
+                        ? abs
+                        : TryResolveFileUri(innerText);
+                    if (resolvedInner != null)
                     {
                         // Emit a plain link, NOT [`inner`](url). MdXaml runs its code-span
                         // parser before its anchor parser, so a code span inside a link
@@ -958,7 +978,7 @@ public sealed partial class MarkdownRenderer(ILogService log, IPerfDiagnostics p
                         // literal text. We drop the backticks here and restore the
                         // monospace look on the resulting Hyperlink in WireLinks instead.
                         sb.Append('[').Append(EscapeLinkText(inner)).Append("](")
-                            .Append(ToFileLinkUri(abs)).Append(')');
+                            .Append(ToFileLinkUri(resolvedInner)).Append(')');
                         i = endTick + 1;
                         continue;
                     }
@@ -987,21 +1007,42 @@ public sealed partial class MarkdownRenderer(ILogService log, IPerfDiagnostics p
                 }
             }
 
+            // Bare file:// URI at a boundary. Resolved to a local path up front so the
+            // rendered link is the same internal kind a bare path produces — one click
+            // path, one set of rules — while the label keeps whatever the agent wrote.
+            if ((i == 0 || IsPathBoundary(markdown[i - 1]))
+                && (markdown[i] == 'f' || markdown[i] == 'F'))
+            {
+                var fileUriMatch = FileUriCandidateRegex().Match(markdown, i);
+                if (fileUriMatch.Success && fileUriMatch.Index == i)
+                {
+                    var uriText = TrimPathTrailing(fileUriMatch.Value);
+                    var resolved = TryResolveFileUri(uriText);
+                    if (resolved != null)
+                    {
+                        sb.Append('[').Append(EscapeLinkText(uriText)).Append("](")
+                            .Append(ToFileLinkUri(resolved)).Append(')');
+                        i += uriText.Length;
+                        continue;
+                    }
+                }
+            }
+
             // Try to match a path starting here. Previous char must be a non-path boundary.
-            if (!string.IsNullOrEmpty(projectRoot) && (i == 0 || IsPathBoundary(markdown[i - 1])))
+            if (i == 0 || IsPathBoundary(markdown[i - 1]))
             {
                 var match = PathCandidateRegex().Match(markdown, i);
                 if (match.Success && match.Index == i)
                 {
-                    var text = match.Value;
-                    var next = i + text.Length;
+                    var next = i + match.Length;
                     if (next >= markdown.Length || IsPathBoundary(markdown[next]))
                     {
-                        if (TryResolvePath(text, projectRoot, out var abs))
+                        var text = TrimPathTrailing(match.Value);
+                        if (text.Length > 0 && TryResolvePath(text, projectRoot, out var abs))
                         {
                             sb.Append('[').Append(EscapeLinkText(text)).Append("](")
                                 .Append(ToFileLinkUri(abs)).Append(')');
-                            i = next;
+                            i += text.Length;
                             continue;
                         }
                     }
@@ -1017,10 +1058,11 @@ public sealed partial class MarkdownRenderer(ILogService log, IPerfDiagnostics p
 
     /// <summary>
     /// Walks <paramref name="doc"/> and wires every hyperlink for clicking:
-    /// <c>agentdock-file://</c> links invoke <paramref name="onFileClick"/> with the
-    /// decoded absolute path (revealing the file in the preview); <c>http</c>/<c>https</c>/
-    /// <c>mailto</c> links open in the system browser. File links are wired only when
-    /// <paramref name="onFileClick"/> is supplied.
+    /// <c>agentdock-file://</c> links (and plain <c>file://</c> ones the model wrote
+    /// itself) invoke <paramref name="onFileClick"/> with the decoded absolute path —
+    /// a file or a folder; <c>http</c>/<c>https</c>/<c>mailto</c> links open in the
+    /// system browser. With no <paramref name="onFileClick"/> supplied, a file-system
+    /// link falls back to the shell rather than going dead.
     /// </summary>
     public void WireLinks(FlowDocument? doc, Action<string>? onFileClick)
     {
@@ -1049,16 +1091,30 @@ public sealed partial class MarkdownRenderer(ILogService log, IPerfDiagnostics p
             // copied selection is rewritten as markdown (see EnableMarkdownLinkCopy).
             link.Command = null;
 
-            var abs = FromFileLinkUri(url);
+            // Our own linkified path reference, or a file:// target the model wrote as a
+            // markdown link itself — [the output folder](file:///C:/build/out). The second
+            // kind only reaches here (LinkifyPaths rewrites bare text, not link targets),
+            // and before this it fell past every branch below and rendered as dead text:
+            // a link that looked clickable and did nothing.
+            var linkified = FromFileLinkUri(url);
+            var abs = linkified ?? TryResolveFileUri(url);
             if (abs != null)
             {
-                if (onFileClick == null) continue;
-                // These labels were stripped of their backtick code span in LinkifyPaths
-                // (MdXaml can't render a code span inside a link), so restore the
-                // monospace look here — file references read as code.
-                link.FontFamily = CodeFontFamily;
                 link.Cursor = Cursors.Hand;
-                link.Click += (_, _) => onFileClick(abs);
+
+                // Linkified labels were stripped of their backtick code span in
+                // LinkifyPaths (MdXaml can't render a code span inside a link), so restore
+                // the monospace look here — file references read as code. A label the model
+                // wrote is prose and keeps the body font.
+                if (linkified != null)
+                    link.FontFamily = CodeFontFamily;
+
+                // No host to reveal it in (callers that pass none) — hand it to the shell
+                // rather than leaving the click inert.
+                if (onFileClick != null)
+                    link.Click += (_, _) => onFileClick(abs);
+                else
+                    link.Click += (_, _) => OpenWithShell(abs);
                 continue;
             }
 
@@ -1069,7 +1125,7 @@ public sealed partial class MarkdownRenderer(ILogService log, IPerfDiagnostics p
             {
                 var target = uri.AbsoluteUri;
                 link.Cursor = Cursors.Hand;
-                link.Click += (_, _) => OpenInBrowser(target);
+                link.Click += (_, _) => OpenWithShell(target);
             }
         }
     }
@@ -1230,16 +1286,20 @@ public sealed partial class MarkdownRenderer(ILogService log, IPerfDiagnostics p
         return FromFileLinkUri(url) != null ? null : url;
     }
 
-    private void OpenInBrowser(string url)
+    /// <summary>
+    /// Hands a link target to the shell: a URL goes to the default browser, a folder opens
+    /// in File Explorer, a file opens in whatever is registered for it.
+    /// </summary>
+    private void OpenWithShell(string target)
     {
         try
         {
             System.Diagnostics.Process.Start(
-                new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+                new System.Diagnostics.ProcessStartInfo(target) { UseShellExecute = true });
         }
         catch (Exception ex)
         {
-            log.Error($"Failed to open URL in browser: {url}", ex);
+            log.Error($"Failed to open link target: {target}", ex);
         }
     }
 
@@ -1306,6 +1366,11 @@ public sealed partial class MarkdownRenderer(ILogService log, IPerfDiagnostics p
         }
         else
         {
+            // A relative reference means nothing without a root to hang it off; resolving
+            // it against the process working directory would link to whatever happens to
+            // be there. Absolute references stay resolvable either way.
+            if (string.IsNullOrEmpty(projectRoot)) return false;
+
             if (text.StartsWith("./", StringComparison.Ordinal) || text.StartsWith(".\\", StringComparison.Ordinal))
                 text = text.Substring(2);
             candidate = Path.Combine(projectRoot, text);
@@ -1313,7 +1378,9 @@ public sealed partial class MarkdownRenderer(ILogService log, IPerfDiagnostics p
 
         try
         {
-            if (File.Exists(candidate))
+            // Folders count. An agent naming the directory it just created is pointing
+            // somewhere the user wants to go, exactly as much as one naming a file.
+            if (File.Exists(candidate) || Directory.Exists(candidate))
             {
                 absolute = Path.GetFullPath(candidate);
                 return true;
@@ -1324,6 +1391,43 @@ public sealed partial class MarkdownRenderer(ILogService log, IPerfDiagnostics p
             // Invalid path characters etc. — treat as no match.
         }
         return false;
+    }
+
+    /// <summary>
+    /// Resolves a <c>file://</c> URI to an existing local path, or null. Accepts the
+    /// malformed-but-common <c>file://C:\dir</c> spelling alongside the correct
+    /// <c>file:///C:/dir</c>, because agents emit both.
+    /// </summary>
+    private static string? TryResolveFileUri(string uriText)
+    {
+        try
+        {
+            if (!Uri.TryCreate(uriText, UriKind.Absolute, out var uri) || !uri.IsFile)
+                return null;
+
+            // LocalPath handles both authority forms already: a UNC host comes back as
+            // \\server\share\…, and the mis-spelled drive-letter authority (file://C:/x)
+            // flattens to C:\x.
+            var local = uri.LocalPath;
+            if (string.IsNullOrEmpty(local)) return null;
+
+            return File.Exists(local) || Directory.Exists(local) ? Path.GetFullPath(local) : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // Sentence punctuation that commonly trails a path reference in prose. Trimmed before
+    // resolution rather than after, because Windows silently ignores a trailing dot —
+    // "docs/notes." resolves, and the link would then carry the full stop in its label.
+    private static string TrimPathTrailing(string path)
+    {
+        var end = path.Length;
+        while (end > 0 && ".,;:!?".IndexOf(path[end - 1]) >= 0)
+            end--;
+        return path.Substring(0, end);
     }
 
     private static bool AllDigits(string s, int start)

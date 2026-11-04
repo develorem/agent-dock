@@ -16,7 +16,7 @@ Open as many project folders as you need, each in its own tab with its own panel
 
 ## Tab groups & Active Projects
 
-With twenty projects open, one row of tabs isn't enough. Group your tabs, give the groups icons and colours, and let each group tab roll up the status of everything inside it. A dynamic **Active** tab always shows the projects with a live session, most recent first.
+With twenty projects open, one row of tabs isn't enough. Group your tabs, give the groups icons and colours, and let each group tab roll up the status of everything inside it. A dynamic **Active** tab always shows the projects with a live session, most recent first. Both strips scroll once they fill up — and never scroll the tab you're working in out of sight.
 
 [Tab Groups →](groups.md)
 
@@ -28,7 +28,7 @@ Every tab shows what its session is doing — working, waiting on you, errored, 
 
 ## AI Chat
 
-Stream responses, one collapsible activity bubble per turn, inline permission and question prompts, image attachments, a send queue, scheduled messages, slash-command autocomplete, clickable file and web links, and live subagent tracking.
+Stream responses, one collapsible activity bubble per turn, inline permission and question prompts, image attachments, a send queue, scheduled messages, slash-command autocomplete, clickable file, folder and web links, and live subagent tracking.
 
 [AI Chat →](ai-chat.md)
 

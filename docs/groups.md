@@ -30,7 +30,7 @@ The first time you do this the workspace splits into two groups:
 
 Subsequent uses create *Group 2*, *Group 3*, and so on.
 
-You can also click the **+** at the end of the group strip to create a new empty group and switch to it.
+You can also click the **+** at the start of the group strip to create a new empty group and switch to it. It's pinned outside the scrolling part of the strip, so it stays put however many groups you have.
 
 ---
 
@@ -47,6 +47,16 @@ You can also click the **+** at the end of the group strip to create a new empty
 Deleting the second-to-last group dissolves grouping completely and puts the workspace back into its no-group-strip state.
 
 **Switching to a group opens the project that needs you** rather than just the first one, using the same priority as the [status roll-up](#status-roll-up). The project that lit the group up is the one you land on.
+
+### When there are more groups than fit
+
+Two arrows appear next to the **+** once the group strip runs out of room:
+
+- **◀ / ▶** scroll the strip one group at a time; hold one down to keep going, and the arrow pointing at an end already reached greys out
+- The **mouse wheel** over the group strip does the same
+- Dragging a group tab against either end scrolls the strip along with it
+
+**The active group tab never scrolls out of sight** — it holds the edge of the strip while the others scroll past underneath, so looking for a group never costs you sight of the one you're in. The group strip and the [project tab row](projects.md#when-there-are-more-tabs-than-fit) scroll independently of each other; the [Active Projects](#active-projects) tab and the remote-mode pill sit outside the scrolling area on the right and are always visible.
 
 ### Group right-click menu
 

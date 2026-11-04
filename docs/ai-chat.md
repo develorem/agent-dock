@@ -264,11 +264,27 @@ Work that resumes after you answer opens a **new** activity bubble below that te
 
 Assistant messages render as markdown — headings, code blocks with syntax highlighting, tables, lists and links — with a toggle for raw source. Rendering happens once, lazily, the first time a message is actually on screen, and is cached.
 
-### File references
+### File and folder references
 
-File paths in a reply (e.g. `src/AgentDock/Services/ClaudeSession.cs` or `./docs/TASKS.md`) become clickable links. Clicking one **reveals the file in the File Explorer** (expanding parent folders) and shows it in the [File Preview](project-features.md#file-preview).
+Locations in a reply become clickable links. That covers all the ways an agent writes one:
 
-Only paths that actually resolve to a file under the project root are linked. Bare filenames with no directory component are left as plain text to avoid wrong matches, and paths inside fenced code blocks aren't linkified — they're usually code, not navigation.
+| Written as | Example |
+|------------|---------|
+| A project-relative path | `src/AgentDock/Services/ClaudeSession.cs`, `./docs/TASKS.md` |
+| A folder | `docs/release-notes`, or `docs/` with a trailing slash |
+| An absolute path | `C:\builds\nightly\output` |
+| A `file://` URI | `file:///C:/builds/nightly/output` |
+| A file with no extension | `docs/LICENSE` |
+
+What a click does depends on what's at the other end:
+
+- **A file in the project** is revealed in the [File Explorer](project-features.md#file-explorer) (expanding parent folders) and shown in the [File Preview](project-features.md#file-preview)
+- **A folder** is revealed in the File Explorer *and* opened in a Windows File Explorer window — no panel shows a folder's contents, so the click takes you there
+- **Anything the File Explorer can't reach** — outside the project root, or hidden by the tree's filters — opens in Windows File Explorer with the item selected
+
+Only locations that actually exist on disk are linked: the file system decides, not the shape of the text, so prose like "one and/or the other" stays prose. Bare filenames with no directory component are left alone to avoid wrong matches, paths inside fenced code blocks aren't linkified (they're usually code, not navigation), and a full stop ending the sentence stays outside the link.
+
+On a [remote session](remote-sessions.md) the paths belong to the host machine, so a click reveals them in the host-backed File Explorer and never opens a window on your own machine.
 
 ### Web links
 

@@ -4,6 +4,7 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:AgentDock"
+        xmlns:controls="clr-namespace:AgentDock.Controls"
         mc:Ignorable="d"
         Title="Agent Dock"
         Height="720" Width="1280"
@@ -58,6 +59,10 @@
                     <Button x:Name="RemoteStripCopyButton" Content="Copy code"
                             Margin="0,0,8,0" Padding="10,2" FontSize="11" Cursor="Hand"
                             Click="RemoteCopyCode_Click" />
+                    <Button x:Name="RemoteStripRegenerateButton" Content="Regenerate"
+                            Margin="0,0,8,0" Padding="10,2" FontSize="11" Cursor="Hand"
+                            ToolTip="Issue a new pairing code, invalidating the current one"
+                            Click="RegenerateCode_Click" />
                     <Button x:Name="RemoteStripKickButton" Content="Take back control"
                             Margin="0,0,8,0" Padding="10,2" FontSize="11" Cursor="Hand"
                             Click="KickClient_Click" />
@@ -150,32 +155,6 @@
                         <Separator x:Name="RecentWorkspacesSeparator" Visibility="Collapsed" />
                         <MenuItem x:Name="RecentWorkspacesHeader" Header="Recent Workspaces"
                                   IsEnabled="False" Visibility="Collapsed" />
-                        <Separator />
-                        <MenuItem Header="_Remote">
-                            <MenuItem x:Name="StartServerMenuItem" Header="_Enter Server Mode..."
-                                      Click="StartServer_Click">
-                                <MenuItem.Icon>
-                                    <TextBlock Text="&#xE968;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                                               Foreground="{DynamicResource MenuIconForeground}" />
-                                </MenuItem.Icon>
-                            </MenuItem>
-                            <MenuItem x:Name="StopServerMenuItem" Header="S_top Server"
-                                      IsEnabled="False" Click="StopServer_Click" />
-                            <MenuItem x:Name="RegenerateCodeMenuItem" Header="_Regenerate Pairing Code"
-                                      IsEnabled="False" Click="RegenerateCode_Click" />
-                            <MenuItem x:Name="KickClientMenuItem" Header="Take _Back Control"
-                                      IsEnabled="False" Click="KickClient_Click" />
-                            <Separator />
-                            <MenuItem x:Name="ConnectRemoteMenuItem" Header="_Connect to Server..."
-                                      Click="ConnectRemote_Click">
-                                <MenuItem.Icon>
-                                    <TextBlock Text="&#xE703;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                                               Foreground="{DynamicResource MenuIconForeground}" />
-                                </MenuItem.Icon>
-                            </MenuItem>
-                            <MenuItem x:Name="DisconnectRemoteMenuItem" Header="_Disconnect"
-                                      IsEnabled="False" Click="DisconnectRemote_Click" />
-                        </MenuItem>
                         <Separator x:Name="ExitSeparator" />
                         <MenuItem Header="E_xit" InputGestureText="Alt+F4" Click="Exit_Click">
                             <MenuItem.Icon>
@@ -490,7 +469,11 @@
                             Height="1"
                             VerticalAlignment="Bottom"
                             Background="{DynamicResource TabButtonActiveBorderBrush}" />
-                    <DockPanel LastChildFill="False">
+                    <!-- LastChildFill so the scrolling group strip takes every pixel between
+                         the pinned controls on the left and the Active tab / remote pill on
+                         the right: that span is its viewport, and it is what decides when
+                         the navigation arrows have anything to do. -->
+                    <DockPanel LastChildFill="True">
                         <!-- Remote-mode pill. Declared before ActiveGroupHost so the DockPanel
                              gives it the outer right edge, putting it immediately beside the
                              Active tab: while hosting, that tab is the published set, and this
@@ -556,10 +539,16 @@
                                         DockPanel.Dock="Right"
                                         VerticalAlignment="Bottom"
                                         Margin="24,0,4,0" />
-                        <StackPanel x:Name="MetaTabPanel" Orientation="Horizontal"
-                                    DockPanel.Dock="Left">
+                        <!-- Pinned controls for the group strip: add-group, then the two
+                             scroll arrows. Docked at the leading edge so they stay put and
+                             stay reachable however many groups are open — the tabs scroll,
+                             these never do. Populated in code. -->
+                        <StackPanel x:Name="GroupNavCluster" Orientation="Horizontal"
+                                    DockPanel.Dock="Left"
+                                    VerticalAlignment="Center" />
+                        <controls:TabStripPanel x:Name="MetaTabPanel" Orientation="Horizontal">
                             <!-- Meta tab elements are inserted here dynamically -->
-                        </StackPanel>
+                        </controls:TabStripPanel>
                     </DockPanel>
                 </Grid>
             </Border>
@@ -590,8 +579,16 @@
                             Height="1"
                             VerticalAlignment="Bottom"
                             Background="{DynamicResource ProjectTabActiveBorderBrush}" />
-                    <!-- Project tab buttons are inserted here dynamically -->
-                    <StackPanel x:Name="ToolbarPanel" Orientation="Horizontal" />
+                    <DockPanel x:Name="ProjectStripDock" LastChildFill="True">
+                        <!-- Pinned controls for the project strip: add-project, then the two
+                             scroll arrows. Docked at the leading edge (top edge when the
+                             strip runs down a side) so they never scroll away. Populated
+                             in code. -->
+                        <StackPanel x:Name="ProjectNavCluster" Orientation="Horizontal"
+                                    DockPanel.Dock="Left" />
+                        <!-- Project tab buttons are inserted here dynamically -->
+                        <controls:TabStripPanel x:Name="ToolbarPanel" Orientation="Horizontal" />
+                    </DockPanel>
                 </Grid>
             </Border>
 

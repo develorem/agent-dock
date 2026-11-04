@@ -48,7 +48,7 @@ The same actions are on the [project tab right-click menu](projects.md#the-tab-r
 
 ### Reveal from elsewhere
 
-Clicking a [file reference in a chat reply](ai-chat.md#file-references), or the reveal button on a diff, expands the tree to that file, selects it, and shows it in the preview.
+Clicking a [file or folder reference in a chat reply](ai-chat.md#file-and-folder-references), or the reveal button on a diff, expands the tree to that file, selects it, and shows it in the preview.
 
 ---
 

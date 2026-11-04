@@ -43,8 +43,11 @@ Desktop.ini
 # User-specific files
 *.userprefs
 
-# Claude Code local settings
-.claude/
+# Claude Code local settings (but keep the project-shared pieces tracked)
+.claude/*
+!.claude/settings.json
+!.claude/agents/
+!.claude/agents/**
 
 # App config (user-specific)
 appsettings.json

@@ -71,12 +71,17 @@ public partial class FileExplorerControl : UserControl
     /// <summary>
     /// Expands the tree to <paramref name="absolutePath"/>, selects the matching node,
     /// and raises <see cref="FileSelected"/> if it's a file. The path must be inside
-    /// the loaded root and exist on disk; otherwise this is a no-op.
+    /// the loaded root, exist on disk, and survive the tree's own filtering.
     /// </summary>
-    public void RevealAndSelect(string absolutePath)
+    /// <returns>
+    /// True when the node was found and selected. False means this panel cannot show the
+    /// path at all — it's outside the root, gone from disk, or filtered out of the tree —
+    /// which lets the caller fall back to something that can (see the chat's file links).
+    /// </returns>
+    public bool RevealAndSelect(string absolutePath)
     {
         if (string.IsNullOrEmpty(_rootPath) || string.IsNullOrEmpty(absolutePath))
-            return;
+            return false;
 
         string rootFull, targetFull;
         try
@@ -84,20 +89,20 @@ public partial class FileExplorerControl : UserControl
             rootFull = Path.GetFullPath(_rootPath);
             targetFull = Path.GetFullPath(absolutePath);
         }
-        catch { return; }
+        catch { return false; }
 
         if (!File.Exists(targetFull) && !Directory.Exists(targetFull))
-            return;
+            return false;
 
         if (!targetFull.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase))
-            return;
+            return false;
         if (targetFull.Length == rootFull.Length)
-            return; // path is the root itself
+            return false; // path is the root itself
 
         var relative = Path.GetRelativePath(rootFull, targetFull);
         var segments = relative.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
             StringSplitOptions.RemoveEmptyEntries);
-        if (segments.Length == 0) return;
+        if (segments.Length == 0) return false;
 
         IEnumerable<FileNode> currentLevel = FileTree.Items.OfType<FileNode>();
         FileNode? targetNode = null;
@@ -106,12 +111,12 @@ public partial class FileExplorerControl : UserControl
         {
             var match = currentLevel.FirstOrDefault(n =>
                 string.Equals(n.Name, segments[i], StringComparison.OrdinalIgnoreCase));
-            if (match == null) return;
+            if (match == null) return false;
 
             var isLast = i == segments.Length - 1;
             if (!isLast)
             {
-                if (!match.IsDirectory) return;
+                if (!match.IsDirectory) return false;
                 if (match.Children.Count == 1 && match.Children[0].FullPath == null)
                     LoadChildren(match);
                 match.IsExpanded = true;
@@ -124,7 +129,7 @@ public partial class FileExplorerControl : UserControl
             }
         }
 
-        if (targetNode == null) return;
+        if (targetNode == null) return false;
 
         targetNode.IsSelected = true;
 
@@ -134,6 +139,8 @@ public partial class FileExplorerControl : UserControl
 
         if (!targetNode.IsDirectory && targetNode.FullPath != null)
             FileSelected?.Invoke(targetNode.FullPath);
+
+        return true;
     }
 
     private void BringNodeIntoView(FileNode node)

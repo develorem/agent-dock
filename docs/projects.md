@@ -23,7 +23,7 @@ Each project in Agent Dock is a folder on your machine. You can have as many ope
 - Click **+** in the project toolbar, or
 - **File → Add Project Folder** (**Ctrl+N**)
 
-The **+** button is position-aware: it sits at the end of the tab row wherever you've docked the toolbar.
+The **+** button is pinned at the start of the tab row — the top of the row when you've docked the toolbar to a side. It sits outside the part of the strip that scrolls, so it stays in the same place and stays reachable however many projects are open.
 
 If [groups](groups.md) are in use, the new project joins whichever group is currently showing.
 
@@ -46,6 +46,18 @@ Closing a project stops its agent session.
 
 The active tab reads as joined to the workspace below it, via an accent rail that frames the content it owns — see [how tabs frame their work](groups.md#how-tabs-frame-their-work).
 
+### When there are more tabs than fit
+
+Past a certain number of projects the row runs out of space, and two arrows appear next to the **+**:
+
+- **◀ / ▶** scroll the row one tab at a time. Hold one down to keep going. The arrow pointing at an end you've already reached greys out
+- The **mouse wheel** over the tab row does the same thing
+- Dragging a tab against either end of the row scrolls it, so you can drop a tab somewhere that isn't currently on screen
+
+**The tab you're working in never scrolls out of sight.** It stays in its natural position while that position is on screen, and sticks to the edge of the row once it would have passed it — the other tabs scroll along underneath. Switching to a tab from anywhere else (a keyboard shortcut, a group switch, a session finishing) scrolls it back into view.
+
+When everything fits, the arrows aren't there at all — the row looks exactly as it always did.
+
 ---
 
 ## Tab status indicators
@@ -67,7 +79,9 @@ A tab that finishes work while you're looking elsewhere flashes green until you 
 
 A session with subagents or background tasks still running keeps pulsing rather than showing a solid "ready" diamond — "idle, but three subagents are still going" is visibly different from "done". See [Subagents and background work](ai-chat.md#subagents-and-background-work).
 
-Hovering a tab shows the folder path, plus the due time of any scheduled message.
+Hovering a tab shows the folder path, and — while a session is actually running — which [Claude account](accounts.md) it's running as, the due time of any scheduled message, and whether background work is still draining. Each line appears only while it's true, so a tab with nothing going on still just shows its path.
+
+On a [remote session](remote-sessions.md) tab the account named is the **host's**, because that's the machine running the agent.
 
 [Group tabs roll these up](groups.md#status-roll-up), so a collapsed group whose projects need attention lights up too.
 

@@ -489,26 +489,25 @@ public partial class MainWindow : IRemoteServerProjects
     // ================================================================== shared chrome
 
     /// <summary>
-    /// Keeps the status strip and the Remote menu in step with both roles. Called from every state
-    /// transition rather than being recomputed in each handler, so there is one description of what
-    /// the UI should look like.
+    /// Keeps the status strip in step with both roles. Called from every state transition rather
+    /// than being recomputed in each handler, so there is one description of what the UI should
+    /// look like.
+    ///
+    /// Entering and leaving these roles is Settings ▸ Set Mode's job, not this method's. The strip
+    /// carries only what you do *while* hosting or connected, and it is visible exactly when one of
+    /// those is true — so its buttons need no enabled/disabled state, unlike the menu items they
+    /// replaced, which had to sit greyed out in a menu that was on screen the rest of the time.
     /// </summary>
     private void RefreshRemoteUi()
     {
         var hosting = _remoteServer.IsRunning;
         var connected = _remoteClient.State != RemoteClientState.Disconnected;
 
-        StartServerMenuItem.IsEnabled = !hosting && !connected;
-        StopServerMenuItem.IsEnabled = hosting;
-        RegenerateCodeMenuItem.IsEnabled = hosting;
-        KickClientMenuItem.IsEnabled = _remoteServer.HasClient;
-        ConnectRemoteMenuItem.IsEnabled = !hosting && !connected;
-        DisconnectRemoteMenuItem.IsEnabled = connected;
-
         if (hosting)
         {
             RemoteStrip.Visibility = Visibility.Visible;
             RemoteStripCopyButton.Visibility = Visibility.Visible;
+            RemoteStripRegenerateButton.Visibility = Visibility.Visible;
             RemoteStripAddressButton.Visibility = Visibility.Visible;
             RemoteStripStopButton.Visibility = Visibility.Visible;
             RemoteStripDisconnectButton.Visibility = Visibility.Collapsed;
@@ -533,6 +532,7 @@ public partial class MainWindow : IRemoteServerProjects
         {
             RemoteStrip.Visibility = Visibility.Visible;
             RemoteStripCopyButton.Visibility = Visibility.Collapsed;
+            RemoteStripRegenerateButton.Visibility = Visibility.Collapsed;
             RemoteStripAddressButton.Visibility = Visibility.Collapsed;
             RemoteStripKickButton.Visibility = Visibility.Collapsed;
             RemoteStripStopButton.Visibility = Visibility.Collapsed;
@@ -557,6 +557,7 @@ public partial class MainWindow : IRemoteServerProjects
             // no explanation of why nothing responds. Disconnect tears the group down.
             RemoteStrip.Visibility = Visibility.Visible;
             RemoteStripCopyButton.Visibility = Visibility.Collapsed;
+            RemoteStripRegenerateButton.Visibility = Visibility.Collapsed;
             RemoteStripAddressButton.Visibility = Visibility.Collapsed;
             RemoteStripKickButton.Visibility = Visibility.Collapsed;
             RemoteStripStopButton.Visibility = Visibility.Collapsed;

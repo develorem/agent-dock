@@ -360,6 +360,29 @@ public partial class AiChatControl : UserControl
     public string? AccountLabel { get; private set; }
 
     /// <summary>
+    /// The login the session is running as <em>right now</em>, or null when nothing is
+    /// running (or no accounts are configured). Distinct from <see cref="AccountLabel"/>,
+    /// which keeps its value after a session dies unexpectedly: this answers "which account
+    /// is this tab on at the moment", which is the question a tab tooltip is asked.
+    ///
+    /// On a remote tab it reports the <em>host's</em> account, since that machine is the one
+    /// running the agent — the local control has no session of its own to name.
+    /// </summary>
+    public string? ActiveAccountLabel
+    {
+        get
+        {
+            var (state, label) = IsRemote
+                ? (_remoteState?.State ?? ClaudeSessionState.NotStarted, _remoteState?.AccountLabel)
+                : (CurrentState, AccountLabel);
+
+            return state is ClaudeSessionState.NotStarted or ClaudeSessionState.Exited
+                ? null
+                : label;
+        }
+    }
+
+    /// <summary>
     /// Id of the login this session is running as, or null for the machine default.
     /// Kept alongside <see cref="AccountLabel"/> so a failed turn can check whether that
     /// account is still signed in and say so. Fixed for the session's life.

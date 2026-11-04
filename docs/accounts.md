@@ -52,6 +52,15 @@ If you have more than one account configured, the AI Chat **start panel** shows 
 
 With a single account (or none), the picker is hidden and sessions use the default login.
 
+### Seeing which account a session is on
+
+Once a session is running, the account it's using shows up in two places:
+
+- The **AI Chat panel title**, next to the model name
+- The **tooltip on the project tab** — hover any tab, active or not, and it names the account under the folder path. With several projects open on different logins, that's how you check them all without switching tabs
+
+Both go quiet when the session ends, and neither appears at all if you have no accounts configured.
+
 ---
 
 ## The usage indicator
