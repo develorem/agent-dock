@@ -13,4 +13,14 @@ public class ClaudeAccount
 
     /// <summary>User-facing label, e.g. "Personal" or "Work".</summary>
     public string Name { get; set; } = "";
+
+    /// <summary>
+    /// Custom accent colour ("#RRGGBB") used for this account's usage bar, group box
+    /// and chat-panel header tint when a light theme is active. Null = fall back to
+    /// the default palette colour assigned by the account's position.
+    /// </summary>
+    public string? AccentColorLight { get; set; }
+
+    /// <summary>Same as <see cref="AccentColorLight"/>, but applied under a dark theme.</summary>
+    public string? AccentColorDark { get; set; }
 }

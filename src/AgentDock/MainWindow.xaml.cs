@@ -20,6 +20,7 @@ using AvalonDock.Layout;
 using AvalonDock.Layout.Serialization;
 using AvalonDock.Themes;
 using Microsoft.Win32;
+using Vs2013ResourceKeys = AvalonDock.Themes.VS2013.Themes.ResourceKeys;
 
 namespace AgentDock;
 
@@ -582,7 +583,24 @@ public partial class MainWindow : Window
 
     private void Accounts_Click(object sender, RoutedEventArgs e)
     {
-        Windows.AccountsDialog.Show(this, _accounts);
+        Windows.AccountsDialog.Show(this, _accounts, RefreshAccountAccents);
+    }
+
+    /// <summary>
+    /// Re-reads accounts (names/custom colours) and reapplies accent colours everywhere
+    /// they're shown — the usage popup and every open chat panel header — rather than
+    /// waiting for the next periodic usage refresh to pick a change up. Cheap and local
+    /// only: no network call, just re-rendering from what's already on disk.
+    /// </summary>
+    private void RefreshAccountAccents()
+    {
+        RebuildUsageAccounts();
+        RenderUsageDetails();
+        foreach (var (project, dm) in _projectDockingManagers)
+        {
+            if (_projectChatControls.TryGetValue(project, out var chat))
+                ApplyAccountAccent(dm, chat.AccountId);
+        }
     }
 
     // --- Help Menu ---
@@ -4831,6 +4849,8 @@ public partial class MainWindow : Window
         public string? Id;                          // null = machine default
         public string Label = "";                   // "Default" or the account's name
         public string? ConfigDir;                   // null = ~/.claude
+        public string? AccentColorLight;             // custom accent, light themes — null = palette default
+        public string? AccentColorDark;              // custom accent, dark themes — null = palette default
         public UsageFetchResult? LastResult;
         public UsageSummary? LastSuccess;
 
@@ -4884,16 +4904,18 @@ public partial class MainWindow : Window
     /// </summary>
     private void RebuildUsageAccounts()
     {
-        UsageAccount Carry(string? id, string label, string? configDir)
+        UsageAccount Carry(string? id, string label, string? configDir, string? colorLight, string? colorDark)
         {
             var existing = _usageAccounts.FirstOrDefault(a => a.Id == id);
             if (existing != null)
             {
                 existing.Label = label;
                 existing.ConfigDir = configDir;
+                existing.AccentColorLight = colorLight;
+                existing.AccentColorDark = colorDark;
                 return existing;
             }
-            return new UsageAccount { Id = id, Label = label, ConfigDir = configDir };
+            return new UsageAccount { Id = id, Label = label, ConfigDir = configDir, AccentColorLight = colorLight, AccentColorDark = colorDark };
         }
 
         var named = _accounts.Load();
@@ -4907,13 +4929,13 @@ public partial class MainWindow : Window
         // the default is hidden to avoid a confusing extra bracket that duplicates
         // (or competes with) the accounts the user explicitly set up.
         if (named.Count == 0)
-            updated.Add(Carry(null, "Default", null));
+            updated.Add(Carry(null, "Default", null, null, null));
 
         foreach (var a in named)
         {
             if (!_accounts.IsLoggedIn(a.Id))
                 continue;
-            updated.Add(Carry(a.Id, a.Name, _accounts.ConfigDirFor(a.Id)));
+            updated.Add(Carry(a.Id, a.Name, _accounts.ConfigDirFor(a.Id), a.AccentColorLight, a.AccentColorDark));
         }
 
         _usageAccounts = updated;
@@ -5024,8 +5046,23 @@ public partial class MainWindow : Window
         Color.FromRgb(0xC9, 0x8A, 0x3B), // bronze
     };
 
-    private Color AccountAccentColor(int index) =>
-        AccountAccentColors[index % AccountAccentColors.Length];
+    /// <summary>
+    /// The account's accent colour: its custom colour for the active theme variant
+    /// (<see cref="UsageAccount.AccentColorLight"/>/<see cref="UsageAccount.AccentColorDark"/>)
+    /// when one is set, otherwise the default palette colour for its position.
+    /// </summary>
+    private Color AccountAccentColor(int index)
+    {
+        var fallback = AccountAccentColors[index % AccountAccentColors.Length];
+        if (index < 0 || index >= _usageAccounts.Count)
+            return fallback;
+
+        var hex = _theme.BaseVariant == ThemeBaseVariant.Dark
+            ? _usageAccounts[index].AccentColorDark
+            : _usageAccounts[index].AccentColorLight;
+
+        return hex != null ? ParseHexBrush(hex)?.Color ?? fallback : fallback;
+    }
 
     /// <summary>Solid accent brush for the account at <paramref name="index"/> (frozen, reusable).</summary>
     private Brush AccountAccentBrush(int index)
@@ -5044,15 +5081,26 @@ public partial class MainWindow : Window
         return brush;
     }
 
-    // AvalonDock's VS2013 theme (Dirkster.AvalonDock.Themes.VS2013) exposes the active
-    // document tab/header bar as plain string-keyed resources, not typed constants - there is
-    // no public AvalonDock.Themes.ResourceKeys class to reference, these are x:Key values the
-    // theme's own compiled dictionary declares. Overriding them directly on a DockingManager's
-    // own Resources wins over anything its merged .Theme dictionary supplies, and the theme
-    // resolves them via DynamicResource - the same mechanism OnThemeChanged already relies on
-    // to retint every open panel live when the light/dark theme changes.
-    private const string DocumentHeaderBackgroundKey = "DocumentWellTabSelectedActiveBackground";
-    private const string DocumentHeaderForegroundKey = "DocumentWellTabSelectedActiveText";
+    // AvalonDock's VS2013 theme (Dirkster.AvalonDock.Themes.VS2013) declares its resources
+    // keyed by ComponentResourceKey, not plain strings - the compiled dictionary sets each key
+    // via {x:Static reskeys:ResourceKeys.ToolWindowCaptionActiveBackground}, and a
+    // ComponentResourceKey is never equal to a string with the same text (its Equals checks the
+    // owner type + member name as a pair, not a string match). Indexing dockingManager.Resources
+    // with a string of the same name silently inserts an unrelated entry instead of overriding
+    // the theme's - which is why earlier attempts (DocumentWellTabSelectedActive*, then
+    // ToolWindowCaptionActive/Inactive* as plain strings) compiled fine and still left the header
+    // theme-default blue. AvalonDock.Themes.VS2013.Themes.ResourceKeys is public, so the actual
+    // ComponentResourceKey instances can be referenced directly (aliased as Vs2013ResourceKeys
+    // at the top of this file to avoid clashing with the AvalonDock.Themes namespace).
+    //
+    // The AI Chat panel is hosted in a LayoutAnchorable (a dockable tool pane), not a
+    // LayoutDocument - its header is the AnchorablePaneTitle control, which the VS2013 theme
+    // paints from the ToolWindowCaption* keys (Active while the pane has focus, Inactive
+    // otherwise).
+    private static readonly object ToolWindowCaptionActiveBackgroundKey = Vs2013ResourceKeys.ToolWindowCaptionActiveBackground;
+    private static readonly object ToolWindowCaptionActiveForegroundKey = Vs2013ResourceKeys.ToolWindowCaptionActiveText;
+    private static readonly object ToolWindowCaptionInactiveBackgroundKey = Vs2013ResourceKeys.ToolWindowCaptionInactiveBackground;
+    private static readonly object ToolWindowCaptionInactiveForegroundKey = Vs2013ResourceKeys.ToolWindowCaptionInactiveText;
 
     /// <summary>
     /// Tints a project's chat panel header with its account's accent colour - the same colour
@@ -5070,13 +5118,19 @@ public partial class MainWindow : Window
 
         if (index < 0)
         {
-            dockingManager.Resources.Remove(DocumentHeaderBackgroundKey);
-            dockingManager.Resources.Remove(DocumentHeaderForegroundKey);
+            dockingManager.Resources.Remove(ToolWindowCaptionActiveBackgroundKey);
+            dockingManager.Resources.Remove(ToolWindowCaptionActiveForegroundKey);
+            dockingManager.Resources.Remove(ToolWindowCaptionInactiveBackgroundKey);
+            dockingManager.Resources.Remove(ToolWindowCaptionInactiveForegroundKey);
             return;
         }
 
-        dockingManager.Resources[DocumentHeaderBackgroundKey] = AccountAccentBrush(index);
-        dockingManager.Resources[DocumentHeaderForegroundKey] = ReadableTextBrush(AccountAccentColor(index));
+        var background = AccountAccentBrush(index);
+        var foreground = ReadableTextBrush(AccountAccentColor(index));
+        dockingManager.Resources[ToolWindowCaptionActiveBackgroundKey] = background;
+        dockingManager.Resources[ToolWindowCaptionActiveForegroundKey] = foreground;
+        dockingManager.Resources[ToolWindowCaptionInactiveBackgroundKey] = background;
+        dockingManager.Resources[ToolWindowCaptionInactiveForegroundKey] = foreground;
     }
 
     /// <summary>Black or white, whichever reads better on <paramref name="background"/> - a

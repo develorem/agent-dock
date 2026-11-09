@@ -100,7 +100,8 @@
                              Background="Transparent"
                              BorderThickness="0"
                              Foreground="{DynamicResource HelpForeground}"
-                             ScrollViewer.VerticalScrollBarVisibility="Auto">
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             SelectionChanged="AccountsList_SelectionChanged">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <StackPanel Margin="6,6">
@@ -144,6 +145,11 @@
                             Style="{StaticResource DialogButton}"
                             Click="RefreshButton_Click"
                             Margin="0,0,8,0" />
+                    <Button x:Name="ColorsButton"
+                            Content="Colors..."
+                            Style="{StaticResource DialogButton}"
+                            Click="ColorsButton_Click"
+                            Margin="0,0,8,0" />
                     <Button x:Name="RemoveButton"
                             Content="Remove"
                             Style="{StaticResource DialogButton}"
@@ -154,6 +160,44 @@
                                Margin="10,0,0,0"
                                Visibility="Collapsed" />
                 </StackPanel>
+
+                <!-- Per-account accent colour picker. Collapsed until "Colors..." is
+                     clicked for a selected account; swatch clicks apply and save
+                     immediately, same as Add/Remove act on the list directly. -->
+                <Border x:Name="ColorSection"
+                        Visibility="Collapsed"
+                        BorderBrush="{DynamicResource HelpCardBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="3"
+                        Padding="10"
+                        Margin="0,0,0,10">
+                    <StackPanel>
+                        <DockPanel Margin="0,0,0,8">
+                            <Button DockPanel.Dock="Right"
+                                    Content="Done"
+                                    Style="{StaticResource DialogButton}"
+                                    Click="DoneColors_Click" />
+                            <TextBlock x:Name="ColorSectionTitle"
+                                       FontSize="12"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource HelpForeground}" />
+                        </DockPanel>
+
+                        <TextBlock Text="Light theme accent:"
+                                   Style="{StaticResource FieldHint}"
+                                   Margin="0,0,0,4" />
+                        <StackPanel x:Name="LightSwatchPanel"
+                                    Orientation="Horizontal"
+                                    Margin="0,0,0,10" />
+
+                        <TextBlock Text="Dark theme accent:"
+                                   Style="{StaticResource FieldHint}"
+                                   Margin="0,0,0,4" />
+                        <StackPanel x:Name="DarkSwatchPanel"
+                                    Orientation="Horizontal" />
+                    </StackPanel>
+                </Border>
 
                 <DockPanel>
                     <Button x:Name="AddButton"
