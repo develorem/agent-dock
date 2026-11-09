@@ -6,8 +6,9 @@ namespace AgentDock.Services;
 public sealed class ClaudeSessionFactory(
     ILogService log,
     IClaudeEnvironment environment,
-    IPerfDiagnostics perf) : IClaudeSessionFactory
+    IPerfDiagnostics perf,
+    IThinkingCaptureService captureService) : IClaudeSessionFactory
 {
     public ClaudeSession Create(string workingDirectory, string? accountConfigDir = null)
-        => new(workingDirectory, log, environment, perf, accountConfigDir);
+        => new(workingDirectory, log, environment, perf, captureService, accountConfigDir);
 }

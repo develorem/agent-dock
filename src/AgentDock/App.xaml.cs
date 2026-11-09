@@ -70,6 +70,11 @@ public partial class App : Application
         _log.Init(StartupLogsFolder, sessionContext);
         _log.Info("Application starting");
 
+        // Thinking-capture files live next to the main log (same --logs override), under
+        // a "thinking-capture" subfolder. Only active in Debug builds — see IThinkingCaptureService.
+        _services.GetRequiredService<IThinkingCaptureService>()
+            .Init(Path.GetDirectoryName(_log.LogFilePath));
+
         // Performance instrumentation: log the rendering/machine environment once
         // (catches software-rendering fallback) and start the UI-thread stall +
         // health monitors. See PerfDiagnostics.

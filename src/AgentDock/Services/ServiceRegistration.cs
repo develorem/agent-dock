@@ -26,6 +26,7 @@ public static class ServiceRegistration
     {
         // Platform / infrastructure
         services.AddSingleton<ILogService, LogService>();
+        services.AddSingleton<IThinkingCaptureService, ThinkingCaptureService>();
         services.AddSingleton<IPerfDiagnostics, PerfDiagnostics>();
         services.AddSingleton<ISoundService, SoundService>();
         services.AddSingleton<ITaskbarIconService, TaskbarIconService>();

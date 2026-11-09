@@ -17,11 +17,13 @@ public class ClaudeSession : IDisposable
     private readonly ILogService _log;
     private readonly IClaudeEnvironment _environment;
     private readonly IPerfDiagnostics _perf;
+    private readonly IThinkingCaptureService _captureService;
     private readonly string? _accountConfigDir;
     private Process? _process;
     private CancellationTokenSource? _readCts;
     private Task? _readTask;
     private System.Timers.Timer? _inactivityTimer;
+    private IThinkingCaptureWriter? _captureWriter;
     private bool _disposed;
 
     /// <summary>
@@ -85,6 +87,7 @@ public class ClaudeSession : IDisposable
         ILogService log,
         IClaudeEnvironment environment,
         IPerfDiagnostics perf,
+        IThinkingCaptureService captureService,
         string? accountConfigDir = null)
     {
         _workingDirectory = workingDirectory;
@@ -92,6 +95,7 @@ public class ClaudeSession : IDisposable
         _log = log;
         _environment = environment;
         _perf = perf;
+        _captureService = captureService;
         _perf.SessionCreated();
     }
 
@@ -139,6 +143,10 @@ public class ClaudeSession : IDisposable
         ClearBackgroundWork();
 
         SetState(ClaudeSessionState.Working);
+
+        // One capture file per session, opened on the first turn and reused across the
+        // one-shot processes later turns spawn (see IThinkingCaptureService).
+        _captureWriter ??= _captureService.OpenCapture(_workingDirectory);
 
         // Build arguments — matches the Claude Agent SDK's spawn args:
         // stream-json I/O for the full JSON protocol, --permission-prompt-tool stdio
@@ -346,6 +354,8 @@ public class ClaudeSession : IDisposable
         _log.Info("ClaudeSession.Stop called");
 
         StopInactivityTimer();
+        _captureWriter?.Dispose();
+        _captureWriter = null;
 
         // Cancel the read loop first so it stops posting Dispatcher calls
         _readCts?.Cancel();
@@ -385,6 +395,8 @@ public class ClaudeSession : IDisposable
         _readCts?.Cancel();
         KillCurrentProcess();
         _readCts?.Dispose();
+        _captureWriter?.Dispose();
+        _captureWriter = null;
         GC.SuppressFinalize(this);
     }
 
@@ -484,6 +496,10 @@ public class ClaudeSession : IDisposable
 
                 // Reset inactivity watchdog on each line of output
                 ResetInactivityTimer();
+
+                // Full unfiltered raw stream, for offline protocol-shape analysis — see
+                // IThinkingCaptureService. Unlike the log write below, nothing is skipped.
+                _captureWriter?.WriteLine(line);
 
                 // Skip logging streaming-token deltas — they fire dozens of times per second
                 // during a long response and were producing 100+ MB log files. The events are
