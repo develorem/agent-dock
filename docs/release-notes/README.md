@@ -6,7 +6,7 @@ All pre-releases for a target version share that version's one file (`v0.11.0-be
 
 | Version | Highlights |
 |---------|------------|
-| [v0.11.0](v0.11.0.md) | Remote sessions — drive one machine's agents from another; flicker-free file explorer; services behind interfaces |
+| [v0.11.0](v0.11.0.md) | Remote sessions — drive one machine's agents from another, now from a browser too; Autopilot; a first-class Modes switcher; flicker-free file explorer |
 | [v0.10.0](v0.10.0.md) | Active Projects group; accent-framed tabs; per-account usage; the account sign-out fix |
 | [v0.9.1](v0.9.1.md) | Image attachments; send queue; live subagent visibility; open repo in browser |
 | [v0.9.0](v0.9.0.md) | Settings dialogs; tab groups; scheduled messages; virtualized chat; clickable links |
