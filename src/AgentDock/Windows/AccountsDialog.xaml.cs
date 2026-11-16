@@ -44,6 +44,9 @@ public partial class AccountsDialog : Window
     private Border? _selectedLightSwatch;
     private Border? _selectedDarkSwatch;
 
+    private Point _accountDragStartPoint;
+    private AccountRow? _accountDragSource;
+
     private AccountsDialog(IAccountManager accountManager, Action? onAccountsChanged)
     {
         _accounts = accountManager;
@@ -201,6 +204,99 @@ public partial class AccountsDialog : Window
             OpenColorSection(row);
         else
             CloseColorSection();
+    }
+
+    // --- Drag-and-drop reordering ---
+    // List order (not an explicit field) is what every consumer of AccountManager.Load()
+    // enumerates in — the toolbar usage popup, the per-session account picker, this list —
+    // so reordering here just means rewriting the persisted list and letting Populate()
+    // (and the onAccountsChanged callback) do the rest.
+
+    private static AccountRow? FindAccountRow(DependencyObject? source)
+    {
+        while (source != null && source is not ListBoxItem)
+            source = VisualTreeHelper.GetParent(source);
+        return (source as ListBoxItem)?.DataContext as AccountRow;
+    }
+
+    private void AccountsList_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        _accountDragStartPoint = e.GetPosition(null);
+        _accountDragSource = FindAccountRow(e.OriginalSource as DependencyObject);
+    }
+
+    private void AccountsList_PreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (_accountDragSource == null || e.LeftButton != MouseButtonState.Pressed)
+            return;
+
+        var diff = e.GetPosition(null) - _accountDragStartPoint;
+        if (Math.Abs(diff.X) <= SystemParameters.MinimumHorizontalDragDistance &&
+            Math.Abs(diff.Y) <= SystemParameters.MinimumVerticalDragDistance)
+            return;
+
+        var source = _accountDragSource;
+        // Cleared before DoDragDrop, not after: its nested message loop re-raises
+        // PreviewMouseMove on this same handler, and a still-set source would start a
+        // second drag inside the first.
+        _accountDragSource = null;
+        DragDrop.DoDragDrop(AccountsList, new DataObject("AccountRow", source), DragDropEffects.Move);
+    }
+
+    /// <summary>Finds the insertion index among the currently displayed rows for the drop point.</summary>
+    private int GetAccountDropIndex(DragEventArgs e)
+    {
+        for (int i = 0; i < AccountsList.Items.Count; i++)
+        {
+            if (AccountsList.ItemContainerGenerator.ContainerFromIndex(i) is not ListBoxItem item)
+                continue;
+
+            var midpoint = item.RenderSize.Height / 2;
+            if (midpoint <= 0)
+                continue;
+
+            if (e.GetPosition(item).Y < midpoint)
+                return i;
+        }
+
+        return AccountsList.Items.Count;
+    }
+
+    private void AccountsList_DragOver(object sender, DragEventArgs e)
+    {
+        e.Effects = e.Data.GetDataPresent("AccountRow") ? DragDropEffects.Move : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private void AccountsList_Drop(object sender, DragEventArgs e)
+    {
+        e.Handled = true;
+        if (e.Data.GetData("AccountRow") is not AccountRow sourceRow)
+            return;
+
+        var accounts = _accounts.Load();
+        var sourceIndex = accounts.FindIndex(a => a.Id == sourceRow.Id);
+        if (sourceIndex < 0)
+            return;
+
+        var targetIndex = GetAccountDropIndex(e);
+        if (targetIndex > sourceIndex)
+            targetIndex--;
+        if (targetIndex == sourceIndex)
+            return;
+
+        var account = accounts[sourceIndex];
+        accounts.RemoveAt(sourceIndex);
+        accounts.Insert(targetIndex, account);
+        _accounts.Save(accounts);
+
+        Populate();
+        _onAccountsChanged?.Invoke();
+
+        // Keep the moved row selected/highlighted where it landed, rather than losing
+        // selection on every reorder.
+        AccountsList.SelectedItem = (AccountsList.ItemsSource as IEnumerable<AccountRow>)?
+            .FirstOrDefault(r => r.Id == sourceRow.Id);
     }
 
     private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e) => DragMove();

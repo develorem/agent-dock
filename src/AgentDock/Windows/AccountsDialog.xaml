@@ -87,7 +87,7 @@
             <TextBlock Grid.Row="1"
                        Style="{StaticResource FieldHint}"
                        Margin="20,14,20,6"
-                       Text="Each account is a separate Claude login. When you start a session you can pick which account it uses, letting you run more than one Claude plan at once across projects. Add an account and sign in once in the terminal that opens — this list updates itself when the sign-in finishes." />
+                       Text="Each account is a separate Claude login. When you start a session you can pick which account it uses, letting you run more than one Claude plan at once across projects. Add an account and sign in once in the terminal that opens — this list updates itself when the sign-in finishes. Drag an account to reorder it; the order here is used everywhere accounts are listed." />
 
             <!-- Account list -->
             <Border Grid.Row="2"
@@ -101,7 +101,12 @@
                              BorderThickness="0"
                              Foreground="{DynamicResource HelpForeground}"
                              ScrollViewer.VerticalScrollBarVisibility="Auto"
-                             SelectionChanged="AccountsList_SelectionChanged">
+                             AllowDrop="True"
+                             SelectionChanged="AccountsList_SelectionChanged"
+                             PreviewMouseLeftButtonDown="AccountsList_PreviewMouseLeftButtonDown"
+                             PreviewMouseMove="AccountsList_PreviewMouseMove"
+                             DragOver="AccountsList_DragOver"
+                             Drop="AccountsList_Drop">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <StackPanel Margin="6,6">
