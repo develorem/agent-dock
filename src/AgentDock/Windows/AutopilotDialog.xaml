@@ -102,10 +102,16 @@
                            Text="Inside the window below, any selected session that finishes a turn and has nothing waiting on you is asked to carry on with whatever it can do by itself. Outside the window this machine behaves exactly as it does in Standard mode." />
 
                 <TextBlock Text="Sessions to manage" Style="{StaticResource FieldLabel}" />
+                <TextBox x:Name="FilterBox"
+                         Height="26"
+                         FontSize="12"
+                         VerticalContentAlignment="Center"
+                         Margin="0,0,0,6"
+                         TextChanged="FilterBox_TextChanged" />
                 <Border BorderBrush="{DynamicResource HelpCardBorderBrush}"
                         BorderThickness="1"
                         CornerRadius="3"
-                        MaxHeight="150"
+                        MaxHeight="220"
                         Margin="0,0,0,4">
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <ItemsControl x:Name="ProjectList" Margin="8,6" />
@@ -153,27 +159,8 @@
                 <TextBlock Style="{StaticResource HintText}"
                            Text="Unchecked, autopilot returns this machine to Standard mode once the window closes." />
 
-                <Expander Header="Customise the prompt"
-                          Foreground="{DynamicResource HelpForeground}"
-                          FontSize="12"
-                          Margin="0,0,0,10">
-                    <StackPanel Margin="0,8,0,0">
-                        <TextBlock Style="{StaticResource HintText}"
-                                   Text="Sent to every managed session. A line about how much quota is left is added automatically — below 5% nothing is sent at all." />
-                        <TextBox x:Name="PromptBox"
-                                 Height="180"
-                                 FontSize="11"
-                                 FontFamily="Cascadia Code, Consolas, Courier New"
-                                 AcceptsReturn="True"
-                                 TextWrapping="Wrap"
-                                 VerticalScrollBarVisibility="Auto" />
-                        <Button Content="Restore default"
-                                Style="{StaticResource DialogButton}"
-                                HorizontalAlignment="Left"
-                                Margin="0,8,0,0"
-                                Click="RestorePrompt_Click" />
-                    </StackPanel>
-                </Expander>
+                <TextBlock Style="{StaticResource HintText}"
+                           Text="Each repo's nudge text is set from its own toolbar, not here — see the autopilot control on the project toolbar." />
 
                 <TextBlock x:Name="ErrorText"
                            FontSize="12"

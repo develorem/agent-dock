@@ -109,22 +109,32 @@
                              Drop="AccountsList_Drop">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <StackPanel Margin="6,6">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="{Binding Name}"
-                                                   FontSize="13"
-                                                   FontWeight="SemiBold"
-                                                   Foreground="{DynamicResource HelpForeground}" />
-                                        <TextBlock Text="{Binding StatusText}"
-                                                   FontSize="12"
-                                                   Margin="10,1,0,0"
+                                <DockPanel Margin="6,6" LastChildFill="True">
+                                    <Button DockPanel.Dock="Right"
+                                            Content="CMD"
+                                            Style="{StaticResource DialogButton}"
+                                            VerticalAlignment="Center"
+                                            Margin="8,0,4,0"
+                                            Visibility="{Binding ConsoleVisibility}"
+                                            ToolTip="Open a console running claude as this account (for /mcp, /login, etc.)"
+                                            Click="ConsoleButton_Click" />
+                                    <StackPanel>
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding Name}"
+                                                       FontSize="13"
+                                                       FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource HelpForeground}" />
+                                            <TextBlock Text="{Binding StatusText}"
+                                                       FontSize="12"
+                                                       Margin="10,1,0,0"
+                                                       Foreground="{DynamicResource HelpForeground}" />
+                                        </StackPanel>
+                                        <TextBlock Text="{Binding ConfigDir}"
+                                                   FontSize="10"
+                                                   Opacity="0.7"
                                                    Foreground="{DynamicResource HelpForeground}" />
                                     </StackPanel>
-                                    <TextBlock Text="{Binding ConfigDir}"
-                                               FontSize="10"
-                                               Opacity="0.7"
-                                               Foreground="{DynamicResource HelpForeground}" />
-                                </StackPanel>
+                                </DockPanel>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>

@@ -97,7 +97,6 @@
             <Setter Property="Width" Value="52" />
             <Setter Property="Height" Value="28" />
             <Setter Property="FontSize" Value="13" />
-            <Setter Property="MaxLength" Value="2" />
             <Setter Property="TextAlignment" Value="Center" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
             <Setter Property="Foreground" Value="{DynamicResource HelpForeground}" />

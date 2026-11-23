@@ -8,7 +8,8 @@ namespace AgentDock.Windows;
 
 /// <summary>
 /// Collects what autopilot needs before it is armed: which sessions it manages, the window it runs
-/// in, whether that window reopens daily, and optionally a replacement for the built-in prompt.
+/// in, and whether that window reopens daily. Per-project prompts are edited from each repo's own
+/// toolbar, not here — see <c>ProjectToolbar</c>.
 /// </summary>
 public partial class AutopilotDialog : Window
 {
@@ -18,6 +19,8 @@ public partial class AutopilotDialog : Window
     public sealed record ProjectChoice(string FolderPath, string DisplayName, bool HasSession);
 
     private readonly List<(ProjectChoice Choice, CheckBox Box)> _rows = [];
+    private readonly List<TextBlock> _groupHeaders = [];
+    private readonly Dictionary<string, string> _basePromptOverrides;
 
     public AutopilotSettings? Outcome { get; private set; }
 
@@ -25,12 +28,38 @@ public partial class AutopilotDialog : Window
     {
         InitializeComponent();
 
+        // This dialog only sets the window and the roster — per-project prompts are edited from
+        // each repo's own toolbar, so whatever is already saved here is carried forward untouched.
+        _basePromptOverrides = new Dictionary<string, string>(current.PromptOverrides, StringComparer.OrdinalIgnoreCase);
+
         StartBox.Text = FormatMinutes(current.StartMinutes);
         EndBox.Text = FormatMinutes(current.EndMinutes);
         RepeatCheck.IsChecked = current.RepeatDaily;
-        PromptBox.Text = current.PromptOverride ?? AutopilotPolicy.DefaultPrompt;
 
-        foreach (var project in projects)
+        AddGroup("Active now", projects.Where(p => p.HasSession), current);
+        AddGroup("Not running", projects.Where(p => !p.HasSession), current);
+
+        UpdateWindowHint();
+        UpdateStartEnabled();
+    }
+
+    private void AddGroup(string title, IEnumerable<ProjectChoice> projects, AutopilotSettings current)
+    {
+        var ordered = projects.OrderBy(p => p.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
+        if (ordered.Count == 0) return;
+
+        var header = new TextBlock
+        {
+            Text = title,
+            FontSize = 11,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, _groupHeaders.Count == 0 ? 0 : 10, 0, 4),
+        };
+        header.SetResourceReference(ForegroundProperty, "HelpMutedForeground");
+        _groupHeaders.Add(header);
+        ProjectList.Items.Add(header);
+
+        foreach (var project in ordered)
         {
             var box = new CheckBox
             {
@@ -48,9 +77,37 @@ public partial class AutopilotDialog : Window
             _rows.Add((project, box));
             ProjectList.Items.Add(box);
         }
+    }
 
-        UpdateWindowHint();
-        UpdateStartEnabled();
+    private void FilterBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        var filter = FilterBox.Text.Trim();
+
+        foreach (var (choice, box) in _rows)
+            box.Visibility = filter.Length == 0
+                || choice.DisplayName.Contains(filter, StringComparison.OrdinalIgnoreCase)
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+
+        // A header stays visible only while at least one row below it (up to the next header) is.
+        for (var i = 0; i < _groupHeaders.Count; i++)
+        {
+            var header = _groupHeaders[i];
+            var headerIndex = ProjectList.Items.IndexOf(header);
+            var nextHeaderIndex = i + 1 < _groupHeaders.Count
+                ? ProjectList.Items.IndexOf(_groupHeaders[i + 1])
+                : ProjectList.Items.Count;
+
+            var anyVisible = false;
+            for (var j = headerIndex + 1; j < nextHeaderIndex; j++)
+                if (ProjectList.Items[j] is CheckBox { Visibility: Visibility.Visible })
+                {
+                    anyVisible = true;
+                    break;
+                }
+
+            header.Visibility = anyVisible ? Visibility.Visible : Visibility.Collapsed;
+        }
     }
 
     public static AutopilotSettings? Show(
@@ -110,9 +167,6 @@ public partial class AutopilotDialog : Window
             && TryParseMinutes(EndBox.Text, out _);
     }
 
-    private void RestorePrompt_Click(object sender, RoutedEventArgs e)
-        => PromptBox.Text = AutopilotPolicy.DefaultPrompt;
-
     private void Start_Click(object sender, RoutedEventArgs e)
     {
         if (!TryParseMinutes(StartBox.Text, out var start) || !TryParseMinutes(EndBox.Text, out var end))
@@ -128,18 +182,13 @@ public partial class AutopilotDialog : Window
             return;
         }
 
-        // An unedited prompt is stored as null rather than as a copy of the default, so a later
-        // improvement to the built-in text reaches everyone who never customised theirs.
-        var prompt = PromptBox.Text.Trim();
-        var isDefault = prompt == AutopilotPolicy.DefaultPrompt.Trim();
-
         Outcome = new AutopilotSettings
         {
             StartMinutes = start,
             EndMinutes = end,
             RepeatDaily = RepeatCheck.IsChecked == true,
             ProjectPaths = selected,
-            PromptOverride = isDefault || prompt.Length == 0 ? null : prompt,
+            PromptOverrides = _basePromptOverrides,
         };
 
         DialogResult = true;

@@ -103,13 +103,14 @@ A dynamic **Active** tab sits on the right of the group strip, set apart from yo
 - It is a **view, not a group**. Projects stay in the group you filed them under
 - It re-prunes itself as sessions come and go. Clicking it again while it is already open drops any project that has since gone quiet
 - It is greyed out when nothing is running
+- Its project tab row [scrolls like any other](projects.md#when-there-are-more-tabs-than-fit) once more tabs are showing than fit the window — raising the limit (below) is what gives it more to scroll through
 
 **Workspace Settings → Appearance → Tab Groups** controls it:
 
 | Setting | Default | Notes |
 |---------|---------|-------|
 | **Show the Active Projects group** | On | Only appears when two or more groups exist |
-| **Limit** | 5 (range 1–20) | Projects past the limit are left out; they stay reachable from their own group |
+| **Limit** | 5 (range 1–500) | Projects past the limit are left out entirely — not scrolled to, just not shown; they stay reachable from their own group |
 
 Existing workspace files get the group switched on with the default limit.
 

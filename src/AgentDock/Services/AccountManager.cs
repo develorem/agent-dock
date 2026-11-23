@@ -232,6 +232,57 @@ public sealed class AccountManager(
         }
     }
 
+    /// <summary>
+    /// Opens a command prompt with <c>CLAUDE_CONFIG_DIR</c> pointed at this account and
+    /// starts an interactive <c>claude</c> in it. Gives access to the TUI-only slash
+    /// commands (<c>/mcp</c>, <c>/login</c>, …) that AgentDock's headless stream-json
+    /// sessions can't render. <c>/k</c> keeps the prompt open after claude exits, still
+    /// bound to the account, so <c>claude mcp add …</c> etc. also work.
+    /// </summary>
+    public Process? LaunchConsole(string? accountId, string? workingDirectory = null, string? resumeSessionId = null)
+    {
+        // null account = the machine's default login (no CLAUDE_CONFIG_DIR override).
+        string? dir = null;
+        if (accountId != null)
+        {
+            dir = ConfigDirFor(accountId);
+            Directory.CreateDirectory(dir);
+        }
+
+        log.Info($"AccountManager: launching console for id={accountId ?? "(default)"} at {dir ?? "~/.claude"}");
+
+        // Session ids come from the CLI's own stream; still, only pass one through if it
+        // can't be interpreted by cmd.
+        var resume = !string.IsNullOrWhiteSpace(resumeSessionId)
+            && resumeSessionId.All(c => char.IsLetterOrDigit(c) || c == '-')
+            ? $" --resume {resumeSessionId}"
+            : "";
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = "cmd.exe",
+            // /s + outer quotes makes cmd treat everything between them verbatim.
+            Arguments = $"/s /k \"\"{claudeEnvironment.BinaryPath}\"{resume}\"",
+            UseShellExecute = false,
+            CreateNoWindow = false,
+            WorkingDirectory = !string.IsNullOrWhiteSpace(workingDirectory) && Directory.Exists(workingDirectory)
+                ? workingDirectory
+                : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
+        };
+        if (dir != null)
+            psi.Environment["CLAUDE_CONFIG_DIR"] = dir;
+
+        try
+        {
+            return Process.Start(psi);
+        }
+        catch (Exception ex)
+        {
+            log.Warn($"AccountManager: console launch failed for id={accountId ?? "(default)"} — {ex.Message}");
+            return null;
+        }
+    }
+
     // How long the login process may keep running after credentials have appeared on
     // disk before we close its window for it.
     private readonly TimeSpan LingerGrace = TimeSpan.FromSeconds(2);

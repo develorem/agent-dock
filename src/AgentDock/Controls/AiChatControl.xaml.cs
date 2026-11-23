@@ -470,7 +470,10 @@ public partial class AiChatControl : UserControl
         }
     }
 
-    private void StartSession(bool dangerous)
+    /// <summary>Internal rather than private so the per-project toolbar can start a session without
+    /// duplicating this logic — it always starts in normal (non-dangerous) mode, the same choice
+    /// the Start panel's primary button makes.</summary>
+    internal void StartSession(bool dangerous)
     {
         _log.Info($"AiChatControl: StartSession(dangerous={dangerous})");
         if (!_claudeEnvironment.IsAvailable())
@@ -806,7 +809,11 @@ public partial class AiChatControl : UserControl
     // --- Sending Messages ---
 
     private void Send_Click(object sender, RoutedEventArgs e) => SendCurrentMessage();
-    private async void EndSession_Click(object sender, RoutedEventArgs e)
+    private async void EndSession_Click(object sender, RoutedEventArgs e) => await EndSessionAsync();
+
+    /// <summary>Internal rather than private so the per-project toolbar's stop button can end the
+    /// session without duplicating this teardown.</summary>
+    internal async Task EndSessionAsync()
     {
         StopWorkingAnimation();
         EndSessionButton.IsEnabled = false;
@@ -975,6 +982,7 @@ public partial class AiChatControl : UserControl
         AddMenuItem(menu, "Clear Chat", "/clear", isIdle, ExecuteLocalCommand);
         AddMenuItem(menu, "Compact History", "/compact", isIdle, ExecuteLocalCommand);
         menu.Items.Add(new Separator());
+        AddMenuItem(menu, "Open in Console", "/console", hasSession, ExecuteLocalCommand);
         AddMenuItem(menu, "End Session", "/stop", hasSession, ExecuteLocalCommand);
         AddMenuItem(menu, "Open Logs Folder", "/logs", true, ExecuteLocalCommand);
 
@@ -1070,6 +1078,7 @@ public partial class AiChatControl : UserControl
         _processor?.Reset();
 
         _lastMessageSentTime = DateTime.UtcNow;
+        _lastSentSlashCommand = text.StartsWith('/') ? text.Split(' ', 2)[0] : null;
         AddUserMessage(text, thumbnails, bubbleId);
         ShowWaitingBubble();
         _session!.SendMessage(text, attachments);
@@ -1260,6 +1269,9 @@ public partial class AiChatControl : UserControl
             case "/logs":
                 ExecuteLocalCommand("/logs");
                 return true;
+            case "/console":
+                ExecuteLocalCommand("/console");
+                return true;
             default:
                 return false;
         }
@@ -1293,6 +1305,13 @@ public partial class AiChatControl : UserControl
 
             case "/stop":
                 EndSession_Click(this, new RoutedEventArgs());
+                break;
+
+            case "/console":
+                // Same conversation, same account, in a real terminal. Whatever Claude
+                // Code can't do headlessly, it can do there — no per-command knowledge here.
+                if (_accounts.LaunchConsole(_sessionAccountId, _projectPath, _session?.SessionId) == null)
+                    AddSystemMessage("Couldn't open a console — see the log.", isWarning: true);
                 break;
 
             case "/logs":
@@ -1506,12 +1525,29 @@ public partial class AiChatControl : UserControl
     // on an earlier op) so its header can show the turn's duration. The whole result
     // op-batch is applied in one synchronous pass, so collapsing the bubble and
     // posting the answer (PostAnswerOp, just before this) render together — no flicker.
+    // First word of the last message sent, if it was a slash command. Used only to word the
+    // "that produced nothing" hint below — never to decide behaviour per command.
+    private string? _lastSentSlashCommand;
+
     private void ApplyTurnComplete(ClaudeResultMessage result)
     {
         FinalizeActivity(result.DurationMs.HasValue ? result.DurationMs.Value / 1000.0 : null);
 
         if (result.IsError)
             ReportTurnError(result);
+        else if (_lastSentSlashCommand != null
+                 && string.IsNullOrWhiteSpace(result.Result)
+                 && result.OutputTokens == 0)
+        {
+            // Detected by outcome, not by name: a slash command that finished without any
+            // text and without a model call is, in practice, one that needs a real terminal
+            // (menus, dialogs). This stays correct whatever Claude Code adds or changes.
+            AddSystemMessage(
+                $"{_lastSentSlashCommand} produced no output here. Some Claude Code commands " +
+                "are interactive and only work in a terminal — type /console (or use the > menu) " +
+                "to open this session in one.");
+        }
+        _lastSentSlashCommand = null;
 
         var (costDelta, tokenDelta) = Stats.Update(result);
 

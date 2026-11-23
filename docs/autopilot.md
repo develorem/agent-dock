@@ -12,6 +12,8 @@ Autopilot says it for you, between times you choose, for sessions you choose.
 
 - [Modes](#modes)
 - [Setting it up](#setting-it-up)
+- [The per-project toolbar](#the-per-project-toolbar)
+- [Per-project prompts](#per-project-prompts)
 - [When a session gets nudged](#when-a-session-gets-nudged)
 - [What the nudge says](#what-the-nudge-says)
 - [Quota](#quota)
@@ -53,14 +55,35 @@ Hover the badge for a per-session breakdown. Click it to return to Standard.
 
 | Field | Notes |
 |-------|-------|
-| **Sessions to manage** | Every open project. Pick the ones with a real backlog — see [When a session parks itself](#when-a-session-parks-itself). A project whose session hasn't started yet can still be selected; it may well be running by the time the window opens |
+| **Sessions to manage** | Every open project, active sessions listed first, with a filter box above the list — useful with more than a handful of repos open. Pick the ones with a real backlog — see [When a session parks itself](#when-a-session-parks-itself). A project whose session hasn't started yet can still be selected; it may well be running by the time the window opens |
 | **Start** / **Finish** | 24-hour times. A window that runs past midnight — 23:00 to 04:00 — is the ordinary case, and the dialog tells you how long the window you typed actually is |
 | **Repeat every day** | On, the window reopens nightly and survives restarting Agent Dock. Off, autopilot returns the machine to Standard once the window closes |
-| **Customise the prompt** | Optional. Replaces the message body; the quota line is still added automatically |
 
 Selecting Autopilot again while it's already armed reopens the dialog with your current settings, so adjusting tonight's finish time doesn't mean setting the whole thing up again.
 
 A **repeating** schedule is restored when Agent Dock restarts. A **one-shot** schedule is not — that was a decision about one particular night, and reinstating it on some later launch would arm a mode that writes into live sessions on the strength of a choice you may not remember making.
+
+This dialog sets the window and the roster. Each project's own nudge text is set from its toolbar — see below.
+
+---
+
+## The per-project toolbar
+
+Every open project has a thin toolbar above its panels, with an autopilot control at the right-hand end. Click it to open a small popout for that one repo:
+
+- **Status line** — not scheduled, scheduled but off, armed and waiting for the window, or active now with the same ready/working/parked verdict the mode badge shows.
+- **Add to autopilot / Remove from autopilot** — joins or leaves the shared schedule's roster. If nothing has been scheduled anywhere yet, this opens the full dialog above instead, pre-selected to just this project, since the time window is only ever set in one place.
+- **Nudge prompt for this repo** — see below.
+
+The same toolbar also starts and stops the session, shows the send queue and any scheduled message for this project, and quick-toggles which panels are on screen.
+
+The tab itself carries a small marker (✈) once a project is on the roster — bright while autopilot is actually nudging it right now, dim for scheduled/off/parked. Hover the tab for the same verdict the toolbar shows.
+
+---
+
+## Per-project prompts
+
+Each project keeps its own nudge text, edited from its own toolbar (above), not from the Autopilot dialog. It's saved the moment you leave the box, independently of whether that project is currently on the roster or autopilot is armed at all — set it once, and it's still there the next time you turn autopilot on for that repo. **Reset to default** clears a project's override back to the built-in prompt. A project with no override uses the built-in prompt below.
 
 ---
 
@@ -92,7 +115,7 @@ The built-in prompt is deliberately unspecific about *what* to do — it has to 
 - **Leave it walkable.** Work committed, tests passing, a short note of what it did and what it left
 - **An escape hatch.** *"If there is genuinely nothing that meets this bar, say so in one line and stop."* Without this, an agent asked to find work will find work — and inventing busywork unattended is worse than an idle session
 
-You can replace the whole body from the dialog. The quota line is always appended, because it comes from live usage rather than from you.
+You can replace the whole body from a project's own toolbar (above). The quota line is always appended, because it comes from live usage rather than from you.
 
 ---
 
@@ -155,4 +178,3 @@ Nudges are also logged, with the project and the budget tier.
 - **Local only.** Autopilot is a Standard-mode feature. It can't be armed while hosting or while connected to a server, and it never writes into a remote session
 - **It continues work, it doesn't start it.** A selected project whose session has exited is skipped, not restarted
 - **It can't answer anything.** A session parked on a permission prompt or a question stays parked until you answer it — by design
-- **One prompt for all managed sessions.** Per-project prompts aren't supported yet

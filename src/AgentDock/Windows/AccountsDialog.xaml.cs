@@ -18,6 +18,8 @@ public partial class AccountsDialog : Window
         public string Name { get; init; } = "";
         public string StatusText { get; init; } = "";
         public string ConfigDir { get; init; } = "";
+        public bool LoggedIn { get; init; }
+        public Visibility ConsoleVisibility => LoggedIn ? Visibility.Visible : Visibility.Collapsed;
     }
 
     // Same palette ProjectSettingsDialog/GroupSettingsDialog use for icon colours, so a
@@ -77,7 +79,8 @@ public partial class AccountsDialog : Window
             // this used to) rendered dead accounts as perfectly signed in — leaving no
             // hint that Log In was the thing to click.
             var email = _accounts.ReadEmail(a.Id);
-            var status = _accounts.IsLoggedIn(a.Id)
+            var loggedIn = _accounts.IsLoggedIn(a.Id);
+            var status = loggedIn
                 ? email != null ? $"— {email}" : "— signed in"
                 : email != null
                     ? $"— {email} · signed out (click Log In)"
@@ -88,6 +91,7 @@ public partial class AccountsDialog : Window
                 Id = a.Id,
                 Name = a.Name,
                 StatusText = status,
+                LoggedIn = loggedIn,
                 ConfigDir = _accounts.ConfigDirFor(a.Id)
             };
         }).ToList();
@@ -189,6 +193,17 @@ public partial class AccountsDialog : Window
         _accounts.Remove(row.Id, deleteFiles: true);
         Populate();
         _onAccountsChanged?.Invoke();
+    }
+
+    private void ConsoleButton_Click(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        if ((sender as FrameworkElement)?.DataContext is not AccountRow row)
+            return;
+
+        if (_accounts.LaunchConsole(row.Id) == null)
+            ThemedMessageBox.Show(this, $"Couldn't open a console for \"{row.Name}\". See the log for details.",
+                "Console", MessageBoxButton.OK, MessageBoxImage.Warning);
     }
 
     private void RefreshButton_Click(object sender, RoutedEventArgs e) => Populate();

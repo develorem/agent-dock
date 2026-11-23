@@ -1,0 +1,133 @@
+<UserControl x:Class="AgentDock.Controls.ProjectToolbar"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Height="28">
+
+    <UserControl.Resources>
+        <Style x:Key="ToolbarFlatButton" TargetType="{x:Type Button}">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource HelpForeground}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="8,3" />
+            <Setter Property="Margin" Value="2,0" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type Button}">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="3"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource MenuHighlightBackground}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Panel toggle buttons dim when the panel they control is hidden, so the bar itself
+             shows which panels are currently on screen without needing separate tooltips. -->
+        <Style x:Key="PanelToggleButton" TargetType="{x:Type Button}" BasedOn="{StaticResource ToolbarFlatButton}">
+            <Style.Triggers>
+                <Trigger Property="Tag" Value="hidden">
+                    <Setter Property="Opacity" Value="0.45" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="HintText" TargetType="{x:Type TextBlock}">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="{DynamicResource HelpMutedForeground}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Margin" Value="0,0,0,8" />
+        </Style>
+    </UserControl.Resources>
+
+    <Grid>
+        <Border Background="{DynamicResource ToolbarBackground}"
+                BorderBrush="{DynamicResource ToolbarBorderBrush}"
+                BorderThickness="0,0,0,1">
+            <DockPanel Margin="4,0" LastChildFill="False">
+
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                    <Button x:Name="StartStopButton"
+                            Style="{StaticResource ToolbarFlatButton}"
+                            Click="StartStopButton_Click" />
+                    <Border Width="1" Margin="4,5" Background="{DynamicResource ToolbarBorderBrush}" />
+                    <StackPanel x:Name="PanelTogglesPanel" Orientation="Horizontal" />
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
+                    <Button x:Name="QueueButton"
+                            Style="{StaticResource ToolbarFlatButton}"
+                            Click="QueueButton_Click"
+                            Visibility="Collapsed" />
+                    <Button x:Name="ScheduledButton"
+                            Style="{StaticResource ToolbarFlatButton}"
+                            Click="ScheduledButton_Click"
+                            Visibility="Collapsed" />
+                    <Button x:Name="AutopilotButton"
+                            Style="{StaticResource ToolbarFlatButton}"
+                            Click="AutopilotButton_Click"
+                            Content="✈ Autopilot" />
+                </StackPanel>
+
+            </DockPanel>
+        </Border>
+
+        <Popup x:Name="AutopilotPopup"
+               PlacementTarget="{Binding ElementName=AutopilotButton}"
+               Placement="Bottom"
+               StaysOpen="False"
+               AllowsTransparency="True"
+               PopupAnimation="None"
+               IsOpen="False">
+            <Border Background="{DynamicResource HelpBackground}"
+                    BorderBrush="{DynamicResource ToolbarBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Width="320"
+                    Padding="12">
+                <StackPanel>
+                    <TextBlock x:Name="AutopilotStatusText"
+                               FontSize="12"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource HelpForeground}"
+                               TextWrapping="Wrap"
+                               Margin="0,0,0,8" />
+
+                    <Button x:Name="AutopilotMembershipButton"
+                            Style="{StaticResource ToolbarFlatButton}"
+                            HorizontalAlignment="Left"
+                            Margin="0,0,0,10"
+                            Click="AutopilotMembershipButton_Click" />
+
+                    <TextBlock Text="Nudge prompt for this repo" FontSize="11" FontWeight="SemiBold"
+                               Foreground="{DynamicResource HelpForeground}" Margin="0,0,0,4" />
+                    <TextBlock Style="{StaticResource HintText}"
+                               Text="Saved for this repo whether or not autopilot is on. A line about remaining quota is added automatically." />
+                    <TextBox x:Name="PromptBox"
+                             Height="140"
+                             FontSize="11"
+                             FontFamily="Cascadia Code, Consolas, Courier New"
+                             AcceptsReturn="True"
+                             TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto"
+                             LostFocus="PromptBox_LostFocus" />
+                    <Button Content="Reset to default"
+                            Style="{StaticResource ToolbarFlatButton}"
+                            HorizontalAlignment="Left"
+                            Margin="0,8,0,0"
+                            Click="ResetPrompt_Click" />
+                </StackPanel>
+            </Border>
+        </Popup>
+    </Grid>
+</UserControl>

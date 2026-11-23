@@ -16,6 +16,7 @@ public interface IAccountManager
     string? ReadEmail(string accountId);
     bool IsLoggedIn(string accountId);
     Process? LaunchLogin(string accountId);
+    Process? LaunchConsole(string? accountId, string? workingDirectory = null, string? resumeSessionId = null);
     Task<bool> RunLoginAsync(string accountId, CancellationToken ct = default);
 }
 

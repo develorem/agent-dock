@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using AgentDock.Services;
 
 namespace AgentDock.Models;
 
@@ -100,11 +101,33 @@ public sealed class AutopilotSettings
     public List<string> ProjectPaths { get; set; } = [];
 
     /// <summary>
-    /// User-edited replacement for the built-in nudge, or null to use the default. The budget line
-    /// is appended either way — it is derived from live usage, not something the user can pin.
+    /// User-edited replacements for the built-in nudge, keyed by project folder path. A project
+    /// with no entry uses <see cref="AutopilotPolicy.DefaultPrompt"/>. The budget line is appended
+    /// either way — it is derived from live usage, not something the user can pin. Edited from
+    /// each repo's own toolbar, so this is kept and restored independently of whether that project
+    /// is currently a member of <see cref="ProjectPaths"/> or autopilot is armed at all.
     /// </summary>
-    [JsonPropertyName("promptOverride")]
-    public string? PromptOverride { get; set; }
+    [JsonPropertyName("promptOverrides")]
+    public Dictionary<string, string> PromptOverrides { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The prompt a given project's nudge is composed from — its own override, or the
+    /// built-in default when it has none.</summary>
+    public string GetPrompt(string folderPath) =>
+        PromptOverrides.TryGetValue(folderPath, out var prompt) ? prompt : AutopilotPolicy.DefaultPrompt;
+
+    /// <summary>
+    /// Sets or clears a project's prompt override. Storing a trimmed copy of the default would
+    /// mean a later improvement to the built-in text never reaches a project that never actually
+    /// customised anything, so that case clears the entry instead.
+    /// </summary>
+    public void SetPrompt(string folderPath, string? text)
+    {
+        var trimmed = text?.Trim() ?? "";
+        if (trimmed.Length == 0 || trimmed == AutopilotPolicy.DefaultPrompt.Trim())
+            PromptOverrides.Remove(folderPath);
+        else
+            PromptOverrides[folderPath] = trimmed;
+    }
 
     /// <summary>Formats the window for a badge or a menu item: "11:00pm–4:00am".</summary>
     public string DescribeWindow() =>

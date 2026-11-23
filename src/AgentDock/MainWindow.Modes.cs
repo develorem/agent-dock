@@ -194,6 +194,7 @@ public partial class MainWindow
         if (ModeRemoteItem != null) ModeRemoteItem.IsChecked = mode == AppMode.Remote;
 
         RefreshModeBadge(mode);
+        RefreshAllAutopilotToolbars();
     }
 
     /// <summary>

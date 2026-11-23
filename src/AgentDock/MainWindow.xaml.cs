@@ -52,6 +52,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<ProjectInfo, DispatcherTimer> _tabIconTimers = [];
     private readonly Dictionary<ProjectInfo, ClaudeSessionState> _previousTabStates = [];
     private readonly Dictionary<ProjectInfo, DockingManager> _projectDockingManagers = [];
+    private readonly Dictionary<ProjectInfo, ProjectToolbar> _projectToolbars = [];
     private readonly Dictionary<ProjectInfo, ProjectDescriptionControl> _projectDescriptionControls = [];
     private readonly Dictionary<ProjectInfo, TodoListControl> _projectTodoListControls = [];
     private ProjectInfo? _activeProject;
@@ -1026,12 +1027,13 @@ public partial class MainWindow : Window
         UpdateGroupStripVisibility();
 
         // Create docking layout for this project
-        var (content, chatControl, gitControl, descControl, todoControl) = CreateProjectDockingLayout(project, layoutXml);
+        var (content, chatControl, gitControl, descControl, todoControl, toolbar) = CreateProjectDockingLayout(project, layoutXml);
         _projectContents[project] = content;
         _projectChatControls[project] = chatControl;
         _projectGitControls[project] = gitControl;
         _projectDescriptionControls[project] = descControl;
         _projectTodoListControls[project] = todoControl;
+        _projectToolbars[project] = toolbar;
         // A tab opened while this machine is hosting inherits the host lock, rather than arriving
         // with a live composer nobody is at the keyboard to use.
         ApplyAgentInputLock(chatControl);
@@ -1335,8 +1337,21 @@ public partial class MainWindow : Window
             Visibility = Visibility.Collapsed
         };
 
+        // A small corner marker for autopilot membership, independent of the diamond (session
+        // state) and the error badge (top-right) so the three never compete for the same spot.
+        var autopilotBadge = new TextBlock
+        {
+            Name = "autopilotBadge",
+            Text = "✈", // ✈
+            FontSize = 8,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Visibility = Visibility.Collapsed
+        };
+
         statusGrid.Children.Add(diamondIcon);
         statusGrid.Children.Add(statusBadge);
+        statusGrid.Children.Add(autopilotBadge);
 
         _projectTabIcons[project] = statusGrid;
 
@@ -2719,14 +2734,15 @@ public partial class MainWindow : Window
         MetaTabPanel.Orientation = Orientation.Horizontal;
     }
 
-    private (DockingManager, AiChatControl, GitStatusControl, ProjectDescriptionControl, TodoListControl) CreateProjectDockingLayout(ProjectInfo project, string? layoutXml = null)
+    private (UIElement Content, AiChatControl, GitStatusControl, ProjectDescriptionControl, TodoListControl, ProjectToolbar) CreateProjectDockingLayout(ProjectInfo project, string? layoutXml = null)
     {
         _log.Info("CreateDockingLayout: starting");
         var dockingManager = new DockingManager
         {
             Theme = _theme.BaseVariant == ThemeBaseVariant.Dark
                 ? new Vs2013DarkTheme()
-                : new Vs2013LightTheme()
+                : new Vs2013LightTheme(),
+            AnchorableTitleTemplate = ChatTitleTemplate(),
         };
 
         // A remote project's files, git and settings all live on the other machine, so the
@@ -2909,7 +2925,7 @@ public partial class MainWindow : Window
                             if (titleMap.TryGetValue(args.Model.ContentId, out var title))
                                 anchorable.Title = title;
                             anchorable.CanClose = false;
-                            anchorable.CanHide = false;
+                            anchorable.CanHide = true;
                         }
                         else if (args.Model is LayoutDocument doc)
                         {
@@ -2935,7 +2951,7 @@ public partial class MainWindow : Window
                         Title = "Project Description",
                         ContentId = ProjectDescriptionId,
                         CanClose = false,
-                        CanHide = false,
+                        CanHide = true,
                         CanAutoHide = true,
                         Content = descriptionControl
                     };
@@ -2952,7 +2968,7 @@ public partial class MainWindow : Window
                         Title = "Todo List",
                         ContentId = TodoListId,
                         CanClose = false,
-                        CanHide = false,
+                        CanHide = true,
                         CanAutoHide = true,
                         Content = todoListControl
                     };
@@ -2975,6 +2991,14 @@ public partial class MainWindow : Window
         }
 
         _projectDockingManagers[project] = dockingManager;
+
+        var toolbar = new ProjectToolbar(aiChatControl, dockingManager);
+        WireProjectToolbar(project, toolbar);
+
+        var wrapper = new DockPanel();
+        DockPanel.SetDock(toolbar, Dock.Top);
+        wrapper.Children.Add(toolbar);
+        wrapper.Children.Add(dockingManager);
 
         // Track layout changes (panel rearrangement) for dirty state.
         // AvalonDock can swap the LayoutRoot (LayoutChanged), so we move the single
@@ -3000,7 +3024,7 @@ public partial class MainWindow : Window
         };
 
         _log.Info("CreateDockingLayout: complete");
-        return (dockingManager, aiChatControl, gitStatusControl, descriptionControl, todoListControl);
+        return (wrapper, aiChatControl, gitStatusControl, descriptionControl, todoListControl, toolbar);
     }
 
     /// <summary>
@@ -3035,7 +3059,7 @@ public partial class MainWindow : Window
             Title = "AI Chat",
             ContentId = AiChatId,
             CanClose = false,
-            CanHide = false,
+            CanHide = true,
             Content = aiChatControl
         };
 
@@ -3064,7 +3088,7 @@ public partial class MainWindow : Window
             Title = $"{project.DisplayName} — File Explorer",
             ContentId = FileExplorerId,
             CanClose = false,
-            CanHide = false,
+            CanHide = true,
             Content = fileExplorerControl
         };
 
@@ -3073,7 +3097,7 @@ public partial class MainWindow : Window
             Title = "Git Status",
             ContentId = GitStatusId,
             CanClose = false,
-            CanHide = false,
+            CanHide = true,
             Content = gitStatusControl
         };
 
@@ -3107,7 +3131,7 @@ public partial class MainWindow : Window
             Title = "Project Description",
             ContentId = ProjectDescriptionId,
             CanClose = false,
-            CanHide = false,
+            CanHide = true,
             CanAutoHide = true,
             Content = descriptionControl
         };
@@ -3122,7 +3146,7 @@ public partial class MainWindow : Window
             Title = "Todo List",
             ContentId = TodoListId,
             CanClose = false,
-            CanHide = false,
+            CanHide = true,
             CanAutoHide = true,
             Content = todoListControl
         };
@@ -3328,6 +3352,69 @@ public partial class MainWindow : Window
             anchorable.Title = $"{prefix} — ${stats.TotalCostUsd:F4} · {SessionStats.FormatTokens(stats.TotalTokens)} tokens";
         else
             anchorable.Title = prefix;
+
+        // The account's plan usage is shown right-aligned in the same header. AvalonDock's
+        // LayoutContent has no spare string property besides ToolTip, which the custom
+        // AnchorableTitleTemplate (see ChatTitleTemplate) binds to for the right-hand text.
+        anchorable.ToolTip = FormatAccountUsageForTitle(ctrl.AccountId);
+    }
+
+    /// <summary>Re-renders every chat header's usage text; called after a usage refresh.</summary>
+    private void RefreshChatUsageTitles()
+    {
+        foreach (var (project, ctrl) in _projectChatControls)
+            UpdateAiChatTitle(project, ctrl);
+    }
+
+    /// <summary>
+    /// "5-hour 53% used · resets in 1h 40m   Weekly 12% used · resets Tuesday at 4:33 pm" for
+    /// the given session account, from its cached usage. Empty when the session has no
+    /// resolved account yet or there is no usage figure to show.
+    /// </summary>
+    private string FormatAccountUsageForTitle(string? accountId)
+    {
+        if (accountId == null)
+            return "";
+
+        var summary = _usageAccounts.FirstOrDefault(a => a.Id == accountId)?.LastSuccess;
+        if (summary == null)
+            return "";
+
+        var parts = new List<string>(2);
+
+        if (summary.FiveHour is { Utilization: { } fhPct, ResetsAt: { } fhReset })
+            parts.Add($"5-hour {Math.Round(fhPct):0}% used · resets in {FormatTimeUntilReset(fhReset)}");
+
+        if (summary.SevenDay is { Utilization: { } sdPct, ResetsAt: { } sdReset })
+        {
+            var local = sdReset.ToLocalTime();
+            var when = $"{local:dddd} at {local:h:mm} {(local.Hour < 12 ? "am" : "pm")}";
+            parts.Add($"Weekly {Math.Round(sdPct):0}% used · resets {when}");
+        }
+
+        return string.Join("   ", parts);
+    }
+
+    /// <summary>
+    /// Replaces AvalonDock's plain-text pane title with the title on the left (trimmed first when
+    /// narrow) and the account usage (<see cref="LayoutContent.ToolTip"/>) pinned right.
+    /// </summary>
+    private static DataTemplate ChatTitleTemplate()
+    {
+        const string xaml = """
+            <DataTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">
+              <Grid HorizontalAlignment="Stretch">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="{Binding Title}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                <TextBlock Grid.Column="1" Text="{Binding ToolTip}" Margin="16,0,4,0"
+                           HorizontalAlignment="Right" VerticalAlignment="Center" TextWrapping="NoWrap"/>
+              </Grid>
+            </DataTemplate>
+            """;
+        return (DataTemplate)System.Windows.Markup.XamlReader.Parse(xaml);
     }
 
     /// <summary>
@@ -3953,7 +4040,35 @@ public partial class MainWindow : Window
         if (chat is { CurrentState: ClaudeSessionState.Idle, HasBackgroundWork: true })
             tip += "\nStill working in the background…";
 
+        if (IsProjectAutopilotMember(project))
+            tip += $"\nAutopilot: {DescribeProjectAutopilotState(project)}";
+
         button.ToolTip = tip;
+    }
+
+    /// <summary>
+    /// The small autopilot marker on a project tab, distinct from the session-state diamond and
+    /// the error badge so the three never compete for the same corner. Two visual states only —
+    /// bright while actually nudging this project, dim for everything else (scheduled, off,
+    /// parked) — with the exact distinction left to the tooltip rather than a fourth colour.
+    /// </summary>
+    private void UpdateAutopilotTabBadge(ProjectInfo project)
+    {
+        if (!_projectTabIcons.TryGetValue(project, out var statusGrid)) return;
+        var badge = (TextBlock)statusGrid.Children[2];
+
+        if (!IsProjectAutopilotMember(project))
+        {
+            badge.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        badge.Visibility = Visibility.Visible;
+
+        var isActiveNow = _autopilotArmed && IsAutopilotWindowOpen() && IsProjectActive(project)
+            && !(_autopilotTrackers.TryGetValue(project.FolderPath, out var tracker) && tracker.IsParked);
+
+        badge.Foreground = _theme.GetBrush(isActiveNow ? "TabIconWaitingForeground" : "TabIconInactiveDiamondForeground");
     }
 
     private void StartDiamondPulse(ProjectInfo project, TextBlock diamondIcon)
@@ -4983,6 +5098,7 @@ public partial class MainWindow : Window
         _lastUsageFetchTime = DateTime.Now;
 
         UpdateUsageTitleText();
+        RefreshChatUsageTitles();
         if (UsagePopup.IsOpen)
             RenderUsageDetails();
     }

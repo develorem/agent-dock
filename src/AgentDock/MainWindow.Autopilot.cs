@@ -3,6 +3,7 @@ using System.Windows.Threading;
 using AgentDock.Controls;
 using AgentDock.Models;
 using AgentDock.Services;
+using AgentDock.Windows;
 
 namespace AgentDock;
 
@@ -191,6 +192,7 @@ public partial class MainWindow
         }
 
         RefreshModeBadge(AppMode.Autopilot);
+        RefreshAllAutopilotToolbars();
     }
 
     private void OnAutopilotWindowTransition(bool opened)
@@ -376,7 +378,7 @@ public partial class MainWindow
 
     private void SendNudge(ProjectInfo project, AiChatControl chat, AutopilotBudget budget)
     {
-        var text = AutopilotPolicy.ComposeNudge(budget, _autopilotSettings.PromptOverride);
+        var text = AutopilotPolicy.ComposeNudge(budget, _autopilotSettings.GetPrompt(project.FolderPath));
 
         // ComposeNudge returns null only for Exhausted, which Evaluate has already refused to nudge
         // on. Belt and braces: a silent no-op is the right failure here, not an empty send.
@@ -415,6 +417,113 @@ public partial class MainWindow
             if (!_autopilotTrackers.TryGetValue(project.FolderPath, out var tracker)) return;
             tracker.CancelPendingNudge();
         };
+    }
+
+    /// <summary>
+    /// Hooks a project's toolbar as it is built. Membership and the window itself are shared,
+    /// app-wide state the toolbar does not own, so it raises events here rather than mutating
+    /// <see cref="_autopilotSettings"/> directly; the prompt is the one piece that is genuinely
+    /// per-project, and is saved the moment it changes regardless of membership or arming.
+    /// </summary>
+    private void WireProjectToolbar(ProjectInfo project, ProjectToolbar toolbar)
+    {
+        toolbar.AutopilotToggleRequested += () => ToggleProjectAutopilot(project);
+        toolbar.AutopilotPromptChanged += text =>
+        {
+            _autopilotSettings.SetPrompt(project.FolderPath, text);
+            SaveAutopilotSettings(_autopilotSettings);
+        };
+
+        toolbar.SetAutopilotPrompt(_autopilotSettings.GetPrompt(project.FolderPath));
+        RefreshAutopilotToolbar(project);
+    }
+
+    /// <summary>
+    /// Adds or removes one project from the shared schedule's roster. The window itself (start,
+    /// finish, repeat) is only ever set from <see cref="AutopilotDialog"/> — if nothing has been
+    /// scheduled yet there is no window to join, so turning this on opens that same dialog,
+    /// pre-seeded with just this project, rather than teaching the time fields a second time.
+    /// </summary>
+    private void ToggleProjectAutopilot(ProjectInfo project)
+    {
+        var settings = LoadAutopilotSettings();
+        var isMember = settings.ProjectPaths.Contains(project.FolderPath, StringComparer.OrdinalIgnoreCase);
+
+        if (isMember)
+        {
+            settings.ProjectPaths.RemoveAll(p =>
+                string.Equals(p, project.FolderPath, StringComparison.OrdinalIgnoreCase));
+            SaveAutopilotSettings(settings);
+            RefreshModeUi();
+            return;
+        }
+
+        if (settings.ProjectPaths.Count == 0)
+        {
+            var candidate = new AutopilotDialog.ProjectChoice(
+                project.FolderPath, project.DisplayName, IsProjectActive(project));
+            var result = AutopilotDialog.Show(this, settings, [candidate]);
+            if (result == null) return;
+
+            SaveAutopilotSettings(result);
+            ArmAutopilot(result);
+            RefreshModeUi();
+            return;
+        }
+
+        settings.ProjectPaths.Add(project.FolderPath);
+        SaveAutopilotSettings(settings);
+        if (!_autopilotArmed) ArmAutopilot(settings);
+        RefreshModeUi();
+    }
+
+    private bool IsProjectAutopilotMember(ProjectInfo project) =>
+        _autopilotSettings.ProjectPaths.Contains(project.FolderPath, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>One project's verdict, in the same terms as <see cref="DescribeAutopilotState"/>'s
+    /// per-project lines — lifted out so the toolbar can show it without parsing the badge tooltip
+    /// back apart.</summary>
+    private string DescribeProjectAutopilotState(ProjectInfo project)
+    {
+        if (!IsProjectAutopilotMember(project)) return "Not scheduled for autopilot.";
+        if (!_autopilotArmed) return "Scheduled, but autopilot is currently off.";
+
+        if (!IsAutopilotWindowOpen())
+        {
+            var repeat = _autopilotSettings.RepeatDaily ? " every day" : "";
+            return $"Scheduled for {_autopilotSettings.DescribeWindow()}{repeat}. " +
+                   "Outside the window this behaves normally.";
+        }
+
+        if (!IsProjectActive(project))
+            return $"Window is open ({_autopilotSettings.DescribeWindow()}), but this project has no live session.";
+
+        var tracker = TrackerFor(project.FolderPath);
+        var state = tracker.IsParked
+            ? "parked — said it had nothing left"
+            : tracker.LastHold switch
+            {
+                AutopilotHold.Busy => "working",
+                AutopilotHold.Settling => "settling",
+                AutopilotHold.TooSoon => "just nudged",
+                AutopilotHold.Budget => "waiting on quota",
+                _ => "ready",
+            };
+        return $"Active now ({_autopilotSettings.DescribeWindow()}) — {state}, {tracker.NudgeCount} nudge(s).";
+    }
+
+    private void RefreshAutopilotToolbar(ProjectInfo project)
+    {
+        UpdateAutopilotTabBadge(project);
+        UpdateTabTooltip(project);
+
+        if (!_projectToolbars.TryGetValue(project, out var toolbar)) return;
+        toolbar.SetAutopilotStatus(DescribeProjectAutopilotState(project), IsProjectAutopilotMember(project));
+    }
+
+    private void RefreshAllAutopilotToolbars()
+    {
+        foreach (var project in _projects) RefreshAutopilotToolbar(project);
     }
 
     /// <summary>Badge tooltip: what autopilot is doing, and what it is waiting for.</summary>

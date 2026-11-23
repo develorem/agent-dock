@@ -286,6 +286,51 @@ A new optional grouping layer above the project tab row, hidden until the user c
 
 ---
 
+## Task 16: Autopilot UX Overhaul
+**Status:** `[~]`
+
+Autopilot (v0.11.0) only exposes one entry point — Settings → Set Mode — with a flat unsorted
+session picker, one shared schedule window, and one shared prompt for every managed project. This
+task makes it discoverable and controllable from the repo you're looking at, and lets each repo
+keep its own nudge text.
+
+**A. `AutopilotDialog` — filter box + active/inactive grouping**
+Active sessions listed first, sorted, with a filter `TextBox` above the list that narrows by name.
+The global "Customise the prompt" expander is removed — prompts move to B.
+
+**B. Per-project prompt — model + policy wiring**
+`AutopilotSettings.PromptOverride` (single string) becomes `PromptOverrides` (dictionary keyed by
+folder path), with `GetPrompt`/`SetPrompt` helpers. `MainWindow.Autopilot.cs` reads a project's own
+override when composing its nudge.
+
+**C. New per-repo toolbar**
+`Controls\ProjectToolbar.xaml` — a thin bar above each project's docking area: start/stop session,
+a show/hide toggle per panel, a send-queue glance, a scheduled-message glance, and the autopilot
+control (D). Inserted by wrapping the `DockingManager` in `CreateProjectDockingLayout`.
+
+**D. Toolbar autopilot control**
+A popout with this project's live status, an add/remove-from-roster toggle (opens the full dialog
+pre-seeded with just this project if nothing has ever been scheduled), and the prompt editor from B
+with a **Reset to default** button.
+
+**E. Tab badge for autopilot state**
+A small ✈ marker on the project tab, independent of the session-state diamond and the error badge.
+Bright while actually being nudged, dim for scheduled/off/parked; the exact state is in the tooltip.
+
+**F. Docs**
+`docs/autopilot.md`, `docs/release-notes/v0.12.0.md`.
+
+**Done criteria:**
+- [x] Autopilot dialog groups active-first and filters by typing
+- [x] A project's prompt persists independently of roster membership and autopilot being armed
+- [x] Each open project shows a toolbar; autopilot toggle adds/removes it from the shared roster
+- [x] First-ever use from a toolbar (no schedule configured anywhere) opens the full dialog
+- [x] Tab shows a ✈ marker once a project is on the roster, bright only while actively being nudged
+- [ ] Manually verified end-to-end after a rebuild (pending — the running dev instance holds the
+  build lock; see `CLAUDE.md`)
+
+---
+
 ## Workflow
 
 1. Each task is implemented incrementally

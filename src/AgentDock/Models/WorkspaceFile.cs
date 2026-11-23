@@ -40,7 +40,14 @@ public class WorkspaceFile
 
     public const int DefaultActiveProjectsLimit = 5;
     public const int MinActiveProjectsLimit = 1;
-    public const int MaxActiveProjectsLimit = 20;
+
+    /// <summary>
+    /// Not a design cap — the dynamic group is meant to scale to however many sessions someone
+    /// actually runs, with the project tab strip's own scroll arrows handling whatever doesn't
+    /// fit on screen at once. This just keeps a typo (or a pasted garbage value) from asking for
+    /// thousands of tab buttons.
+    /// </summary>
+    public const int MaxActiveProjectsLimit = 500;
 
     /// <summary>
     /// Holds a limit inside the supported range. Guards both workspace files edited by

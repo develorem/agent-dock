@@ -49,6 +49,7 @@ public static class ClaudeSlashCommands
         new("/keybindings", "Open or create your keybindings configuration"),
         new("/login", "Sign in to your Anthropic account"),
         new("/logout", "Sign out from your Anthropic account"),
+        new("/console", "Open this session in a real terminal — for commands like /mcp that need one (Agent Dock local)"),
         new("/logs", "Open the Agent Dock logs folder (Agent Dock local)"),
         new("/loop", "Run a prompt repeatedly while the session is open (alias: /proactive)"),
         new("/mcp", "Manage MCP server connections and OAuth authentication"),
